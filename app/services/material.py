@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 import requests
 from loguru import logger
 from moviepy.video.io.VideoFileClip import VideoFileClip
+from yt_dlp import YoutubeDL
 
 from app.config import config
 from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
@@ -301,6 +302,290 @@ def save_video(video_url: str, save_dir: str = "") -> str:
     return ""
 
 
+def _resolve_cookie_file() -> str:
+    cookie_file = str(config.app.get("external_cookie_file", "cookies.txt") or "").strip()
+    if not cookie_file:
+        return ""
+
+    if not os.path.isabs(cookie_file):
+        cookie_file = os.path.join(utils.root_dir(), cookie_file)
+
+    return cookie_file if os.path.isfile(cookie_file) else ""
+
+
+def _collect_mp4_files(directory: str) -> set[str]:
+    if not os.path.isdir(directory):
+        return set()
+
+    files = set()
+    for root, _, filenames in os.walk(directory):
+        for filename in filenames:
+            if filename.lower().endswith(".mp4"):
+                files.add(os.path.join(root, filename))
+    return files
+
+
+def _valid_video_duration(video_path: str) -> float:
+    clip = None
+    try:
+        clip = VideoFileClip(video_path)
+        if clip.duration > 0 and clip.fps > 0:
+            return float(clip.duration)
+    except Exception as exc:
+        logger.warning(f"invalid downloaded video: {video_path}, error: {str(exc)}")
+    finally:
+        if clip is not None:
+            try:
+                clip.close()
+            except Exception:
+                pass
+    return 0.0
+
+
+def _download_videos_with_ytdlp_search(
+    task_id: str,
+    search_terms: List[str],
+    source: str,
+    audio_duration: float,
+    max_clip_duration: int,
+    material_directory: str,
+) -> List[str]:
+    if source != "bilibili":
+        return []
+
+    save_dir = material_directory or utils.storage_dir("cache_videos")
+    save_dir = os.path.join(save_dir, f"{source}-{task_id}")
+    os.makedirs(save_dir, exist_ok=True)
+
+    cookie_file = _resolve_cookie_file()
+    per_term_limit = int(config.app.get("external_search_results_per_term", 3) or 3)
+    per_term_limit = max(1, min(10, per_term_limit))
+    ydl_opts = {
+        "format": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
+        "merge_output_format": "mp4",
+        "outtmpl": os.path.join(save_dir, "%(extractor)s-%(id)s.%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+        "ignoreerrors": True,
+        "noplaylist": False,
+        "playlistend": per_term_limit,
+        "retries": 2,
+        "fragment_retries": 2,
+    }
+    if cookie_file:
+        ydl_opts["cookiefile"] = cookie_file
+
+    video_paths = []
+    total_duration = 0.0
+    required_duration = float(audio_duration or 0)
+    with YoutubeDL(ydl_opts) as ydl:
+        for search_term in search_terms:
+            query = f"bilisearch{per_term_limit}:{search_term}"
+            logger.info(f"searching and downloading external videos: {query}")
+            before_files = _collect_mp4_files(save_dir)
+            try:
+                search_info = ydl.extract_info(query, download=False)
+            except Exception as exc:
+                logger.warning(f"yt-dlp search failed for '{search_term}': {str(exc)}")
+                continue
+
+            entries = (search_info or {}).get("entries") or []
+            for entry in entries:
+                if not _is_external_candidate_style_compatible(entry):
+                    continue
+                try:
+                    ydl.extract_info(entry.get("webpage_url") or entry.get("url"), download=True)
+                except Exception as exc:
+                    logger.warning(
+                        f"yt-dlp download failed for '{entry.get('title', '')}': {str(exc)}"
+                    )
+                    continue
+
+                new_files = sorted(
+                    _collect_mp4_files(save_dir) - before_files,
+                    key=lambda file_path: os.path.getmtime(file_path),
+                )
+                for video_path in new_files:
+                    if video_path in video_paths:
+                        continue
+                    duration = _valid_video_duration(video_path)
+                    if duration <= 0:
+                        continue
+                    video_paths.append(video_path)
+                    total_duration += min(max_clip_duration, duration)
+                    if total_duration > required_duration:
+                        logger.info(
+                            f"total duration of external videos: {total_duration} seconds, skip downloading more"
+                        )
+                        return video_paths
+                before_files = _collect_mp4_files(save_dir)
+
+    logger.success(f"downloaded {len(video_paths)} external videos from {source}")
+    return video_paths
+
+
+def _is_external_candidate_style_compatible(entry: dict) -> bool:
+    preset = str(config.app.get("video_style_preset", "auto") or "auto").strip().lower()
+    if preset in ("auto", "shorts_fast"):
+        return True
+
+    text = " ".join(
+        str(entry.get(field) or "")
+        for field in ("title", "description", "uploader", "channel")
+    ).lower()
+    blocked_terms = (
+        "游戏",
+        "手游",
+        "动画",
+        "动漫",
+        "直播",
+        "鬼畜",
+        "歌",
+        "music",
+        "game",
+        "anime",
+        "live",
+        "舞蹈",
+        "dance",
+    )
+    if any(term in text for term in blocked_terms):
+        logger.info(f"skip style-mismatched external candidate: {entry.get('title', '')}")
+        return False
+    return True
+
+
+def _download_url_with_ytdlp(video_url: str, save_dir: str) -> str:
+    os.makedirs(save_dir, exist_ok=True)
+    before_files = _collect_mp4_files(save_dir)
+    cookie_file = _resolve_cookie_file()
+    ydl_opts = {
+        "format": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
+        "merge_output_format": "mp4",
+        "outtmpl": os.path.join(save_dir, "%(extractor)s-%(id)s.%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+        "ignoreerrors": True,
+        "noplaylist": True,
+        "retries": 2,
+        "fragment_retries": 2,
+    }
+    if cookie_file:
+        ydl_opts["cookiefile"] = cookie_file
+
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.extract_info(video_url, download=True)
+    except Exception as exc:
+        logger.warning(f"yt-dlp URL download failed: {video_url}, error: {str(exc)}")
+        return ""
+
+    new_files = sorted(
+        _collect_mp4_files(save_dir) - before_files,
+        key=lambda file_path: os.path.getmtime(file_path),
+    )
+    return new_files[-1] if new_files else ""
+
+
+def _extract_urls_from_json(value) -> list[str]:
+    urls = []
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if key.lower() in {
+                "url",
+                "video_url",
+                "download_url",
+                "play_url",
+                "share_url",
+                "aweme_url",
+            } and isinstance(nested_value, str):
+                urls.append(nested_value)
+            else:
+                urls.extend(_extract_urls_from_json(nested_value))
+    elif isinstance(value, list):
+        for item in value:
+            urls.extend(_extract_urls_from_json(item))
+    return urls
+
+
+def _search_douyin_videos_with_configured_api(search_term: str, limit: int) -> list[str]:
+    search_api_url = str(config.app.get("douyin_search_api_url", "") or "").strip()
+    if not search_api_url:
+        logger.warning(
+            "douyin_search_api_url is not configured; automatic Douyin keyword search is unavailable"
+        )
+        return []
+
+    query_url = search_api_url.format(query=search_term, limit=limit)
+    headers = {}
+    api_key = str(config.app.get("douyin_api_key", "") or "").strip()
+    jwt_token = str(config.app.get("douyin_jwt", "") or "").strip()
+    if jwt_token:
+        headers["Authorization"] = f"Bearer {jwt_token}"
+    elif api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        response = requests.get(
+            query_url,
+            headers=headers,
+            proxies=config.proxy,
+            verify=_get_tls_verify(),
+            timeout=(30, 90),
+        )
+        response.raise_for_status()
+        return list(dict.fromkeys(_extract_urls_from_json(response.json())))
+    except Exception as exc:
+        logger.warning(f"Douyin search API failed for '{search_term}': {str(exc)}")
+        return []
+
+
+def _download_videos_with_external_search_api(
+    task_id: str,
+    search_terms: List[str],
+    source: str,
+    audio_duration: float,
+    max_clip_duration: int,
+    material_directory: str,
+) -> List[str]:
+    if source != "douyin":
+        return []
+
+    save_dir = material_directory or utils.storage_dir("cache_videos")
+    save_dir = os.path.join(save_dir, f"{source}-{task_id}")
+    os.makedirs(save_dir, exist_ok=True)
+
+    per_term_limit = int(config.app.get("external_search_results_per_term", 3) or 3)
+    per_term_limit = max(1, min(10, per_term_limit))
+    video_paths = []
+    total_duration = 0.0
+    required_duration = float(audio_duration or 0)
+
+    for search_term in search_terms:
+        candidate_urls = _search_douyin_videos_with_configured_api(
+            search_term=search_term,
+            limit=per_term_limit,
+        )
+        logger.info(f"found {len(candidate_urls)} Douyin candidates for '{search_term}'")
+        for candidate_url in candidate_urls[:per_term_limit]:
+            saved_video_path = save_video(video_url=candidate_url, save_dir=save_dir)
+            if not saved_video_path:
+                saved_video_path = _download_url_with_ytdlp(
+                    video_url=candidate_url,
+                    save_dir=save_dir,
+                )
+            if not saved_video_path:
+                continue
+            duration = _valid_video_duration(saved_video_path)
+            if duration <= 0:
+                continue
+            video_paths.append(saved_video_path)
+            total_duration += min(max_clip_duration, duration)
+            if total_duration > required_duration:
+                return video_paths
+
+    return video_paths
+
+
 def download_videos(
     task_id: str,
     search_terms: List[str],
@@ -311,17 +596,37 @@ def download_videos(
     max_clip_duration: int = 5,
     match_script_order: bool = False,
 ) -> List[str]:
-    search_videos = search_videos_pexels
-    if source == "pixabay":
-        search_videos = search_videos_pixabay
-    elif source == "coverr":
-        search_videos = search_videos_coverr
-
     material_directory = config.app.get("material_directory", "").strip()
     if material_directory == "task":
         material_directory = utils.task_dir(task_id)
     elif material_directory and not os.path.isdir(material_directory):
         material_directory = ""
+
+    if source == "bilibili":
+        return _download_videos_with_ytdlp_search(
+            task_id=task_id,
+            search_terms=search_terms,
+            source=source,
+            audio_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+        )
+
+    if source == "douyin":
+        return _download_videos_with_external_search_api(
+            task_id=task_id,
+            search_terms=search_terms,
+            source=source,
+            audio_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+        )
+
+    search_videos = search_videos_pexels
+    if source == "pixabay":
+        search_videos = search_videos_pixabay
+    elif source == "coverr":
+        search_videos = search_videos_coverr
 
     if match_script_order:
         return _download_videos_by_script_order(

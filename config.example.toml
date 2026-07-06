@@ -1,5 +1,23 @@
 [app]
 video_source = "pexels" # "pexels" or "pixabay"
+match_local_clips_to_script_timing = false
+video_style_preset = "auto"
+reference_mode_enabled = false
+reference_image_sources = ["pexels", "pixabay", "wikimedia"]
+reference_image_count = 8
+reference_effect_preset = "old_paper_explained"
+
+# Optional placeholders for future direct Douyin/Bilibili API integrations.
+# Direct calls are disabled until official endpoints and account credentials are configured in code.
+douyin_api_base_url = ""
+douyin_search_api_url = ""
+douyin_api_key = ""
+douyin_jwt = ""
+bilibili_api_base_url = ""
+bilibili_api_key = ""
+bilibili_jwt = ""
+external_cookie_file = "cookies.txt"
+external_search_results_per_term = 3
 
 # 是否隐藏配置面板
 hide_config = false

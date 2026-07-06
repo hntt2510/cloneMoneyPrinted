@@ -26,6 +26,15 @@ def _paragraph_count(value: str) -> int:
     return parsed
 
 
+def _reference_image_count(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1 or parsed > 20:
+        raise argparse.ArgumentTypeError(
+            f"reference-image-count must be between 1 and 20, got {parsed}"
+        )
+    return parsed
+
+
 def _non_negative_float(value: str) -> float:
     parsed = float(value)
     if parsed < 0:
@@ -152,6 +161,48 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         action=argparse.BooleanOptionalAction,
         help="match generated/search materials to script order",
+    )
+    parser.add_argument(
+        "--match-local-clips-to-script-timing",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="trim ordered local clips using estimated script/audio timing",
+    )
+    parser.add_argument(
+        "--video-style-preset",
+        default=None,
+        choices=[
+            "auto",
+            "stock_clean",
+            "cinematic_vlog",
+            "real_life_documentary",
+            "minimal_business",
+            "shorts_fast",
+        ],
+        help="style preset used to refine search terms and normalize clips",
+    )
+    parser.add_argument(
+        "--reference-mode-enabled",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="overlay script-matched reference images on the generated video",
+    )
+    parser.add_argument(
+        "--reference-image-sources",
+        default=None,
+        help="comma-separated reference image sources, e.g. pexels,pixabay,wikimedia",
+    )
+    parser.add_argument(
+        "--reference-image-count",
+        type=_reference_image_count,
+        default=None,
+        help="maximum reference image count, 1-20",
+    )
+    parser.add_argument(
+        "--reference-effect-preset",
+        default=None,
+        choices=["old_paper_explained"],
+        help="reference overlay effect preset",
     )
     parser.add_argument("--voice-name", default="", help="tts voice name")
     parser.add_argument(
@@ -289,6 +340,12 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
         "video_transition_mode",
         "video_clip_duration",
         "match_materials_to_script",
+        "match_local_clips_to_script_timing",
+        "video_style_preset",
+        "reference_mode_enabled",
+        "reference_image_sources",
+        "reference_image_count",
+        "reference_effect_preset",
         "voice_volume",
         "voice_rate",
         "bgm_type",

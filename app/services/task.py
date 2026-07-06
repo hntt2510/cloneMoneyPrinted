@@ -8,7 +8,16 @@ from loguru import logger
 from app.config import config
 from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
-from app.services import llm, material, subtitle, twelvelabs, video, voice, upload_post
+from app.services import (
+    llm,
+    material,
+    reference,
+    subtitle,
+    twelvelabs,
+    upload_post,
+    video,
+    voice,
+)
 from app.services import state as sm
 from app.utils import file_security, utils
 
@@ -74,6 +83,51 @@ def generate_terms(task_id, params, video_script):
     return video_terms
 
 
+def apply_video_style_preset(video_terms, params):
+    preset = (params.video_style_preset or "auto").strip().lower()
+    if preset in ("", "auto"):
+        return video_terms
+
+    style_terms = {
+        "stock_clean": {
+            "default": "clean stock footage no text overlay",
+            "bilibili": "实拍 高清 无字幕 无水印 vlog",
+            "douyin": "实拍 高清 无字幕 无水印 vlog",
+        },
+        "cinematic_vlog": {
+            "default": "cinematic vlog realistic natural light no text overlay",
+            "bilibili": "电影感 vlog 实拍 高清 无字幕",
+            "douyin": "电影感 vlog 实拍 高清 无字幕",
+        },
+        "real_life_documentary": {
+            "default": "real life documentary footage realistic no text overlay",
+            "bilibili": "真实生活 纪录片 实拍 高清 无字幕",
+            "douyin": "真实生活 纪录片 实拍 高清 无字幕",
+        },
+        "minimal_business": {
+            "default": "minimal business office finance clean footage no text overlay",
+            "bilibili": "商务 办公 财务 实拍 高清 无字幕",
+            "douyin": "商务 办公 财务 实拍 高清 无字幕",
+        },
+        "shorts_fast": {
+            "default": "vertical short video fast paced realistic",
+            "bilibili": "竖屏 短视频 实拍 高清",
+            "douyin": "竖屏 短视频 实拍 高清",
+        },
+    }
+    style_config = style_terms.get(preset)
+    if not style_config:
+        logger.warning(f"unknown video style preset: {preset}, fallback to auto")
+        return video_terms
+
+    source = (params.video_source or "").strip().lower()
+    suffix = style_config.get(source) or style_config["default"]
+
+    if isinstance(video_terms, str):
+        return f"{video_terms} {suffix}".strip()
+    return [f"{term} {suffix}".strip() for term in video_terms]
+
+
 def save_script_data(task_id, video_script, video_terms, params):
     script_file = path.join(utils.task_dir(task_id), "script.json")
     script_data = {
@@ -123,6 +177,59 @@ def resolve_custom_audio_file(task_id: str, custom_audio_file: str | None) -> st
         ) from task_dir_error
 
     return server_audio_file
+
+
+def _split_script_for_local_timing(video_script: str, material_count: int) -> list[str]:
+    if material_count <= 0:
+        return []
+
+    paragraphs = [
+        part.strip() for part in re.split(r"\n\s*\n+", video_script) if part.strip()
+    ]
+    if len(paragraphs) == material_count:
+        return paragraphs
+
+    sentences = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?。！？；;])\s+|\n+", video_script)
+        if part.strip()
+    ]
+    units = sentences or paragraphs or [video_script.strip()]
+    if len(units) == material_count:
+        return units
+
+    groups = ["" for _ in range(material_count)]
+    group_lengths = [0 for _ in range(material_count)]
+    for unit in units:
+        target_index = group_lengths.index(min(group_lengths))
+        groups[target_index] = f"{groups[target_index]} {unit}".strip()
+        group_lengths[target_index] += max(1, len(unit))
+
+    return [group or video_script.strip() for group in groups]
+
+
+def estimate_local_clip_durations(
+    video_script: str, material_count: int, audio_duration: float
+) -> list[float]:
+    if material_count <= 0:
+        return []
+
+    required_duration = max(0.1, float(audio_duration))
+    script_parts = _split_script_for_local_timing(video_script, material_count)
+    weights = [max(1, len(part.strip())) for part in script_parts]
+    total_weight = sum(weights) or material_count
+    durations = [
+        required_duration * (weight / total_weight)
+        for weight in weights
+    ]
+
+    minimum_duration = 1.0
+    if required_duration >= material_count * minimum_duration:
+        durations = [max(minimum_duration, duration) for duration in durations]
+        scale = required_duration / sum(durations)
+        durations = [duration * scale for duration in durations]
+
+    return durations
 
 
 def generate_audio(task_id, params, video_script):
@@ -233,11 +340,20 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
     return subtitle_path
 
 
-def get_video_materials(task_id, params, video_terms, audio_duration):
+def get_video_materials(task_id, params, video_terms, audio_duration, video_script):
     if params.video_source == "local":
         logger.info("\n\n## preprocess local materials")
+        local_clip_durations = None
+        if params.match_local_clips_to_script_timing:
+            local_clip_durations = estimate_local_clip_durations(
+                video_script=video_script,
+                material_count=len(params.video_materials or []),
+                audio_duration=audio_duration,
+            )
         materials = video.preprocess_video(
-            materials=params.video_materials, clip_duration=params.video_clip_duration
+            materials=params.video_materials,
+            clip_duration=params.video_clip_duration,
+            clip_durations=local_clip_durations,
         )
         if not materials:
             sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
@@ -274,13 +390,22 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
 
 
 def generate_final_videos(
-    task_id, params, downloaded_videos, audio_file, subtitle_path
+    task_id, params, downloaded_videos, audio_file, subtitle_path, video_script, audio_duration
 ):
     final_video_paths = []
     combined_video_paths = []
+    reference_plan, reference_images = reference.prepare_reference_assets(
+        task_id=task_id,
+        params=params,
+        video_script=video_script,
+        subtitle_path=subtitle_path,
+        audio_duration=audio_duration,
+    )
     # 多视频生成默认会打散素材以增加差异；但“按文案顺序匹配素材”追求的是
     # 时间线稳定性和可解释性，所以开启后所有输出都使用顺序拼接。
-    if params.match_materials_to_script:
+    if params.match_materials_to_script or (
+        params.video_source == "local" and params.match_local_clips_to_script_timing
+    ):
         video_concat_mode = VideoConcatMode.sequential
     elif params.video_count == 1:
         video_concat_mode = params.video_concat_mode
@@ -295,6 +420,16 @@ def generate_final_videos(
             utils.task_dir(task_id), f"combined-{index}.mp4"
         )
         logger.info(f"\n\n## combining video: {index} => {combined_video_path}")
+        clip_durations = None
+        if params.match_materials_to_script or (
+            params.video_source == "local"
+            and params.match_local_clips_to_script_timing
+        ):
+            clip_durations = estimate_local_clip_durations(
+                video_script=video_script,
+                material_count=len(downloaded_videos),
+                audio_duration=audio_duration,
+            )
         video.combine_videos(
             combined_video_path=combined_video_path,
             video_paths=downloaded_videos,
@@ -303,8 +438,25 @@ def generate_final_videos(
             video_concat_mode=video_concat_mode,
             video_transition_mode=video_transition_mode,
             max_clip_duration=params.video_clip_duration,
+            clip_durations=clip_durations,
             threads=params.n_threads,
         )
+        if not path.isfile(combined_video_path) or path.getsize(combined_video_path) <= 0:
+            logger.error(f"combined video was not created: {combined_video_path}")
+            continue
+
+        render_input_video_path = combined_video_path
+        if reference_plan:
+            reference_video_path = path.join(
+                utils.task_dir(task_id), f"reference-combined-{index}.mp4"
+            )
+            render_input_video_path = reference.render_reference_overlay(
+                video_path=combined_video_path,
+                output_path=reference_video_path,
+                reference_plan=reference_plan,
+                params=params,
+                threads=params.n_threads,
+            )
 
         _progress += 50 / params.video_count / 2
         sm.state.update_task(task_id, progress=_progress)
@@ -313,7 +465,7 @@ def generate_final_videos(
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
         video.generate_video(
-            video_path=combined_video_path,
+            video_path=render_input_video_path,
             audio_path=audio_file,
             subtitle_path=subtitle_path,
             output_file=final_video_path,
@@ -324,9 +476,9 @@ def generate_final_videos(
         sm.state.update_task(task_id, progress=_progress)
 
         final_video_paths.append(final_video_path)
-        combined_video_paths.append(combined_video_path)
+        combined_video_paths.append(render_input_video_path)
 
-    return final_video_paths, combined_video_paths
+    return final_video_paths, combined_video_paths, reference_plan, reference_images
 
 
 def start(task_id, params: VideoParams, stop_at: str = "video"):
@@ -356,6 +508,7 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
             return
 
     save_script_data(task_id, video_script, video_terms, params)
+    video_terms = apply_video_style_preset(video_terms, params)
 
     if stop_at == "terms":
         sm.state.update_task(
@@ -402,7 +555,7 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
 
     # 5. Get video materials
     downloaded_videos = get_video_materials(
-        task_id, params, video_terms, audio_duration
+        task_id, params, video_terms, audio_duration, video_script
     )
     if not downloaded_videos:
         sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
@@ -425,8 +578,13 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
         params.video_concat_mode = VideoConcatMode(params.video_concat_mode)
 
     # 6. Generate final videos
-    final_video_paths, combined_video_paths = generate_final_videos(
-        task_id, params, downloaded_videos, audio_file, subtitle_path
+    (
+        final_video_paths,
+        combined_video_paths,
+        reference_plan,
+        reference_images,
+    ) = generate_final_videos(
+        task_id, params, downloaded_videos, audio_file, subtitle_path, video_script, audio_duration
     )
 
     if not final_video_paths:
@@ -480,6 +638,8 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
         "audio_duration": audio_duration,
         "subtitle_path": subtitle_path,
         "materials": downloaded_videos,
+        "reference_plan": reference_plan,
+        "reference_images": reference_images,
         "cross_post_results": cross_post_results if cross_post_results else None,
     }
     sm.state.update_task(

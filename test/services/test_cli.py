@@ -119,6 +119,31 @@ class TestCli(unittest.TestCase):
         self.assertEqual(params.bgm_file, "output001.mp3")
         self.assertEqual(params.bgm_volume, 0.3)
 
+    def test_build_video_params_with_reference_mode_options(self):
+        args = cli.parse_args(
+            [
+                "--video-subject",
+                "test",
+                "--reference-mode-enabled",
+                "--reference-image-sources",
+                "pexels,pixabay,wikimedia",
+                "--reference-image-count",
+                "6",
+                "--reference-effect-preset",
+                "old_paper_explained",
+            ]
+        )
+
+        params = cli.build_video_params(args)
+
+        self.assertTrue(params.reference_mode_enabled)
+        self.assertEqual(
+            params.reference_image_sources,
+            "pexels,pixabay,wikimedia",
+        )
+        self.assertEqual(params.reference_image_count, 6)
+        self.assertEqual(params.reference_effect_preset, "old_paper_explained")
+
     def test_build_video_params_with_subtitle_style_options(self):
         args = cli.parse_args(
             [

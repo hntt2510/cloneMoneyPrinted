@@ -989,6 +989,28 @@ with middle_panel:
         )
 
         with st.expander(tr("Advanced Video Settings"), expanded=False):
+            video_style_presets = [
+                (tr("Auto Style"), "auto"),
+                (tr("Clean Stock Style"), "stock_clean"),
+                (tr("Cinematic Vlog Style"), "cinematic_vlog"),
+                (tr("Real Life Documentary Style"), "real_life_documentary"),
+                (tr("Minimal Business Style"), "minimal_business"),
+                (tr("Fast Shorts Style"), "shorts_fast"),
+            ]
+            saved_style_preset = config.app.get("video_style_preset", "auto")
+            style_values = [item[1] for item in video_style_presets]
+            if saved_style_preset not in style_values:
+                saved_style_preset = "auto"
+            selected_style_index = st.selectbox(
+                tr("Video Style Preset"),
+                options=range(len(video_style_presets)),
+                index=style_values.index(saved_style_preset),
+                format_func=lambda x: video_style_presets[x][0],
+                help=tr("Video Style Preset Help"),
+            )
+            params.video_style_preset = video_style_presets[selected_style_index][1]
+            config.app["video_style_preset"] = params.video_style_preset
+
             # 默认关闭，避免影响老用户的随机素材体验。开启后只改变关键词和素材
             # 下载/拼接顺序，用于改善画面主题早于或晚于旁白的问题。
             params.match_materials_to_script = st.checkbox(
@@ -997,6 +1019,85 @@ with middle_panel:
                 key="match_materials_to_script",
             )
             config.app["match_materials_to_script"] = params.match_materials_to_script
+
+            params.match_local_clips_to_script_timing = st.checkbox(
+                tr("Match Local Clips to Script Timing"),
+                help=tr("Match Local Clips to Script Timing Help"),
+                key="match_local_clips_to_script_timing",
+                disabled=params.video_source != "local",
+            )
+            config.app["match_local_clips_to_script_timing"] = (
+                params.match_local_clips_to_script_timing
+            )
+
+            params.reference_mode_enabled = st.checkbox(
+                tr("Reference Explained Mode"),
+                value=bool(config.app.get("reference_mode_enabled", False)),
+                help=tr("Reference Explained Mode Help"),
+                key="reference_mode_enabled",
+            )
+            config.app["reference_mode_enabled"] = params.reference_mode_enabled
+
+            reference_source_options = [
+                ("Pexels", "pexels"),
+                ("Pixabay", "pixabay"),
+                ("Wikimedia Commons", "wikimedia"),
+            ]
+            reference_source_labels = {
+                value: label for label, value in reference_source_options
+            }
+            saved_reference_sources = config.app.get(
+                "reference_image_sources", ["pexels", "pixabay", "wikimedia"]
+            )
+            if isinstance(saved_reference_sources, str):
+                saved_reference_sources = [
+                    item.strip()
+                    for item in saved_reference_sources.split(",")
+                    if item.strip()
+                ]
+            valid_reference_sources = [value for _, value in reference_source_options]
+            saved_reference_sources = [
+                source
+                for source in saved_reference_sources
+                if source in valid_reference_sources
+            ] or valid_reference_sources
+            params.reference_image_sources = st.multiselect(
+                tr("Reference Image Sources"),
+                options=valid_reference_sources,
+                default=saved_reference_sources,
+                format_func=lambda value: reference_source_labels[value],
+                disabled=not params.reference_mode_enabled,
+            )
+            config.app["reference_image_sources"] = params.reference_image_sources
+
+            try:
+                saved_reference_image_count = int(
+                    config.app.get("reference_image_count", 8) or 8
+                )
+            except (TypeError, ValueError):
+                saved_reference_image_count = 8
+            params.reference_image_count = st.slider(
+                tr("Reference Image Count"),
+                min_value=1,
+                max_value=20,
+                value=max(1, min(20, saved_reference_image_count)),
+                disabled=not params.reference_mode_enabled,
+            )
+            config.app["reference_image_count"] = params.reference_image_count
+
+            reference_effect_presets = [
+                (tr("Old Paper Explained"), "old_paper_explained"),
+            ]
+            params.reference_effect_preset = reference_effect_presets[
+                st.selectbox(
+                    tr("Reference Effect Preset"),
+                    options=range(len(reference_effect_presets)),
+                    index=0,
+                    format_func=lambda x: reference_effect_presets[x][0],
+                    disabled=not params.reference_mode_enabled,
+                )
+            ][1]
+            config.app["reference_effect_preset"] = params.reference_effect_preset
 
             video_codec_options = [
                 ("libx264 (CPU)", "libx264"),
@@ -1671,6 +1772,39 @@ with right_panel:
                     config.save_config()
                     st.success(tr("Coverr API Key deleted successfully"))
 
+        st.subheader(tr("Direct Platform API Settings"))
+        st.caption(tr("Direct Platform API Settings Help"))
+        platform_api_fields = [
+            ("Douyin", "douyin"),
+            ("Bilibili", "bilibili"),
+        ]
+        for platform_label, platform_key in platform_api_fields:
+            st.write(platform_label)
+            config.app[f"{platform_key}_api_base_url"] = st.text_input(
+                tr("API Base URL"),
+                value=config.app.get(f"{platform_key}_api_base_url", ""),
+                key=f"{platform_key}_api_base_url_input",
+            ).strip()
+            if platform_key == "douyin":
+                config.app["douyin_search_api_url"] = st.text_input(
+                    tr("Douyin Search API URL"),
+                    value=config.app.get("douyin_search_api_url", ""),
+                    help=tr("Douyin Search API URL Help"),
+                    key="douyin_search_api_url_input",
+                ).strip()
+            config.app[f"{platform_key}_api_key"] = st.text_input(
+                tr("API Key"),
+                value=config.app.get(f"{platform_key}_api_key", ""),
+                type="password",
+                key=f"{platform_key}_api_key_input",
+            )
+            config.app[f"{platform_key}_jwt"] = st.text_area(
+                tr("JWT Token"),
+                value=config.app.get(f"{platform_key}_jwt", ""),
+                height=80,
+                key=f"{platform_key}_jwt_input",
+            ).strip()
+
 start_button = st.button(tr("Generate Video"), use_container_width=True, type="primary")
 if start_button:
     config.save_config()
@@ -1680,8 +1814,13 @@ if start_button:
         scroll_to_bottom()
         st.stop()
 
-    if params.video_source not in ["pexels", "pixabay", "coverr", "local"]:
+    if params.video_source not in ["pexels", "pixabay", "coverr", "local", "douyin", "bilibili"]:
         st.error(tr("Please Select a Valid Video Source"))
+        scroll_to_bottom()
+        st.stop()
+
+    if params.video_source == "douyin" and not config.app.get("douyin_search_api_url", ""):
+        st.error(tr("Please Enter the Douyin Search API URL"))
         scroll_to_bottom()
         st.stop()
 

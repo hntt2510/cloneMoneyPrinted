@@ -1,5 +1,7 @@
 .DS_Store
 /config.toml
+/cookie.txt
+/cookies.txt
 /storage/
 /.idea/
 /app/services/__pycache__

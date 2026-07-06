@@ -78,6 +78,12 @@ class VideoParams(BaseModel):
     video_transition_mode: Optional[VideoTransitionMode] = None
     video_clip_duration: Optional[int] = 5
     match_materials_to_script: bool = False
+    match_local_clips_to_script_timing: bool = False
+    video_style_preset: str = "auto"
+    reference_mode_enabled: bool = False
+    reference_image_sources: Optional[list[str] | str] = None
+    reference_image_count: int = Field(default=8, ge=1, le=20)
+    reference_effect_preset: str = "old_paper_explained"
     video_count: Optional[int] = 1
 
     video_source: Optional[str] = "pexels"

@@ -22,6 +22,7 @@ from moviepy import (
     TextClip,
     VideoFileClip,
     afx,
+    vfx,
 )
 from moviepy.video.tools.subtitles import SubtitlesClip
 from PIL import Image, ImageDraw, ImageFont
@@ -95,6 +96,65 @@ def _get_required_video_duration(audio_duration: float) -> float:
     轻量余量。函数独立出来，便于测试和后续按实际反馈调整余量大小。
     """
     return max(0.0, float(audio_duration) + _VIDEO_DURATION_SAFETY_MARGIN)
+
+
+def _get_video_style_preset() -> str:
+    preset = str(config.app.get("video_style_preset", "auto") or "auto").strip().lower()
+    supported_presets = {
+        "auto",
+        "stock_clean",
+        "cinematic_vlog",
+        "real_life_documentary",
+        "minimal_business",
+        "shorts_fast",
+    }
+    return preset if preset in supported_presets else "auto"
+
+
+def _apply_style_grade(clip):
+    preset = _get_video_style_preset()
+    if preset == "auto":
+        return clip
+
+    grade_settings = {
+        "stock_clean": {"lum": 0, "contrast": 0.06},
+        "cinematic_vlog": {"lum": -2, "contrast": 0.10},
+        "real_life_documentary": {"lum": 0, "contrast": 0.04},
+        "minimal_business": {"lum": 1, "contrast": 0.05},
+        "shorts_fast": {"lum": 2, "contrast": 0.08},
+    }
+    settings = grade_settings.get(preset)
+    if not settings:
+        return clip
+
+    return clip.with_effects(
+        [
+            vfx.LumContrast(
+                lum=settings["lum"],
+                contrast=settings["contrast"],
+                contrast_threshold=127,
+            )
+        ]
+    )
+
+
+def _resize_clip_to_fill(clip, video_width: int, video_height: int):
+    clip_w, clip_h = clip.size
+    if clip_w == video_width and clip_h == video_height:
+        return clip
+
+    scale_factor = max(video_width / clip_w, video_height / clip_h)
+    resized_clip = clip.resized(
+        new_size=(int(clip_w * scale_factor), int(clip_h * scale_factor))
+    )
+    x_center = resized_clip.w / 2
+    y_center = resized_clip.h / 2
+    return resized_clip.cropped(
+        x_center=x_center,
+        y_center=y_center,
+        width=video_width,
+        height=video_height,
+    )
 
 
 def _prioritize_unique_source_clips(
@@ -540,6 +600,7 @@ def combine_videos(
     video_concat_mode: VideoConcatMode = VideoConcatMode.random,
     video_transition_mode: VideoTransitionMode = None,
     max_clip_duration: int = 5,
+    clip_durations: List[float] | None = None,
     threads: int = 2,
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
@@ -551,6 +612,11 @@ def combine_videos(
         close_clip(audio_clip)
     logger.info(f"audio duration: {audio_duration} seconds")
     logger.info(f"maximum clip duration: {max_clip_duration} seconds")
+    if clip_durations:
+        logger.info(
+            "using per-clip target durations: "
+            + ", ".join(f"{duration:.2f}s" for duration in clip_durations)
+        )
     required_video_duration = _get_required_video_duration(audio_duration)
     logger.info(
         f"required video duration: {required_video_duration:.2f} seconds "
@@ -567,11 +633,30 @@ def combine_videos(
     processed_clips = []
     subclipped_items = []
     video_duration = 0
-    for video_path in video_paths:
+    ordered_clip_targets = list(clip_durations or [])
+    for video_index, video_path in enumerate(video_paths):
         clip = _open_video_clip_quietly(video_path)
         clip_duration = clip.duration
         clip_w, clip_h = clip.size
         close_clip(clip)
+
+        if ordered_clip_targets:
+            target_duration = ordered_clip_targets[
+                min(video_index, len(ordered_clip_targets) - 1)
+            ]
+            effective_duration = min(max(0.1, target_duration), clip_duration)
+            start_time = max(0, (clip_duration - effective_duration) / 2)
+            subclipped_items.append(
+                SubClippedVideoClip(
+                    file_path=video_path,
+                    start_time=start_time,
+                    end_time=start_time + effective_duration,
+                    width=clip_w,
+                    height=clip_h,
+                    source_file_path=video_path,
+                )
+            )
+            continue
         
         start_time = 0
 
@@ -627,8 +712,10 @@ def combine_videos(
                 clip_ratio = clip.w / clip.h
                 video_ratio = video_width / video_height
                 logger.debug(f"resizing clip, source: {clip_w}x{clip_h}, ratio: {clip_ratio:.2f}, target: {video_width}x{video_height}, ratio: {video_ratio:.2f}")
-                
-                if clip_ratio == video_ratio:
+
+                if _get_video_style_preset() != "auto":
+                    clip = _resize_clip_to_fill(clip, video_width, video_height)
+                elif clip_ratio == video_ratio:
                     clip = clip.resized(new_size=(video_width, video_height))
                 else:
                     if clip_ratio > video_ratio:
@@ -642,6 +729,8 @@ def combine_videos(
                     background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(clip_duration)
                     clip_resized = clip.resized(new_size=(new_width, new_height)).with_position("center")
                     clip = CompositeVideoClip([background, clip_resized])
+
+            clip = _apply_style_grade(clip)
                     
             shuffle_side = random.choice(["left", "right", "top", "bottom"])
             if transition_value in (None, VideoTransitionMode.none.value):
@@ -664,7 +753,7 @@ def combine_videos(
                 shuffle_transition = random.choice(transition_funcs)
                 clip = shuffle_transition(clip)
 
-            if clip.duration > max_clip_duration:
+            if not ordered_clip_targets and clip.duration > max_clip_duration:
                 clip = clip.subclipped(0, max_clip_duration)
                 
             # wirte clip to temp file
@@ -717,7 +806,7 @@ def combine_videos(
     logger.info("starting clip merging process")
     if not processed_clips:
         logger.warning("no clips available for merging")
-        return combined_video_path
+        return ""
     
     # if there is only one clip, use it directly
     if len(processed_clips) == 1:
@@ -1135,7 +1224,11 @@ def generate_video(
     del video_clip
 
 
-def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
+def preprocess_video(
+    materials: List[MaterialInfo],
+    clip_duration=4,
+    clip_durations: List[float] | None = None,
+):
     # WebUI 在某些二次生成场景下可能传入空素材列表，这里直接返回空结果，避免抛出 NoneType 异常。
     if not materials:
         return []
@@ -1144,7 +1237,7 @@ def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
     valid_materials = []
     local_videos_dir = utils.storage_dir("local_videos", create=True)
 
-    for material in materials:
+    for index, material in enumerate(materials):
         if not material.url:
             continue
 
@@ -1196,9 +1289,14 @@ def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
                 # 探测尺寸时已经打开过一次素材，这里先释放探测句柄，再重新创建用于导出的图片 clip。
                 close_clip(clip)
                 # Create an image clip and set its duration to 3 seconds
+                image_clip_duration = (
+                    clip_durations[index]
+                    if clip_durations and index < len(clip_durations)
+                    else clip_duration
+                )
                 clip = (
                     ImageClip(material_source_path)
-                    .with_duration(clip_duration)
+                    .with_duration(image_clip_duration)
                     .with_position("center")
                 )
                 # Apply a zoom effect using the resize method.
@@ -1207,7 +1305,7 @@ def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
                 # t represents the current time, and clip.duration is the total duration of the clip (3 seconds).
                 # Note: 1 represents 100% size, so 1.2 represents 120% size.
                 zoom_clip = clip.resized(
-                    lambda t: 1 + (clip_duration * 0.03) * (t / clip.duration)
+                    lambda t: 1 + (image_clip_duration * 0.03) * (t / clip.duration)
                 )
 
                 # Optionally, create a composite video clip containing the zoomed clip.
