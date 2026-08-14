@@ -446,4 +446,15 @@ Click to view the [`LICENSE`](LICENSE) file
 
 ## Star History
 
+## Project file mode
+
+Run or validate a schema-versioned project file without changing the legacy CLI:
+
+```shell
+python cli.py --project examples/project.example.json
+python cli.py --project examples/project.example.json --validate-only
+```
+
+Relative narration and local-material paths resolve from the project file directory.
+
 [![Star History Chart](https://api.star-history.com/svg?repos=harry0703/MoneyPrinterTurbo&type=Date)](https://star-history.com/#harry0703/MoneyPrinterTurbo&Date)
