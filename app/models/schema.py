@@ -20,6 +20,28 @@ class VideoConcatMode(str, Enum):
     sequential = "sequential"
 
 
+class VideoSource(str, Enum):
+    pexels = "pexels"
+    pixabay = "pixabay"
+    coverr = "coverr"
+    local = "local"
+
+
+SUPPORTED_VIDEO_SOURCES = tuple(source.value for source in VideoSource)
+STOCK_VIDEO_SOURCES = tuple(
+    source.value
+    for source in (VideoSource.pexels, VideoSource.pixabay, VideoSource.coverr)
+)
+
+
+def normalize_saved_video_source(value: object) -> str:
+    """Normalize a persisted source while keeping runtime validation strict."""
+    try:
+        return VideoSource(str(value).strip().lower()).value
+    except (TypeError, ValueError):
+        return VideoSource.pexels.value
+
+
 class VideoTransitionMode(str, Enum):
     none = None
     shuffle = "Shuffle"
@@ -86,7 +108,7 @@ class VideoParams(BaseModel):
     reference_effect_preset: str = "old_paper_explained"
     video_count: Optional[int] = 1
 
-    video_source: Optional[str] = "pexels"
+    video_source: VideoSource = VideoSource.pexels
     video_materials: Optional[List[MaterialInfo]] = (
         None  # Materials used to generate the video
     )
@@ -135,7 +157,7 @@ class SubtitleRequest(BaseModel):
     font_size: int = 60
     stroke_color: Optional[str] = "#000000"
     stroke_width: float = 1.5
-    video_source: Optional[str] = "local"
+    video_source: VideoSource = VideoSource.local
     subtitle_enabled: Optional[str] = "true"
 
 
@@ -148,7 +170,7 @@ class AudioRequest(BaseModel):
     bgm_type: Optional[str] = "random"
     bgm_file: Optional[str] = ""
     bgm_volume: Optional[float] = 0.2
-    video_source: Optional[str] = "local"
+    video_source: VideoSource = VideoSource.local
 
 
 class VideoScriptParams:

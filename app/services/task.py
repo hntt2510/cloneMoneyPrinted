@@ -89,39 +89,18 @@ def apply_video_style_preset(video_terms, params):
         return video_terms
 
     style_terms = {
-        "stock_clean": {
-            "default": "clean stock footage no text overlay",
-            "bilibili": "实拍 高清 无字幕 无水印 vlog",
-            "douyin": "实拍 高清 无字幕 无水印 vlog",
-        },
-        "cinematic_vlog": {
-            "default": "cinematic vlog realistic natural light no text overlay",
-            "bilibili": "电影感 vlog 实拍 高清 无字幕",
-            "douyin": "电影感 vlog 实拍 高清 无字幕",
-        },
-        "real_life_documentary": {
-            "default": "real life documentary footage realistic no text overlay",
-            "bilibili": "真实生活 纪录片 实拍 高清 无字幕",
-            "douyin": "真实生活 纪录片 实拍 高清 无字幕",
-        },
-        "minimal_business": {
-            "default": "minimal business office finance clean footage no text overlay",
-            "bilibili": "商务 办公 财务 实拍 高清 无字幕",
-            "douyin": "商务 办公 财务 实拍 高清 无字幕",
-        },
-        "shorts_fast": {
-            "default": "vertical short video fast paced realistic",
-            "bilibili": "竖屏 短视频 实拍 高清",
-            "douyin": "竖屏 短视频 实拍 高清",
-        },
+        "stock_clean": "clean stock footage no text overlay",
+        "cinematic_vlog": "cinematic vlog realistic natural light no text overlay",
+        "real_life_documentary": "real life documentary footage realistic no text overlay",
+        "minimal_business": "minimal business office finance clean footage no text overlay",
+        "shorts_fast": "vertical short video fast paced realistic",
     }
     style_config = style_terms.get(preset)
     if not style_config:
         logger.warning(f"unknown video style preset: {preset}, fallback to auto")
         return video_terms
 
-    source = (params.video_source or "").strip().lower()
-    suffix = style_config.get(source) or style_config["default"]
+    suffix = style_config
 
     if isinstance(video_terms, str):
         return f"{video_terms} {suffix}".strip()

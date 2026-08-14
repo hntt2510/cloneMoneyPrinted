@@ -1,12 +1,21 @@
 import argparse
 import json
 import re
+import sys
+from pathlib import Path
 from typing import Sequence
 
 from loguru import logger
 
-from app.models.schema import MaterialInfo, VideoParams
+from app.models.schema import MaterialInfo, SUPPORTED_VIDEO_SOURCES, VideoParams
 from app.services import task as tm
+from app.services.project_runner import ProjectRunError, run_project
+from app.services.project_timeline_runner import run_project_plan
+from app.services.project_spec import (
+    ProjectSpecError,
+    load_project_spec,
+    preflight_project,
+)
 from app.utils import utils
 
 
@@ -90,9 +99,20 @@ def _bgm_type(value: str) -> str:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="MoneyPrinterTurbo command line video generation"
+        description="Video Research & Asset Builder command line video generation"
     )
-    parser.add_argument("--video-subject", required=True, help="video subject")
+    parser.add_argument("--project", default=None, help="project JSON file")
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="validate a project file without running the video pipeline",
+    )
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="generate narration timeline and visual plan without acquiring assets or rendering",
+    )
+    parser.add_argument("--video-subject", required=False, help="video subject")
     parser.add_argument("--video-script", default="", help="custom script")
     parser.add_argument("--video-terms", default=None, help="comma-separated terms")
     parser.add_argument(
@@ -119,7 +139,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--video-source",
         default="pexels",
-        choices=["pexels", "pixabay", "coverr", "local"],
+        choices=SUPPORTED_VIDEO_SOURCES,
         help="video material source",
     )
     parser.add_argument(
@@ -290,12 +310,45 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="enable rounded translucent subtitle background",
     )
     parser.add_argument("--task-id", default="", help="custom task id")
-    args = parser.parse_args(argv)
+    argv_list = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(argv_list)
 
-    if args.video_source == "local" and not (args.video_materials or "").strip():
+    if args.project:
+        provided_options = {
+            token.split("=", 1)[0]
+            for token in argv_list
+            if token.startswith("--")
+        }
+        allowed_destinations = {
+            "project",
+            "validate_only",
+            "plan_only",
+            "task_id",
+            "stop_at",
+        }
+        for action in parser._actions:
+            if action.dest in allowed_destinations or not action.option_strings:
+                continue
+            if any(option in provided_options for option in action.option_strings):
+                parser.error(
+                    f"{next(option for option in action.option_strings if option in provided_options)} "
+                    "cannot be used together with --project"
+                )
+        if args.validate_only and args.plan_only:
+            parser.error("--validate-only cannot be combined with --plan-only")
+        if args.plan_only and "--stop-at" in provided_options:
+            parser.error("--stop-at cannot be used together with --plan-only")
+    elif args.validate_only:
+        parser.error("--validate-only requires --project")
+    elif args.plan_only:
+        parser.error("--plan-only requires --project")
+    elif not args.video_subject:
+        parser.error("--video-subject is required unless --project is provided")
+
+    if not args.project and args.video_source == "local" and not (args.video_materials or "").strip():
         parser.error("--video-materials is required when --video-source is local")
 
-    if args.video_source == "local" and args.stop_at == "terms":
+    if not args.project and args.video_source == "local" and args.stop_at == "terms":
         parser.error(
             "--stop-at terms has no effect with --video-source local "
             "(search terms are not generated for local sources)"
@@ -378,6 +431,43 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
 
 def run_cli(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.project:
+        try:
+            project = load_project_spec(args.project)
+            preflight_project(project, str(Path(args.project).expanduser().resolve().parent))
+            if args.validate_only:
+                print(
+                    json.dumps(
+                        {
+                            "valid": True,
+                            "schema_version": project.schema_version,
+                            "title": project.project.title,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
+            if args.plan_only:
+                result = run_project_plan(
+                    args.project,
+                    task_id=args.task_id or None,
+                )
+                print(json.dumps(result, ensure_ascii=False))
+                return 0
+            result = run_project(
+                args.project,
+                task_id=args.task_id or None,
+                stop_at=args.stop_at,
+            )
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
+        except ProjectSpecError as exc:
+            logger.error(f"Invalid project file: {exc}")
+            return 2
+        except ProjectRunError as exc:
+            logger.error(str(exc))
+            return 1
+
     params = build_video_params(args)
     task_id = args.task_id or utils.get_uuid()
     logger.info(f"start cli task: {task_id}, stop_at: {args.stop_at}")

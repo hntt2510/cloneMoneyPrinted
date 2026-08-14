@@ -806,7 +806,7 @@ def combine_videos(
     logger.info("starting clip merging process")
     if not processed_clips:
         logger.warning("no clips available for merging")
-        return ""
+        return combined_video_path
     
     # if there is only one clip, use it directly
     if len(processed_clips) == 1:
