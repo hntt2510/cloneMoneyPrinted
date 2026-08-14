@@ -65,11 +65,12 @@ class NarrationMode(str, Enum):
 class NarrationSpec(ProjectModel):
     mode: NarrationMode = NarrationMode.tts
     file: str | None = None
+    timing_file: str | None = None
     voice_name: str = ""
     voice_rate: float = Field(default=1.0, ge=0)
     voice_volume: float = Field(default=1.0, ge=0)
 
-    @field_validator("file", "voice_name")
+    @field_validator("file", "timing_file", "voice_name")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         return value.strip() if value is not None else None
@@ -169,6 +170,7 @@ class VisualCue(ProjectModel):
     status: JobStatus = JobStatus.planned
     notes: str = ""
     payload: dict[str, Any] = Field(default_factory=dict)
+    visual_group_id: str | None = None
 
     @field_validator("id")
     @classmethod
@@ -211,15 +213,77 @@ class RenderJob(ProjectModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class TimelineCue(ProjectModel):
+    id: str
+    order: int = Field(ge=1)
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+    narration: str
+
+    @field_validator("id", "narration")
+    @classmethod
+    def require_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def validate_timing(self) -> TimelineCue:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
+
+
+class TimelinePlan(ProjectModel):
+    schema_version: Literal["1.0"]
+    project_title: str
+    audio_file: str
+    timing_file: str
+    duration: float = Field(ge=0)
+    cues: list[TimelineCue] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_cues(self) -> TimelinePlan:
+        ids = [cue.id for cue in self.cues]
+        orders = [cue.order for cue in self.cues]
+        if len(ids) != len(set(ids)):
+            raise ValueError("timeline cue ids must be unique")
+        if len(orders) != len(set(orders)):
+            raise ValueError("timeline cue orders must be unique")
+        previous_end = 0.0
+        for cue in sorted(self.cues, key=lambda item: item.order):
+            if cue.start < previous_end:
+                raise ValueError("timeline cues must not overlap")
+            previous_end = cue.end
+        return self
+
+
 class ProjectSpec(ProjectModel):
     schema_version: Literal["1.0"]
     project: ProjectMetadata
     script: ScriptSpec
     narration: NarrationSpec
     production: ProductionConfig = Field(default_factory=ProductionConfig)
+    timeline_cues: list[TimelineCue] = Field(default_factory=list)
     visual_cues: list[VisualCue] = Field(default_factory=list)
     asset_jobs: list[AssetJob] = Field(default_factory=list)
     render_jobs: list[RenderJob] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_timeline(self) -> ProjectSpec:
+        ids = [cue.id for cue in self.timeline_cues]
+        orders = [cue.order for cue in self.timeline_cues]
+        if len(ids) != len(set(ids)):
+            raise ValueError("timeline cue ids must be unique")
+        if len(orders) != len(set(orders)):
+            raise ValueError("timeline cue orders must be unique")
+        previous_end = 0.0
+        for cue in sorted(self.timeline_cues, key=lambda item: item.order):
+            if cue.start < previous_end:
+                raise ValueError("timeline cues must not overlap")
+            previous_end = cue.end
+        return self
 
 
 class ProjectStatus(str, Enum):

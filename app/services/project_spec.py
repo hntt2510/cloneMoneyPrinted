@@ -145,6 +145,8 @@ def preflight_project(
     paths: list[tuple[str, str]] = []
     if project.narration.mode == NarrationMode.file:
         paths.append(("narration file", project.narration.file or ""))
+    if project.narration.timing_file:
+        paths.append(("narration timing file", project.narration.timing_file))
     if project.production.video_source.value == "local":
         paths.extend(
             ("local material", item) for item in project.production.local_materials
