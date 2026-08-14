@@ -1,5 +1,11 @@
 [app]
 video_source = "pexels" # "pexels", "pixabay", "coverr", or "local"
+match_local_clips_to_script_timing = false
+video_style_preset = "auto"
+reference_mode_enabled = false
+reference_image_sources = ["pexels", "pixabay", "wikimedia"]
+reference_image_count = 8
+reference_effect_preset = "old_paper_explained"
 
 # 是否隐藏配置面板
 hide_config = false
