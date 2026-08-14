@@ -35,6 +35,15 @@ _COMPARISON_RE = re.compile(
 )
 
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class NumericFact:
+    value: float
+    is_percent: bool = False
+
+
 class PlannerError(ValueError):
     """A planner response cannot be made into a valid visual plan."""
 
@@ -70,22 +79,72 @@ def _parse_batch_response(value: str) -> PlannerBatch:
     return PlannerBatch.model_validate(raw)
 
 
-def _numeric_tokens(value: Any) -> list[str]:
-    """Recursively extract all numeric token strings from any value."""
-    if isinstance(value, dict):
-        return [token for item in value.values() for token in _numeric_tokens(item)]
-    if isinstance(value, (list, tuple)):
-        return [token for item in value for token in _numeric_tokens(item)]
+def _parse_single_numeric_fact(raw: str) -> NumericFact | None:
+    """Parse a single numeric token into a canonical NumericFact."""
+    text = raw.strip()
+    if not text:
+        return None
+    is_percent = "%" in text
+    clean = re.sub(r"[\$\%,]", "", text).strip()
+    if not clean:
+        return None
+    multiplier = 1.0
+    if clean[-1] in "kK":
+        multiplier = 1_000.0
+        clean = clean[:-1].strip()
+    elif clean[-1] in "mM":
+        multiplier = 1_000_000.0
+        clean = clean[:-1].strip()
+    elif clean[-1] in "bB":
+        multiplier = 1_000_000_000.0
+        clean = clean[:-1].strip()
+    clean = clean.rstrip(".")
+    if not clean:
+        return None
+    try:
+        val = float(clean) * multiplier
+        return NumericFact(value=val, is_percent=is_percent)
+    except ValueError:
+        return None
+
+
+def _extract_numeric_facts(value: Any) -> set[NumericFact]:
+    """Recursively extract all canonical NumericFact items from any value."""
+    facts: set[NumericFact] = set()
+    if isinstance(value, bool):
+        return facts
     if isinstance(value, (int, float)):
-        return [str(value)]
-    if isinstance(value, str):
-        return _NUMBER_RE.findall(value)
-    return []
+        facts.add(NumericFact(value=float(value), is_percent=False))
+    elif isinstance(value, str):
+        for match in _NUMBER_RE.finditer(value):
+            fact = _parse_single_numeric_fact(match.group(0))
+            if fact is not None:
+                facts.add(fact)
+    elif isinstance(value, dict):
+        for item in value.values():
+            facts.update(_extract_numeric_facts(item))
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            facts.update(_extract_numeric_facts(item))
+    return facts
 
 
-def _normalize_for_grounding(text: str) -> str:
-    """Normalize text for grounding comparison: lowercase, strip whitespace."""
-    return re.sub(r"\s+", "", text).lower()
+def _validate_numeric_grounding(
+    facts_to_check: set[NumericFact],
+    allowed_facts: set[NumericFact],
+    cue_id: str,
+    payload_type: str,
+) -> None:
+    """Validate that all numeric facts in facts_to_check are present in allowed_facts."""
+    ungrounded = facts_to_check - allowed_facts
+    if ungrounded:
+        formatted = ", ".join(
+            f"{f.value:g}%" if f.is_percent else f"{f.value:g}"
+            for f in sorted(ungrounded, key=lambda x: (x.value, x.is_percent))
+        )
+        raise PlannerError(
+            f"ungrounded numeric value(s) {formatted} in {payload_type} for timeline cue {cue_id}"
+        )
 
 
 def _build_local_context(
@@ -117,28 +176,26 @@ def _validate_grounded_data(
     local_context: str,
 ) -> None:
     """Validate DATA visual: all numeric tokens in headline AND data must be grounded
-    in the local context (current + adjacent cues only).
+    in the local context (current + adjacent cues only) using exact canonical fact comparison.
 
     Rejects any numeric value absent from the local grounding window.
     """
     if decision.visual_type != VisualType.data:
         return
     payload = DataPayload.model_validate(decision.payload)
-    normalized_context = _normalize_for_grounding(local_context)
+    allowed_facts = _extract_numeric_facts(local_context)
 
-    # Validate headline numeric tokens
-    for token in _numeric_tokens(payload.headline):
-        if _normalize_for_grounding(token) not in normalized_context:
-            raise PlannerError(
-                f"ungrounded numeric value {token!r} in DATA headline for timeline cue {timeline_cue.id}"
-            )
+    # Validate headline numeric facts
+    headline_facts = _extract_numeric_facts(payload.headline)
+    _validate_numeric_grounding(
+        headline_facts, allowed_facts, timeline_cue.id, "DATA headline"
+    )
 
-    # Validate all data payload tokens recursively
-    for token in _numeric_tokens(payload.data):
-        if _normalize_for_grounding(token) not in normalized_context:
-            raise PlannerError(
-                f"ungrounded numeric value {token!r} in DATA payload for timeline cue {timeline_cue.id}"
-            )
+    # Validate all data payload facts recursively
+    data_facts = _extract_numeric_facts(payload.data)
+    _validate_numeric_grounding(
+        data_facts, allowed_facts, timeline_cue.id, "DATA payload"
+    )
 
     if payload.template in {DataTemplate.bar_chart, DataTemplate.line_chart}:
         values = payload.data.get("values")
@@ -152,22 +209,19 @@ def _validate_grounded_text(
     local_context: str,
 ) -> None:
     """Validate TEXT visual: headline/subheadline must not introduce new numeric claims
-    absent from the local context (current + adjacent cues only).
+    absent from the local context (current + adjacent cues only) using exact canonical fact comparison.
     """
     if decision.visual_type != VisualType.text:
         return
     payload = TextPayload.model_validate(decision.payload)
-    normalized_context = _normalize_for_grounding(local_context)
+    allowed_facts = _extract_numeric_facts(local_context)
 
-    for field_value in (payload.headline, payload.subheadline):
-        if field_value is None:
-            continue
-        for token in _numeric_tokens(field_value):
-            if _normalize_for_grounding(token) not in normalized_context:
-                raise PlannerError(
-                    f"TEXT payload introduces ungrounded numeric claim {token!r} "
-                    f"for timeline cue {timeline_cue.id}"
-                )
+    text_facts = _extract_numeric_facts(payload.headline)
+    if payload.subheadline is not None:
+        text_facts.update(_extract_numeric_facts(payload.subheadline))
+    _validate_numeric_grounding(
+        text_facts, allowed_facts, timeline_cue.id, "TEXT payload"
+    )
 
 
 def _build_prompt(

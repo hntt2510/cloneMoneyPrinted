@@ -133,7 +133,7 @@ class TestLocalGrounding(unittest.TestCase):
         local_ctx = _build_local_context(timeline, 0)  # index 0 → S001
         with self.assertRaises(PlannerError) as ctx:
             _validate_grounded_data(decision, timeline[0], local_ctx)
-        self.assertIn("12,000", str(ctx.exception))
+        self.assertIn("12000", str(ctx.exception))
 
     # ----- Test B: headline-only invalid number rejected -----
 
@@ -221,7 +221,7 @@ class TestLocalGrounding(unittest.TestCase):
         local_ctx = _build_local_context(timeline, 0)
         with self.assertRaises(PlannerError) as ctx:
             _validate_grounded_text(decision, timeline[0], local_ctx)
-        self.assertIn("50,000", str(ctx.exception))
+        self.assertIn("50000", str(ctx.exception))
 
     def test_text_payload_no_numbers_accepted(self):
         """TEXT payload headline without numbers passes the numeric guard."""
@@ -254,6 +254,156 @@ class TestLocalGrounding(unittest.TestCase):
         # S001 and S005 must NOT be in context
         self.assertNotIn("one hundred", ctx)
         self.assertNotIn("five hundred", ctx)
+
+
+class TestExactNumericEquivalence(unittest.TestCase):
+    """Specific regression tests for exact numeric token canonicalization vs substring matching."""
+
+    # 1. context "$12,000", payload 12 -> rejected
+    def test_context_12000_payload_12_rejected_in_data_data(self):
+        timeline = [_cue(1, "Some households spend $12,000.")]
+        decision = _decision(
+            "S001", 1, "data",
+            {"template": "number", "headline": "COST", "data": {"amount": 12}},
+        )
+        local_ctx = _build_local_context(timeline, 0)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_data(decision, timeline[0], local_ctx)
+
+    def test_context_12000_payload_12_rejected_in_data_headline(self):
+        timeline = [_cue(1, "Some households spend $12,000.")]
+        decision = _decision(
+            "S001", 1, "data",
+            {"template": "number", "headline": "COST IS 12", "data": {}},
+        )
+        local_ctx = _build_local_context(timeline, 0)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_data(decision, timeline[0], local_ctx)
+
+    def test_context_12000_payload_12_rejected_in_text_headline(self):
+        timeline = [_cue(1, "Some households spend $12,000.")]
+        decision = _decision(
+            "S001", 1, "text",
+            {"headline": "THE 12 DOLLAR PROBLEM"},
+            purpose="emphasis",
+        )
+        local_ctx = _build_local_context(timeline, 0)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_text(decision, timeline[0], local_ctx)
+
+    # 2. context "$12,000", payload 12000 -> accepted
+    def test_context_12000_payload_12000_accepted(self):
+        timeline = [_cue(1, "Some households spend $12,000.")]
+        # Test in DATA headline, DATA payload (int), DATA payload (str), TEXT headline, TEXT subheadline
+        decision_data = _decision(
+            "S001", 1, "data",
+            {"template": "number", "headline": "SPEND $12,000", "data": {"amount": 12000, "str_amount": "12000"}},
+        )
+        decision_text = _decision(
+            "S001", 1, "text",
+            {"headline": "COST $12,000", "subheadline": "OR 12000 PER YEAR"},
+            purpose="emphasis",
+        )
+        local_ctx = _build_local_context(timeline, 0)
+        _validate_grounded_data(decision_data, timeline[0], local_ctx)
+        _validate_grounded_text(decision_text, timeline[0], local_ctx)
+
+    # 3. context "age 65", payload 6 -> rejected
+    def test_context_age_65_payload_6_rejected(self):
+        timeline = [_cue(1, "Medicare begins at age 65.")]
+        decision_data_headline = _decision(
+            "S001", 1, "data",
+            {"template": "age_marker", "headline": "AGE 6", "data": {}},
+        )
+        decision_data_val = _decision(
+            "S001", 1, "data",
+            {"template": "age_marker", "headline": "AGE", "data": {"age": 6}},
+        )
+        decision_text = _decision(
+            "S001", 1, "text",
+            {"headline": "STARTS AT 6"},
+            purpose="emphasis",
+        )
+        local_ctx = _build_local_context(timeline, 0)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_data(decision_data_headline, timeline[0], local_ctx)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_data(decision_data_val, timeline[0], local_ctx)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_text(decision_text, timeline[0], local_ctx)
+
+    # 4. context "age 65", payload 65 -> accepted
+    def test_context_age_65_payload_65_accepted(self):
+        timeline = [_cue(1, "Medicare begins at age 65.")]
+        decision = _decision(
+            "S001", 1, "data",
+            {"template": "age_marker", "headline": "MEDICARE AT 65", "data": {"age": 65}},
+        )
+        local_ctx = _build_local_context(timeline, 0)
+        _validate_grounded_data(decision, timeline[0], local_ctx)
+
+    # 5. context "150%", payload "50%" -> rejected
+    def test_context_150_percent_payload_50_percent_rejected(self):
+        timeline = [_cue(1, "Costs increased by 150% over ten years.")]
+        decision_data = _decision(
+            "S001", 1, "data",
+            {"template": "number", "headline": "50% INCREASE", "data": {"pct": "50%"}},
+        )
+        decision_text = _decision(
+            "S001", 1, "text",
+            {"headline": "A 50% JUMP"},
+            purpose="emphasis",
+        )
+        local_ctx = _build_local_context(timeline, 0)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_data(decision_data, timeline[0], local_ctx)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_text(decision_text, timeline[0], local_ctx)
+
+    # 6. context "15%", payload "15%" -> accepted
+    def test_context_15_percent_payload_15_percent_accepted(self):
+        timeline = [_cue(1, "A penalty of 15% applies.")]
+        decision = _decision(
+            "S001", 1, "data",
+            {"template": "number", "headline": "15% PENALTY", "data": {"penalty": "15%"}},
+        )
+        decision_text = _decision(
+            "S001", 1, "text",
+            {"headline": "PAY 15% MORE"},
+            purpose="emphasis",
+        )
+        local_ctx = _build_local_context(timeline, 0)
+        _validate_grounded_data(decision, timeline[0], local_ctx)
+        _validate_grounded_text(decision_text, timeline[0], local_ctx)
+
+    # 7. context "5.5%", payload 5 -> rejected
+    def test_context_5_point_5_percent_payload_5_rejected(self):
+        timeline = [_cue(1, "Interest rates hit 5.5% this month.")]
+        decision_data = _decision(
+            "S001", 1, "data",
+            {"template": "number", "headline": "RATE AT 5%", "data": {"rate": 5}},
+        )
+        decision_text = _decision(
+            "S001", 1, "text",
+            {"headline": "5% RATE"},
+            purpose="emphasis",
+        )
+        local_ctx = _build_local_context(timeline, 0)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_data(decision_data, timeline[0], local_ctx)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_text(decision_text, timeline[0], local_ctx)
+
+    # 8. context "15%", payload 15 (plain number) -> rejected
+    def test_context_15_percent_payload_15_plain_rejected(self):
+        timeline = [_cue(1, "A penalty of 15% applies.")]
+        decision = _decision(
+            "S001", 1, "data",
+            {"template": "number", "headline": "15 DOLLARS", "data": {"val": 15}},
+        )
+        local_ctx = _build_local_context(timeline, 0)
+        with self.assertRaises(PlannerError):
+            _validate_grounded_data(decision, timeline[0], local_ctx)
 
 
 class TestGroundingViaPlanner(unittest.TestCase):

@@ -136,16 +136,31 @@ def _canonicalize_narration(cues: list[SrtCue], script: str) -> list[SrtCue]:
     - Alignment uses difflib.SequenceMatcher on normalized word tokens — stdlib only.
     - Monotonicity is enforced: script spans only move forward.
     - Low-confidence alignment preserves the original SRT cue text rather than
-      arbitrarily assigning a distant script clause.
+      arbitrarily assigning an unrelated script clause.
+    - When cue count == clause count, direct index mapping is used ONLY when each
+      pairwise cue/clause comparison passes the confidence threshold; otherwise
+      it falls through to full monotonic alignment.
 
     For the degenerate case of a single coarse timing cue (no finer SRT boundaries):
     duration-proportion splitting is used as an approximation and documented as such.
     """
     clauses = _split_clauses(script)
 
-    # Exact-count fast path: one cue per clause, high confidence by construction
+    # Exact-count check: direct index mapping may ONLY be used when each
+    # corresponding cue/clause pair passes an explicit similarity/confidence check.
     if len(clauses) == len(cues):
-        return [SrtCue(cue.start, cue.end, clauses[index]) for index, cue in enumerate(cues)]
+        all_confident = True
+        for cue, clause in zip(cues, clauses):
+            cue_toks = _normalize_tokens(cue.text)
+            clause_toks = _normalize_tokens(clause)
+            if _match_ratio(cue_toks, clause_toks) < ALIGNMENT_CONFIDENCE_THRESHOLD:
+                all_confident = False
+                break
+        if all_confident:
+            return [
+                SrtCue(cue.start, cue.end, clauses[index])
+                for index, cue in enumerate(cues)
+            ]
 
     # Single coarse cue with multiple script clauses:
     # Text-weight duration splitting is the only option when no finer timing exists.
@@ -160,16 +175,7 @@ def _canonicalize_narration(cues: list[SrtCue], script: str) -> list[SrtCue]:
 
     # General case: monotonic text-aware alignment.
     # For each SRT cue, find the best non-overlapping, monotonic span in the script.
-    script_tokens = _normalize_tokens(script)
-    # Build a flat token list with clause boundaries for span recovery
-    clause_token_ranges: list[tuple[int, int]] = []
-    cursor = 0
-    clause_tokens_list: list[list[str]] = []
-    for clause in clauses:
-        toks = _normalize_tokens(clause)
-        clause_tokens_list.append(toks)
-        clause_token_ranges.append((cursor, cursor + len(toks)))
-        cursor += len(toks)
+    clause_tokens_list: list[list[str]] = [_normalize_tokens(clause) for clause in clauses]
 
     result: list[SrtCue] = []
     # script_clause_index: monotonic lower bound — we never go backward
@@ -180,21 +186,43 @@ def _canonicalize_narration(cues: list[SrtCue], script: str) -> list[SrtCue]:
         is_last_cue = cue_index == len(cues) - 1
 
         if is_last_cue:
-            # Last cue gets all remaining script clauses
+            # Check remaining clauses for the final cue.
+            # Only attach remaining canonical text if it matches final cue sufficiently.
             remaining = clauses[script_clause_index:]
-            text = " ".join(remaining).strip() if remaining else cue.text
+            if remaining:
+                remaining_tokens = []
+                for cl in remaining:
+                    remaining_tokens.extend(_normalize_tokens(cl))
+                ratio = _match_ratio(cue_tokens, remaining_tokens)
+                if ratio >= ALIGNMENT_CONFIDENCE_THRESHOLD:
+                    text = " ".join(remaining).strip()
+                else:
+                    logger.debug(
+                        "canonicalize_narration: low-confidence alignment for final SRT cue %d "
+                        "(ratio=%.2f < %.2f); preserving timing-source text %r",
+                        cue_index,
+                        ratio,
+                        ALIGNMENT_CONFIDENCE_THRESHOLD,
+                        cue.text[:60],
+                    )
+                    text = cue.text
+            else:
+                text = cue.text
             result.append(SrtCue(cue.start, cue.end, text))
             break
 
         # Search forward from current monotonic position for best-matching clause span
         best_ratio = -1.0
         best_end_index = script_clause_index + 1  # must advance by at least one
+        best_span_start = script_clause_index
 
-        # Try single-clause and two-clause spans from the current position forward
+        # Try single-clause and multi-clause spans from current position forward
         # Limit lookahead to prevent O(n^2) in pathological inputs
         lookahead_limit = min(len(clauses), script_clause_index + 4)
         for span_start in range(script_clause_index, lookahead_limit):
-            for span_end in range(span_start + 1, min(lookahead_limit + 1, len(clauses) + 1)):
+            for span_end in range(
+                span_start + 1, min(lookahead_limit + 1, len(clauses) + 1)
+            ):
                 span_tokens = []
                 for ci in range(span_start, span_end):
                     span_tokens.extend(clause_tokens_list[ci])
@@ -207,13 +235,11 @@ def _canonicalize_narration(cues: list[SrtCue], script: str) -> list[SrtCue]:
         # Determine confidence and select narration text
         if best_ratio >= ALIGNMENT_CONFIDENCE_THRESHOLD:
             # High-confidence: use canonical script wording for matched span
-            # Ensure monotonic span start (don't skip clauses silently)
             actual_start = max(script_clause_index, best_span_start)
             text = " ".join(clauses[actual_start:best_end_index]).strip()
             script_clause_index = best_end_index
         else:
             # Low-confidence: preserve original SRT cue text.
-            # Do NOT arbitrarily assign a script clause based on duration proportion.
             logger.debug(
                 "canonicalize_narration: low-confidence alignment for SRT cue %d "
                 "(ratio=%.2f < %.2f); preserving timing-source text %r",

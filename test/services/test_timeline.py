@@ -236,8 +236,8 @@ class TestMonotonicAlignment(unittest.TestCase):
         for i in range(len(result) - 1):
             self.assertLessEqual(result[i].end, result[i + 1].start + 0.001)
 
-    def test_exact_count_fast_path(self):
-        """When cue count equals clause count, each clause maps directly."""
+    def test_exact_count_with_similarity_uses_canonical_script(self):
+        """When cue count equals clause count and all pairs are similar, canonical script is used."""
         srt_cues = [
             SrtCue(start=0.0, end=2.0, text="Clause one."),
             SrtCue(start=2.0, end=4.0, text="Clause two."),
@@ -247,6 +247,40 @@ class TestMonotonicAlignment(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertIn("one", result[0].text.lower())
         self.assertIn("two", result[1].text.lower())
+
+    def test_exact_count_mismatched_content_uses_textual_evidence_not_blind_index(self):
+        """When cue count == clause count but content does not match by index:
+        The engine must NOT blindly map by index; it must use textual evidence.
+        """
+        srt_cues = [
+            SrtCue(start=0.0, end=2.0, text="Unrelated background noise."),
+            SrtCue(start=2.0, end=4.0, text="Second sentence here."),
+            SrtCue(start=4.0, end=6.0, text="Third sentence here."),
+        ]
+        script = "First sentence here. Second sentence here. Third sentence here."
+        result = _canonicalize_narration(srt_cues, script)
+
+        # Cue 0 had low similarity with clause 0, so it must preserve its timing-source text
+        # rather than blindly getting "First sentence here."
+        self.assertEqual(result[0].text, "Unrelated background noise.")
+        # Cues 1 and 2 should match the corresponding canonical clauses
+        self.assertEqual(result[1].text, "Second sentence here.")
+        self.assertEqual(result[2].text, "Third sentence here.")
+
+    def test_last_cue_low_confidence_preserves_timing_source_text(self):
+        """Final cue with low confidence does not blindly attach unrelated canonical remainder."""
+        srt_cues = [
+            SrtCue(start=0.0, end=2.0, text="First sentence here."),
+            SrtCue(start=2.0, end=4.0, text="Incomprehensible garble and static."),
+        ]
+        script = "First sentence here. Second sentence here. Third very long detailed sentence."
+        result = _canonicalize_narration(srt_cues, script)
+
+        # First cue matches first sentence
+        self.assertEqual(result[0].text, "First sentence here.")
+        # Final cue had low confidence with remaining script, so it must preserve its timing text
+        # rather than fabricating false precision with "Second sentence here. Third very long..."
+        self.assertEqual(result[1].text, "Incomprehensible garble and static.")
 
 
 class TestAudioDurationBounds(unittest.TestCase):
