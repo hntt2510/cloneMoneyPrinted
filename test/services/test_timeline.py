@@ -10,8 +10,12 @@ from app.services.timeline import (
     TimelineError,
     acquire_timing_file,
     build_timeline_cues,
+    build_timeline_plan,
     parse_srt_text,
     serialize_srt,
+    _canonicalize_narration,
+    SrtCue,
+    AUDIO_DURATION_TOLERANCE,
 )
 from app.services.visual_planner import fallback_visual
 
@@ -55,6 +59,34 @@ class TestTimelineModel(unittest.TestCase):
                 ],
             )
 
+    def test_timing_source_field_default_and_serialization(self):
+        """TimelinePlan.timing_source defaults to 'estimated' and serializes to JSON."""
+        plan = TimelinePlan(
+            schema_version="1.0",
+            project_title="Test",
+            audio_file="a.wav",
+            timing_file="t.srt",
+            duration=5.0,
+            cues=[TimelineCue(id="S001", order=1, start=0, end=5, narration="hello")],
+        )
+        self.assertEqual(plan.timing_source, "estimated")
+        dumped = plan.model_dump(mode="json")
+        self.assertIn("timing_source", dumped)
+        self.assertEqual(dumped["timing_source"], "estimated")
+
+    def test_timing_source_preserved_from_build(self):
+        """build_timeline_plan propagates timing_source to TimelinePlan."""
+        cue = TimelineCue(id="S001", order=1, start=0, end=2, narration="hello")
+        plan = build_timeline_plan(
+            project_title="T",
+            audio_file="a.wav",
+            timing_file="t.srt",
+            duration=2.0,
+            cues=[cue],
+            timing_source="user_srt",
+        )
+        self.assertEqual(plan.timing_source, "user_srt")
+
 
 class TestTimelineService(unittest.TestCase):
     def test_srt_parse_round_trip_and_deterministic_ids(self):
@@ -74,7 +106,7 @@ class TestTimelineService(unittest.TestCase):
             source = Path(directory) / "source.srt"
             source.write_text(SRT, encoding="utf-8")
             with patch("app.services.timeline.subtitle.create") as whisper:
-                target, cues = acquire_timing_file(
+                target, cues, source_label = acquire_timing_file(
                     source_timing_file=str(source),
                     task_directory=Path(directory) / "task",
                     audio_file="audio.wav",
@@ -84,10 +116,11 @@ class TestTimelineService(unittest.TestCase):
             whisper.assert_not_called()
             self.assertTrue(Path(target).is_file())
             self.assertEqual(len(cues), 3)
+            self.assertEqual(source_label, "user_srt")
 
     def test_fallback_is_deterministic(self):
         with tempfile.TemporaryDirectory() as directory:
-            target, cues = acquire_timing_file(
+            target, cues, source_label = acquire_timing_file(
                 source_timing_file=None,
                 task_directory=directory,
                 audio_file="audio.wav",
@@ -97,6 +130,339 @@ class TestTimelineService(unittest.TestCase):
             )
             self.assertEqual([cue.start for cue in cues], [0.0, 3.8095238095238093])
             self.assertTrue(Path(target).is_file())
+            self.assertEqual(source_label, "estimated")
+
+
+class TestMonotonicAlignment(unittest.TestCase):
+    """Tests for text-aware monotonic alignment (G03 requirement #9)."""
+
+    def test_cue_count_mismatch_follows_srt_text_not_duration(self):
+        """Alignment with differing cue counts must use SRT text, not duration percentage.
+
+        Script semantic order: A, B, C, D
+        SRT timing:
+            0-5:  "A. B."
+            5-6:  "C."
+            6-10: "D."
+
+        Result MUST preserve 0-5 → A/B, 5-6 → C, 6-10 → D.
+        It must NOT assign C to first cue based on duration percentage.
+        """
+        srt_cues = [
+            SrtCue(start=0.0, end=5.0, text="A. B."),
+            SrtCue(start=5.0, end=6.0, text="C."),
+            SrtCue(start=6.0, end=10.0, text="D."),
+        ]
+        script = "Sentence A. Sentence B. Sentence C. Sentence D."
+        result = _canonicalize_narration(srt_cues, script)
+
+        # First cue (0-5) must contain A and B content
+        self.assertEqual(result[0].start, 0.0)
+        self.assertEqual(result[0].end, 5.0)
+        self.assertIn("A", result[0].text)
+
+        # Second cue (5-6) must contain C
+        self.assertEqual(result[1].start, 5.0)
+        self.assertEqual(result[1].end, 6.0)
+        self.assertIn("C", result[1].text)
+
+        # Third cue (6-10) must contain D
+        self.assertEqual(result[2].start, 6.0)
+        self.assertEqual(result[2].end, 10.0)
+        self.assertIn("D", result[2].text)
+
+    def test_duration_percentage_would_wrongly_assign_c_to_first_cue(self):
+        """Regression: old duration-weight algorithm would assign C to 0-5 cue.
+
+        With a 10s total duration and 4 clauses (A, B, C, D), the old algorithm
+        assigned clauses proportionally by word weight.
+        C is ~75% through the clauses, which maps to ~7.5s — in cue 3 (6-10).
+        But the old code's weight accumulation might put it in cue 1 for short texts.
+        The new text-aware approach must keep C in the 5-6 cue.
+        """
+        srt_cues = [
+            SrtCue(start=0.0, end=5.0, text="A B"),
+            SrtCue(start=5.0, end=6.0, text="C"),
+            SrtCue(start=6.0, end=10.0, text="D"),
+        ]
+        script = "A. B. C. D."
+        result = _canonicalize_narration(srt_cues, script)
+        # The 5-6 cue must contain C, not B or D
+        self.assertEqual(result[1].start, 5.0)
+        self.assertEqual(result[1].end, 6.0)
+        self.assertIn("C", result[1].text)
+
+    def test_asr_wording_variation_alignment(self):
+        """ASR/Whisper may produce slightly different wording than the canonical script.
+
+        Script: "Medicare begins at age 65."
+        ASR:    "Medicare begins at age sixty five."
+
+        The alignment must remain monotonic and sensible even with number-word variations.
+        """
+        srt_cues = [
+            SrtCue(start=0.0, end=3.0, text="Medicare begins at age sixty five."),
+            SrtCue(start=3.0, end=6.0, text="That leaves a gap."),
+        ]
+        script = "Medicare begins at age 65. That leaves a five-year gap."
+        result = _canonicalize_narration(srt_cues, script)
+
+        # Timing must be preserved
+        self.assertEqual(result[0].start, 0.0)
+        self.assertEqual(result[0].end, 3.0)
+        self.assertEqual(result[1].start, 3.0)
+        self.assertEqual(result[1].end, 6.0)
+
+        # Should be monotonic (second clause after first)
+        first_text = result[0].text.lower()
+        second_text = result[1].text.lower()
+        self.assertTrue(
+            "medicare" in first_text or "65" in first_text or "sixty" in first_text,
+            f"First cue should relate to Medicare/65, got: {result[0].text!r}",
+        )
+
+    def test_monotonic_constraint_never_reverses(self):
+        """Script spans must always move forward — never assigned backwards."""
+        srt_cues = [
+            SrtCue(start=0.0, end=2.0, text="First sentence here."),
+            SrtCue(start=2.0, end=4.0, text="Second sentence here."),
+            SrtCue(start=4.0, end=6.0, text="Third sentence here."),
+        ]
+        script = "First sentence. Second sentence. Third sentence."
+        result = _canonicalize_narration(srt_cues, script)
+
+        # All 3 cues must have timing preserved
+        self.assertEqual(len(result), 3)
+        for i in range(len(result) - 1):
+            self.assertLessEqual(result[i].end, result[i + 1].start + 0.001)
+
+    def test_exact_count_fast_path(self):
+        """When cue count equals clause count, each clause maps directly."""
+        srt_cues = [
+            SrtCue(start=0.0, end=2.0, text="Clause one."),
+            SrtCue(start=2.0, end=4.0, text="Clause two."),
+        ]
+        script = "Clause one. Clause two."
+        result = _canonicalize_narration(srt_cues, script)
+        self.assertEqual(len(result), 2)
+        self.assertIn("one", result[0].text.lower())
+        self.assertIn("two", result[1].text.lower())
+
+
+class TestAudioDurationBounds(unittest.TestCase):
+    """Tests for audio duration bounds validation (G03 requirement #10)."""
+
+    def _cue(self, start, end, label="hello"):
+        return TimelineCue(id="S001", order=1, start=start, end=end, narration=label)
+
+    def test_timeline_beyond_audio_duration_rejected(self):
+        """Last cue end far past audio duration must raise TimelineError."""
+        cue = self._cue(0, 75.0)
+        with self.assertRaises(TimelineError) as ctx:
+            build_timeline_plan(
+                project_title="T",
+                audio_file="a.wav",
+                timing_file="t.srt",
+                duration=60.0,
+                cues=[cue],
+            )
+        self.assertIn("75.000", str(ctx.exception))
+        self.assertIn("60.000", str(ctx.exception))
+
+    def test_minor_timing_tolerance_accepted(self):
+        """End within tolerance of audio duration (e.g. 0.3s over) should be accepted."""
+        cue = self._cue(0, 60.3)
+        # Should NOT raise for a minor overshoot within AUDIO_DURATION_TOLERANCE
+        plan = build_timeline_plan(
+            project_title="T",
+            audio_file="a.wav",
+            timing_file="t.srt",
+            duration=60.0,
+            cues=[cue],
+        )
+        self.assertIsNotNone(plan)
+
+    def test_cue_start_beyond_audio_duration_rejected(self):
+        """A cue starting after audio duration must be rejected."""
+        cue = TimelineCue(id="S001", order=1, start=70.0, end=72.0, narration="late")
+        with self.assertRaises(TimelineError) as ctx:
+            build_timeline_plan(
+                project_title="T",
+                audio_file="a.wav",
+                timing_file="t.srt",
+                duration=60.0,
+                cues=[cue],
+            )
+        self.assertIn("70.000", str(ctx.exception))
+
+    def test_tolerance_boundary_at_exactly_tolerance(self):
+        """End exactly at audio_duration + tolerance is accepted."""
+        cue = self._cue(0, 60.0 + AUDIO_DURATION_TOLERANCE)
+        plan = build_timeline_plan(
+            project_title="T",
+            audio_file="a.wav",
+            timing_file="t.srt",
+            duration=60.0,
+            cues=[cue],
+        )
+        self.assertIsNotNone(plan)
+
+    def test_tolerance_just_over_boundary_rejected(self):
+        """End just over audio_duration + tolerance is rejected."""
+        over = 60.0 + AUDIO_DURATION_TOLERANCE + 0.01
+        cue = self._cue(0, over)
+        with self.assertRaises(TimelineError):
+            build_timeline_plan(
+                project_title="T",
+                audio_file="a.wav",
+                timing_file="t.srt",
+                duration=60.0,
+                cues=[cue],
+            )
+
+
+class TestTimingProviderFallback(unittest.TestCase):
+    """Tests for timing provider fallback safety (G03 requirement #11)."""
+
+    def test_malformed_user_srt_fails_not_falls_through(self):
+        """Malformed user-supplied SRT must raise TimelineError, not fall through to Whisper."""
+        with tempfile.TemporaryDirectory() as directory:
+            bad_srt = Path(directory) / "bad.srt"
+            bad_srt.write_text("this is not an SRT file", encoding="utf-8")
+
+            whisper_called = []
+            def mock_whisper(**kwargs):
+                whisper_called.append(True)
+
+            with self.assertRaises(TimelineError):
+                acquire_timing_file(
+                    source_timing_file=str(bad_srt),
+                    task_directory=Path(directory) / "task",
+                    audio_file="audio.wav",
+                    script="Some narration.",
+                    duration=5.0,
+                    whisper_create=mock_whisper,
+                )
+            # Whisper must NOT have been called
+            self.assertFalse(whisper_called, "Whisper must not be called when user SRT is malformed")
+
+    def test_whisper_failure_reaches_estimated_fallback(self):
+        """When Whisper fails, estimated text-weight fallback must still be reached."""
+        with tempfile.TemporaryDirectory() as directory:
+            def mock_whisper(**kwargs):
+                raise RuntimeError("Whisper model not available")
+
+            target, cues, source_label = acquire_timing_file(
+                source_timing_file=None,
+                task_directory=directory,
+                audio_file="audio.wav",
+                script="First point. Second point.",
+                duration=8.0,
+                whisper_create=mock_whisper,
+            )
+            self.assertEqual(source_label, "estimated")
+            self.assertTrue(Path(target).is_file())
+            self.assertGreater(len(cues), 0)
+
+    def test_tts_failure_reaches_whisper_then_estimated(self):
+        """TTS timing failure must log and fall through to Whisper, then estimated."""
+        with tempfile.TemporaryDirectory() as directory:
+
+            class FakeSubMaker:
+                cues = ["fake"]
+
+            def mock_whisper(**kwargs):
+                raise RuntimeError("Whisper not available")
+
+            with patch("app.services.timeline.voice.create_subtitle", side_effect=RuntimeError("TTS failed")):
+                target, cues, source_label = acquire_timing_file(
+                    source_timing_file=None,
+                    task_directory=directory,
+                    audio_file="audio.wav",
+                    script="Some narration text.",
+                    duration=5.0,
+                    sub_maker=FakeSubMaker(),
+                    reliable_tts_timing=True,
+                    whisper_create=mock_whisper,
+                )
+            self.assertEqual(source_label, "estimated")
+
+    def test_tts_success_returns_tts_source_label(self):
+        """Successful TTS timing returns 'tts' source label."""
+        with tempfile.TemporaryDirectory() as directory:
+            task_dir = Path(directory) / "task"
+            task_dir.mkdir()
+            timing_srt = task_dir / "timing.srt"
+
+            class FakeSubMaker:
+                cues = ["fake"]
+
+            def mock_create_subtitle(**kwargs):
+                # Write a valid SRT file to the expected path
+                timing_srt.write_text(
+                    "1\n00:00:00,000 --> 00:00:05,000\nSome narration text.\n",
+                    encoding="utf-8",
+                )
+
+            with patch("app.services.timeline.voice.create_subtitle", side_effect=mock_create_subtitle):
+                target, cues, source_label = acquire_timing_file(
+                    source_timing_file=None,
+                    task_directory=task_dir,
+                    audio_file="audio.wav",
+                    script="Some narration text.",
+                    duration=5.0,
+                    sub_maker=FakeSubMaker(),
+                    reliable_tts_timing=True,
+                )
+            self.assertEqual(source_label, "tts")
+
+    def test_user_srt_success_returns_user_srt_label(self):
+        """Successful user-provided SRT returns 'user_srt' source label."""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.srt"
+            source.write_text(SRT, encoding="utf-8")
+            _, cues, source_label = acquire_timing_file(
+                source_timing_file=str(source),
+                task_directory=Path(directory) / "task",
+                audio_file="audio.wav",
+                script="Text.",
+                duration=6.0,
+            )
+            self.assertEqual(source_label, "user_srt")
+
+    def test_keyboard_interrupt_not_swallowed_by_tts(self):
+        """KeyboardInterrupt from TTS must propagate, not be swallowed."""
+        with tempfile.TemporaryDirectory() as directory:
+            class FakeSubMaker:
+                cues = ["fake"]
+
+            with patch("app.services.timeline.voice.create_subtitle", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    acquire_timing_file(
+                        source_timing_file=None,
+                        task_directory=directory,
+                        audio_file="audio.wav",
+                        script="Some text.",
+                        duration=5.0,
+                        sub_maker=FakeSubMaker(),
+                        reliable_tts_timing=True,
+                    )
+
+    def test_keyboard_interrupt_not_swallowed_by_whisper(self):
+        """KeyboardInterrupt from Whisper must propagate, not be swallowed."""
+        with tempfile.TemporaryDirectory() as directory:
+            def mock_whisper(**kwargs):
+                raise KeyboardInterrupt
+
+            with self.assertRaises(KeyboardInterrupt):
+                acquire_timing_file(
+                    source_timing_file=None,
+                    task_directory=directory,
+                    audio_file="audio.wav",
+                    script="Some text.",
+                    duration=5.0,
+                    whisper_create=mock_whisper,
+                )
 
 
 class TestTimelineRunner(unittest.TestCase):
@@ -126,6 +492,7 @@ class TestTimelineRunner(unittest.TestCase):
                 return_value=(
                     str(task_dir / "timing.srt"),
                     parse_srt_text("1\n00:00:00,000 --> 00:00:02,000\nFirst point.\n"),
+                    "tts",
                 ),
             ):
                 result = run_timeline_plan(str(project_path), task_id="timeline-task")
@@ -162,6 +529,7 @@ class TestTimelineRunner(unittest.TestCase):
                 return_value=(
                     str(task_dir / "timing.srt"),
                     parse_srt_text("1\n00:00:00,000 --> 00:00:02,000\nAge 65 matters.\n"),
+                    "user_srt",
                 ),
             ), patch(
                 "app.services.project_timeline_runner.plan_visuals",

@@ -340,6 +340,10 @@ class TimelinePlan(ProjectModel):
     timing_file: str
     duration: float = Field(ge=0)
     cues: list[TimelineCue] = Field(default_factory=list)
+    # Provenance of timing data; helps autonomous execution assess timing reliability.
+    # Possible values: 'user_srt', 'tts', 'whisper', 'estimated'.
+    # Default 'estimated' provides backward compatibility with existing timeline.json files.
+    timing_source: str = "estimated"
 
     @model_validator(mode="after")
     def validate_cues(self) -> TimelinePlan:

@@ -79,7 +79,7 @@ def run_timeline_plan(
             if project.narration.timing_file
             else None
         )
-        timing_file, srt_cues = acquire_timing_file(
+        timing_file, srt_cues, timing_source = acquire_timing_file(
             source_timing_file=source_timing,
             task_directory=task_directory,
             audio_file=audio_file,
@@ -97,6 +97,7 @@ def run_timeline_plan(
             timing_file=str(Path(timing_file).resolve()),
             duration=duration,
             cues=timeline_cues,
+            timing_source=timing_source,
         )
         timeline_path = save_timeline_plan(
             timeline_plan, task_directory / "timeline.json"
@@ -130,6 +131,7 @@ def run_timeline_plan(
         manifest.outputs = {
             "audio_file": str(Path(audio_file).resolve()),
             "timing_file": str(Path(timing_file).resolve()),
+            "timing_source": timing_source,
             "timeline_file": str(timeline_path.resolve()),
             "planned_project_file": str(planned_path.resolve()),
         }
