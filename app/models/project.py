@@ -381,6 +381,7 @@ class AssetJob(ProjectModel):
 class RenderJob(ProjectModel):
     id: str
     scene_id: str
+    kind: str | None = None
     input_asset: str | None = None
     output: str | None = None
     duration: float | None = Field(default=None, ge=0)
@@ -388,6 +389,30 @@ class RenderJob(ProjectModel):
     attempts: int = Field(default=0, ge=0)
     error: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+from app.models.motion import (
+    AgeMarkerItem,
+    AgeMarkerProps,
+    BarChartItem,
+    BarChartProps,
+    CalloutProps,
+    ComparisonItem,
+    ComparisonProps,
+    CounterProps,
+    LineChartPoint,
+    LineChartProps,
+    MotionGroupSpec,
+    MotionManifest,
+    MotionModel,
+    MotionSceneSpec,
+    NumberProps,
+    RenderedMotionAsset,
+    TextProps,
+    ThresholdProps,
+    TimelineItem,
+    TimelineProps,
+)
 
 
 class TimelineCue(ProjectModel):
