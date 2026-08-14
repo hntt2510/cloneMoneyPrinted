@@ -150,6 +150,18 @@ class VisualPurpose(str, Enum):
     transition = "transition"
 
 
+class DataTemplate(str, Enum):
+    number = "number"
+    counter = "counter"
+    comparison = "comparison"
+    timeline = "timeline"
+    bar_chart = "bar_chart"
+    line_chart = "line_chart"
+    threshold = "threshold"
+    age_marker = "age_marker"
+    callout = "callout"
+
+
 class JobStatus(str, Enum):
     planned = "planned"
     queued = "queued"
@@ -157,6 +169,82 @@ class JobStatus(str, Enum):
     retrying = "retrying"
     ready = "ready"
     failed = "failed"
+
+
+class BrollPayload(ProjectModel):
+    search_query: str
+    fallback_queries: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    source_priority: list[Literal["pexels", "pixabay", "coverr"]] = Field(
+        default_factory=lambda: ["pexels", "pixabay", "coverr"]
+    )
+
+    @field_validator("search_query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        value = " ".join(value.split()).strip()
+        if not value:
+            raise ValueError("search_query must not be empty")
+        if len(value) > 160:
+            raise ValueError("search_query is too long")
+        if any(term in value.lower() for term in ("douyin", "bilibili", "xiaohongshu", "local")):
+            raise ValueError("search_query contains an unsupported source term")
+        return value
+
+    @field_validator("fallback_queries", "avoid")
+    @classmethod
+    def normalize_query_lists(cls, value: list[str]) -> list[str]:
+        return [" ".join(item.split()).strip() for item in value if item.strip()]
+
+
+class DataPayload(ProjectModel):
+    template: DataTemplate
+    headline: str
+    data: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("headline")
+    @classmethod
+    def validate_headline(cls, value: str) -> str:
+        value = " ".join(value.split()).strip()
+        if not value:
+            raise ValueError("headline must not be empty")
+        if len(value) > 120:
+            raise ValueError("headline is too long")
+        return value
+
+
+class DocumentPayload(ProjectModel):
+    search_query: str
+    source_hint: str
+    highlight_target: str | None = None
+    evidence_required: bool = True
+
+    @field_validator("search_query", "source_hint", "highlight_target")
+    @classmethod
+    def validate_document_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.split()).strip()
+        if not value:
+            raise ValueError("document intent text must not be empty")
+        return value
+
+
+class TextPayload(ProjectModel):
+    headline: str
+    subheadline: str | None = None
+
+    @field_validator("headline", "subheadline")
+    @classmethod
+    def validate_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.split()).strip()
+        if not value:
+            raise ValueError("text payload must not be empty")
+        if len(value) > 120:
+            raise ValueError("text payload is too long")
+        return value
 
 
 class VisualCue(ProjectModel):
@@ -184,6 +272,18 @@ class VisualCue(ProjectModel):
     def validate_timing(self) -> VisualCue:
         if self.start is not None and self.end is not None and self.end < self.start:
             raise ValueError("end must be greater than or equal to start")
+        if self.visual_group_id is not None:
+            self.visual_group_id = self.visual_group_id.strip()
+            if not self.visual_group_id:
+                raise ValueError("visual_group_id must not be empty")
+        payload_models = {
+            VisualType.broll: BrollPayload,
+            VisualType.data: DataPayload,
+            VisualType.document: DocumentPayload,
+            VisualType.text: TextPayload,
+        }
+        payload_model = payload_models[self.visual_type].model_validate(self.payload)
+        self.payload = payload_model.model_dump(mode="json")
         return self
 
 
@@ -259,6 +359,27 @@ class TimelinePlan(ProjectModel):
         return self
 
 
+class VisualPlan(ProjectModel):
+    schema_version: Literal["1.0"]
+    project_title: str
+    cues: list[VisualCue] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_visuals(self) -> VisualPlan:
+        ids = [cue.id for cue in self.cues]
+        orders = [cue.order for cue in self.cues]
+        if len(ids) != len(set(ids)) or len(orders) != len(set(orders)):
+            raise ValueError("visual cue ids and orders must be unique")
+        groups: dict[str, list[int]] = {}
+        for cue in sorted(self.cues, key=lambda item: item.order):
+            if cue.visual_group_id:
+                groups.setdefault(cue.visual_group_id, []).append(cue.order)
+        for group_orders in groups.values():
+            if group_orders != list(range(min(group_orders), max(group_orders) + 1)):
+                raise ValueError("visual groups must refer to contiguous cues")
+        return self
+
+
 class ProjectSpec(ProjectModel):
     schema_version: Literal["1.0"]
     project: ProjectMetadata
@@ -283,6 +404,32 @@ class ProjectSpec(ProjectModel):
             if cue.start < previous_end:
                 raise ValueError("timeline cues must not overlap")
             previous_end = cue.end
+        if self.visual_cues:
+            visual_ids = [cue.id for cue in self.visual_cues]
+            visual_orders = [cue.order for cue in self.visual_cues]
+            if len(visual_ids) != len(set(visual_ids)):
+                raise ValueError("visual cue ids must be unique")
+            if len(visual_orders) != len(set(visual_orders)):
+                raise ValueError("visual cue orders must be unique")
+            timeline_by_id = {cue.id: cue for cue in self.timeline_cues}
+            if set(visual_ids) != set(timeline_by_id):
+                raise ValueError("visual cues must correspond one-to-one with timeline cues")
+            for visual in self.visual_cues:
+                timeline = timeline_by_id[visual.id]
+                if (
+                    visual.order != timeline.order
+                    or visual.start != timeline.start
+                    or visual.end != timeline.end
+                    or visual.narration != timeline.narration
+                ):
+                    raise ValueError("visual cue timing and narration must match timeline")
+            groups: dict[str, list[int]] = {}
+            for visual in sorted(self.visual_cues, key=lambda item: item.order):
+                if visual.visual_group_id:
+                    groups.setdefault(visual.visual_group_id, []).append(visual.order)
+            for orders_for_group in groups.values():
+                if orders_for_group != list(range(min(orders_for_group), max(orders_for_group) + 1)):
+                    raise ValueError("visual groups must refer to contiguous cues")
         return self
 
 

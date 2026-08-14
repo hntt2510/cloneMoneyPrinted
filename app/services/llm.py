@@ -599,6 +599,11 @@ def _generate_response(prompt: str) -> str:
         return f"Error: {_sanitize_error_message(e)}"
 
 
+def generate_response(prompt: str) -> str:
+    """Provider-neutral text generation entry point for service-level planners."""
+    return _generate_response(prompt)
+
+
 def _limit_script_text(text: str | None, max_length: int, field_name: str) -> str:
     value = (text or "").strip()
     if len(value) <= max_length:

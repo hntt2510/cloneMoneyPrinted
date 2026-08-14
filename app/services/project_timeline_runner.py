@@ -21,6 +21,7 @@ from app.services.timeline import (
     is_reliable_tts_submaker,
     save_timeline_plan,
 )
+from app.services.visual_planner import plan_visuals, save_visual_plan
 from app.services import voice
 from app.utils import utils
 
@@ -36,6 +37,7 @@ def run_timeline_plan(
     project_path: str,
     *,
     task_id: str | None = None,
+    _include_visuals: bool = False,
 ) -> dict[str, Any]:
     source = Path(project_path).expanduser().resolve()
     project = load_project_spec(source)
@@ -108,6 +110,17 @@ def run_timeline_plan(
         planned_project = type(project).model_validate(
             planned_project.model_dump(mode="json")
         )
+        visual_path = None
+        if _include_visuals:
+            visual_cues = plan_visuals(planned_project, timeline_cues)
+            visual_path = save_visual_plan(
+                project.project.title, visual_cues, task_directory / "visual_plan.json"
+            )
+            planned_project = type(project).model_validate(
+                planned_project.model_copy(update={"visual_cues": visual_cues}).model_dump(
+                    mode="json"
+                )
+            )
         planned_path = save_project_spec(
             planned_project, task_directory / "project.planned.json"
         )
@@ -120,8 +133,10 @@ def run_timeline_plan(
             "timeline_file": str(timeline_path.resolve()),
             "planned_project_file": str(planned_path.resolve()),
         }
+        if visual_path:
+            manifest.outputs["visual_plan_file"] = str(visual_path.resolve())
         _save_manifest(manifest, task_directory)
-        return {
+        result = {
             "task_id": run_task_id,
             "audio_file": manifest.outputs["audio_file"],
             "timing_file": manifest.outputs["timing_file"],
@@ -129,6 +144,9 @@ def run_timeline_plan(
             "planned_project_file": manifest.outputs["planned_project_file"],
             "manifest": manifest.model_dump(mode="json"),
         }
+        if visual_path:
+            result["visual_plan_file"] = manifest.outputs["visual_plan_file"]
+        return result
     except Exception as exc:
         error = str(exc) or exc.__class__.__name__
         manifest.status = ProjectStatus.failed
@@ -138,3 +156,7 @@ def run_timeline_plan(
         if isinstance(exc, ProjectRunError):
             raise
         raise ProjectRunError(f"Timeline planning failed: {error}") from exc
+
+
+def run_project_plan(project_path: str, *, task_id: str | None = None) -> dict[str, Any]:
+    return run_timeline_plan(project_path, task_id=task_id, _include_visuals=True)

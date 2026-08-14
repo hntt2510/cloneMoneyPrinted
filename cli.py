@@ -10,6 +10,7 @@ from loguru import logger
 from app.models.schema import MaterialInfo, SUPPORTED_VIDEO_SOURCES, VideoParams
 from app.services import task as tm
 from app.services.project_runner import ProjectRunError, run_project
+from app.services.project_timeline_runner import run_project_plan
 from app.services.project_spec import (
     ProjectSpecError,
     load_project_spec,
@@ -105,6 +106,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--validate-only",
         action="store_true",
         help="validate a project file without running the video pipeline",
+    )
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="generate narration timeline and visual plan without acquiring assets or rendering",
     )
     parser.add_argument("--video-subject", required=False, help="video subject")
     parser.add_argument("--video-script", default="", help="custom script")
@@ -313,7 +319,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             for token in argv_list
             if token.startswith("--")
         }
-        allowed_destinations = {"project", "validate_only", "task_id", "stop_at"}
+        allowed_destinations = {
+            "project",
+            "validate_only",
+            "plan_only",
+            "task_id",
+            "stop_at",
+        }
         for action in parser._actions:
             if action.dest in allowed_destinations or not action.option_strings:
                 continue
@@ -322,8 +334,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                     f"{next(option for option in action.option_strings if option in provided_options)} "
                     "cannot be used together with --project"
                 )
+        if args.validate_only and args.plan_only:
+            parser.error("--validate-only cannot be combined with --plan-only")
+        if args.plan_only and "--stop-at" in provided_options:
+            parser.error("--stop-at cannot be used together with --plan-only")
     elif args.validate_only:
         parser.error("--validate-only requires --project")
+    elif args.plan_only:
+        parser.error("--plan-only requires --project")
     elif not args.video_subject:
         parser.error("--video-subject is required unless --project is provided")
 
@@ -428,6 +446,13 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
                         ensure_ascii=False,
                     )
                 )
+                return 0
+            if args.plan_only:
+                result = run_project_plan(
+                    args.project,
+                    task_id=args.task_id or None,
+                )
+                print(json.dumps(result, ensure_ascii=False))
                 return 0
             result = run_project(
                 args.project,

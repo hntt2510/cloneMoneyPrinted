@@ -13,6 +13,7 @@ from app.services.timeline import (
     parse_srt_text,
     serialize_srt,
 )
+from app.services.visual_planner import fallback_visual
 
 
 SRT = """1
@@ -133,6 +134,49 @@ class TestTimelineRunner(unittest.TestCase):
             self.assertTrue((task_dir / "project.planned.json").is_file())
             manifest = json.loads((task_dir / "project_manifest.json").read_text())
             self.assertEqual(manifest["status"], "complete")
+
+    def test_plan_runner_writes_visual_plan_without_acquisition(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_path = root / "project.json"
+            project = ProjectSpec(
+                schema_version="1.0",
+                project={"title": "Plan"},
+                script={"subject": "Plan subject", "script": "Age 65 matters."},
+                narration=NarrationSpec(mode="file", file="audio.wav"),
+            )
+            project_path.write_text(project.model_dump_json(), encoding="utf-8")
+            audio = root / "audio.wav"
+            audio.write_bytes(b"audio")
+            task_dir = root / "task"
+            cue = TimelineCue(id="S001", order=1, start=0, end=2, narration="Age 65 matters.")
+            with patch("app.services.project_timeline_runner.utils.task_dir", return_value=str(task_dir)), patch(
+                "app.services.project_timeline_runner.tm.generate_script", return_value="Age 65 matters."
+            ), patch(
+                "app.services.project_timeline_runner.tm.generate_audio",
+                return_value=(str(audio), 2.0, None),
+            ), patch(
+                "app.services.project_timeline_runner.voice.get_audio_duration", return_value=2.0
+            ), patch(
+                "app.services.project_timeline_runner.acquire_timing_file",
+                return_value=(
+                    str(task_dir / "timing.srt"),
+                    parse_srt_text("1\n00:00:00,000 --> 00:00:02,000\nAge 65 matters.\n"),
+                ),
+            ), patch(
+                "app.services.project_timeline_runner.plan_visuals",
+                return_value=[fallback_visual(project, cue)],
+            ) as planner, patch(
+                "app.services.project_timeline_runner.tm.get_video_materials",
+                side_effect=AssertionError("asset acquisition must not run"),
+            ):
+                from app.services.project_timeline_runner import run_project_plan
+
+                result = run_project_plan(str(project_path), task_id="plan-task")
+            planner.assert_called_once()
+            self.assertTrue((task_dir / "visual_plan.json").is_file())
+            self.assertTrue((task_dir / "project.planned.json").is_file())
+            self.assertIn("visual_plan_file", result)
 
 
 if __name__ == "__main__":

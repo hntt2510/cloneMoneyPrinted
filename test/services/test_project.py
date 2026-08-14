@@ -81,6 +81,7 @@ class TestProjectModels(unittest.TestCase):
                 end=5,
                 visual_type=VisualType.broll,
                 purpose=VisualPurpose.context,
+                payload={"search_query": "office meeting"},
             )
 
     def test_future_jobs_are_typed_and_have_isolated_defaults(self):
@@ -190,6 +191,25 @@ class TestProjectCli(unittest.TestCase):
             code = cli.run_cli(["--project", "examples/project.example.json", "--validate-only"])
         self.assertEqual(code, 0)
         start.assert_not_called()
+
+    def test_plan_only_dispatches_plan_runner(self):
+        expected = {"task_id": "plan-task", "timeline_file": "timeline.json"}
+        with patch("cli.run_project_plan", return_value=expected) as runner:
+            code = cli.run_cli(
+                ["--project", "examples/project.example.json", "--plan-only", "--task-id", "plan-task"]
+            )
+        self.assertEqual(code, 0)
+        runner.assert_called_once_with("examples/project.example.json", task_id="plan-task")
+
+    def test_plan_only_rejects_stop_at_and_validate_only(self):
+        with self.assertRaises(SystemExit):
+            cli.parse_args(
+                ["--project", "examples/project.example.json", "--plan-only", "--stop-at", "audio"]
+            )
+        with self.assertRaises(SystemExit):
+            cli.parse_args(
+                ["--project", "examples/project.example.json", "--plan-only", "--validate-only"]
+            )
 
     def test_project_rejects_manual_flags(self):
         with self.assertRaises(SystemExit):
