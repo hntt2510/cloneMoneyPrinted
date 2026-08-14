@@ -39,3 +39,4 @@ streamlit.log
 .codegraph
 /docs/superpowers
 .understand-anything
+.run-logs/
