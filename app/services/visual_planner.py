@@ -194,9 +194,7 @@ def _fallback_payload(kind: VisualType, project: ProjectSpec, cue: TimelineCue) 
             headline=text[:120],
             data={"values": tokens} if tokens else {},
         ).model_dump(mode="json")
-    words = re.findall(r"[A-Za-z0-9]+", f"{project.script.subject} {text}")
-    words = [word for word in words if word.lower() not in {"local", "douyin", "bilibili", "xiaohongshu"}]
-    base = " ".join(words)
+    base = " ".join(re.findall(r"[A-Za-z0-9]+", f"{project.script.subject} {text}"))
     query = " ".join(base.split()[:14]) or "real world context"
     return BrollPayload(
         search_query=query,

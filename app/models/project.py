@@ -187,8 +187,6 @@ class BrollPayload(ProjectModel):
             raise ValueError("search_query must not be empty")
         if len(value) > 160:
             raise ValueError("search_query is too long")
-        if any(term in value.lower() for term in ("douyin", "bilibili", "xiaohongshu", "local")):
-            raise ValueError("search_query contains an unsupported source term")
         return value
 
     @field_validator("fallback_queries", "avoid")
