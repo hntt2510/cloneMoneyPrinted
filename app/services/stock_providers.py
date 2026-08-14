@@ -18,8 +18,9 @@ FORBIDDEN_PROVIDERS = {"douyin", "bilibili", "xiaohongshu", "youtube", "tiktok"}
 
 def _sanitize_error_message(message: str) -> str:
     """Remove potential API keys, authorization tokens, and credentials from log messages."""
-    # Redact Authorization header values or query key params if present in exception strings
-    sanitized = re.sub(r"(?:Bearer\s+|key=)[A-Za-z0-9_\-\.]{8,}", "[REDACTED]", message)
+    # Take first line if multiple lines to avoid dumping config json in error logs
+    first_line = message.strip().split("\n")[0]
+    sanitized = re.sub(r"(?:Bearer\s+|key=)[A-Za-z0-9_\-\.]{8,}", "[REDACTED]", first_line)
     return sanitized
 
 
@@ -122,7 +123,7 @@ def search_pexels_candidates(
                 provider_asset_id=v_id,
                 query=query,
                 download_url=download_url,
-                source_url=v.get("url"),
+                source_url=v.get("url") or None,
                 duration=duration,
                 width=width,
                 height=height,
@@ -131,7 +132,7 @@ def search_pexels_candidates(
                 description=None,
                 tags=[],
                 author=author,
-                license="Pexels License",
+                license=v.get("license") or None,
                 metadata={"quality": best_file.get("quality")},
             )
             candidates.append(candidate)
@@ -219,13 +220,13 @@ def search_pixabay_candidates(
                 provider_asset_id=hit_id,
                 query=query,
                 download_url=download_url,
-                source_url=hit.get("pageURL"),
+                source_url=hit.get("pageURL") or hit.get("url") or None,
                 duration=duration,
                 width=width,
                 height=height,
                 tags=tags,
                 author=hit.get("user"),
-                license="Pixabay License",
+                license=hit.get("license") or None,
                 metadata={},
             )
             candidates.append(candidate)
@@ -315,13 +316,17 @@ def search_coverr_candidates(
             width = int(hit.get("width") or 1920)
             height = int(hit.get("height") or 1080)
 
+            # Do not invent source_url if not in response
+            source_url = hit.get("pageURL") or hit.get("url") or None
+            license_val = hit.get("license") or None
+
             candidate = BrollCandidate(
                 id=f"coverr-{hit_id}",
                 provider="coverr",
                 provider_asset_id=hit_id,
                 query=query,
                 download_url=download_url,
-                source_url=f"https://coverr.co/videos/{hit_id}",
+                source_url=source_url,
                 duration=duration,
                 width=width,
                 height=height,
@@ -329,7 +334,7 @@ def search_coverr_candidates(
                 description=description,
                 tags=tags,
                 author=author,
-                license="Coverr License",
+                license=license_val,
                 metadata={},
             )
             candidates.append(candidate)

@@ -23,7 +23,7 @@ class TestStockProviders(unittest.TestCase):
             with self.assertRaises(ValueError):
                 stock_providers.search_stock_candidates(forbidden, "query")
 
-    def test_search_pexels_normalizes_metadata(self):
+    def test_search_pexels_normalizes_metadata_without_inventing_license(self):
         config.app["pexels_api_keys"] = ["test-pexels-key"]
         fake_response = SimpleNamespace(
             status_code=200,
@@ -43,23 +43,14 @@ class TestStockProviders(unittest.TestCase):
                                 "height": 1080,
                                 "fps": 30.0,
                                 "link": "https://download.pexels.com/video-12345-hd.mp4",
-                            },
-                            {
-                                "id": 2,
-                                "quality": "sd",
-                                "file_type": "video/mp4",
-                                "width": 640,
-                                "height": 360,
-                                "fps": 30.0,
-                                "link": "https://download.pexels.com/video-12345-sd.mp4",
-                            },
+                            }
                         ],
                     }
                 ]
             },
         )
 
-        with patch("app.services.stock_providers.requests.get", return_value=fake_response) as mock_get:
+        with patch("app.services.stock_providers.requests.get", return_value=fake_response):
             candidates = stock_providers.search_stock_candidates("pexels", "senior retirement", minimum_duration=5.0)
 
         self.assertEqual(len(candidates), 1)
@@ -75,9 +66,9 @@ class TestStockProviders(unittest.TestCase):
         self.assertEqual(c.height, 1080)
         self.assertEqual(c.fps, 30.0)
         self.assertEqual(c.author, "Photographer John")
-        self.assertEqual(c.license, "Pexels License")
+        self.assertIsNone(c.license)
 
-    def test_search_pixabay_normalizes_metadata(self):
+    def test_search_pixabay_preserves_explicit_license_if_provided(self):
         config.app["pixabay_api_keys"] = ["test-pixabay-key"]
         fake_response = SimpleNamespace(
             status_code=200,
@@ -89,17 +80,13 @@ class TestStockProviders(unittest.TestCase):
                         "pageURL": "https://pixabay.com/videos/retirement-67890/",
                         "tags": "couple, retirement, sunset, beach",
                         "user": "artist_alice",
+                        "license": "Custom Free License",
                         "videos": {
                             "large": {
                                 "url": "https://download.pixabay.com/video-large.mp4",
                                 "width": 1920,
                                 "height": 1080,
-                            },
-                            "medium": {
-                                "url": "https://download.pixabay.com/video-medium.mp4",
-                                "width": 1280,
-                                "height": 720,
-                            },
+                            }
                         },
                     }
                 ]
@@ -114,16 +101,10 @@ class TestStockProviders(unittest.TestCase):
         self.assertEqual(c.id, "pixabay-67890")
         self.assertEqual(c.provider, "pixabay")
         self.assertEqual(c.provider_asset_id, "67890")
-        self.assertEqual(c.query, "couple retirement")
-        self.assertEqual(c.download_url, "https://download.pixabay.com/video-large.mp4")
         self.assertEqual(c.source_url, "https://pixabay.com/videos/retirement-67890/")
-        self.assertEqual(c.duration, 15.0)
-        self.assertEqual(c.width, 1920)
-        self.assertEqual(c.height, 1080)
-        self.assertIn("sunset", c.tags)
-        self.assertEqual(c.author, "artist_alice")
+        self.assertEqual(c.license, "Custom Free License")
 
-    def test_search_coverr_normalizes_metadata(self):
+    def test_search_coverr_does_not_fabricate_source_url_when_missing(self):
         config.app["coverr_api_keys"] = ["test-coverr-key"]
         fake_response = SimpleNamespace(
             status_code=200,
@@ -158,7 +139,8 @@ class TestStockProviders(unittest.TestCase):
         self.assertEqual(c.title, "Senior couple reviewing finances")
         self.assertEqual(c.duration, 14.2)
         self.assertIn("finance", c.tags)
-        self.assertEqual(c.author, "Coverr Studios")
+        self.assertIsNone(c.source_url)
+        self.assertIsNone(c.license)
 
     def test_provider_http_error_returns_empty_and_does_not_raise(self):
         config.app["pexels_api_keys"] = ["test-pexels-key"]

@@ -33,7 +33,8 @@ def run_broll_acquisition(
     2. Ensure planning stage (G03 + G04) is complete; run if needed.
     3. Filter VisualCues for BROLL type only (DATA, DOCUMENT, TEXT untouched).
     4. For each BROLL cue: search, score, download winner only, trim & normalize scene clip.
-    5. Generate broll_manifest.json, project.assets.json, and update project_manifest.json.
+    5. Populate AssetJob only for BROLL cues.
+    6. Generate broll_manifest.json, project.assets.json, and update project_manifest.json.
     """
     if isinstance(project_input, (str, Path)):
         source_path = Path(project_input).expanduser().resolve()
@@ -65,28 +66,22 @@ def run_broll_acquisition(
 
     ready_assets: list[SelectedBrollAsset] = []
     failed_scenes: list[dict[str, Any]] = []
-    asset_jobs_by_scene: dict[str, AssetJob] = {}
+    broll_asset_jobs: list[AssetJob] = []
 
-    # Initialize asset jobs for all visual cues
-    for cue in planned_project.visual_cues:
-        job = AssetJob(
-            id=f"A{cue.order:03d}",
-            scene_id=cue.id,
-            kind=cue.visual_type.value,
-            status=JobStatus.planned,
-        )
-        asset_jobs_by_scene[cue.id] = job
-
-    # Process BROLL cues only
+    # Process BROLL cues only - G05 creates AssetJobs ONLY for VisualType.broll
     broll_cues = [cue for cue in planned_project.visual_cues if cue.visual_type == VisualType.broll]
     logger.info(
         f"Starting autonomous B-roll acquisition for task {run_task_id} ({len(broll_cues)} B-roll scenes)"
     )
 
     for cue in broll_cues:
-        job = asset_jobs_by_scene[cue.id]
-        job.status = JobStatus.processing
-        job.attempts = 1
+        job = AssetJob(
+            id=f"A{cue.order:03d}",
+            scene_id=cue.id,
+            kind="broll",
+            status=JobStatus.processing,
+            attempts=0,
+        )
 
         try:
             selected_asset = acquire_broll_scene(
@@ -97,6 +92,7 @@ def run_broll_acquisition(
             )
             ready_assets.append(selected_asset)
             job.status = JobStatus.ready
+            job.attempts = selected_asset.metadata.get("attempts", 1)
             job.provider = selected_asset.provider
             job.query = selected_asset.query_used
             job.source = selected_asset.source_file
@@ -108,21 +104,38 @@ def run_broll_acquisition(
                 "trim_start": selected_asset.trim_start,
                 "trim_end": selected_asset.trim_end,
                 "scene_duration": selected_asset.scene_duration,
+                "candidate_metadata": selected_asset.metadata.get("candidate_metadata", {}),
             }
         except Exception as exc:
             logger.error(f"B-roll acquisition failed for scene {cue.id}: {exc}")
+            diag = exc.diagnostics if isinstance(exc, BrollAcquisitionError) else {}
+            attempt_count = diag.get("attempt_count", 1)
+            queries_attempted = diag.get("queries_attempted", [])
+            providers_attempted = diag.get("providers_attempted", [])
+            candidate_ids_attempted = diag.get("candidate_ids_attempted", [])
+            errors = diag.get("errors", [str(exc)])
+
             failed_scenes.append(
                 {
                     "scene_id": cue.id,
                     "order": cue.order,
+                    "attempt_count": attempt_count,
+                    "queries_attempted": queries_attempted,
+                    "providers_attempted": providers_attempted,
+                    "candidate_ids_attempted": candidate_ids_attempted,
+                    "errors": errors,
                     "error": str(exc),
                 }
             )
             job.status = JobStatus.failed
+            job.attempts = attempt_count
             job.error = str(exc)
+            job.metadata = diag
 
-    # Populate planned_project.asset_jobs
-    planned_project.asset_jobs = [asset_jobs_by_scene[cue.id] for cue in planned_project.visual_cues]
+        broll_asset_jobs.append(job)
+
+    # In G05, project.assets.json contains ONLY BROLL asset jobs
+    planned_project.asset_jobs = broll_asset_jobs
 
     # Save project.assets.json
     assets_project_file = task_directory / "project.assets.json"
@@ -148,7 +161,7 @@ def run_broll_acquisition(
         encoding="utf-8",
     )
 
-    # Update project_manifest.json
+    # Update project_manifest.json consistently with pipeline outcome
     project_manifest_file = task_directory / "project_manifest.json"
     if project_manifest_file.exists():
         try:
@@ -157,6 +170,13 @@ def run_broll_acquisition(
             )
             p_manifest.outputs["broll_manifest_file"] = str(broll_manifest_file.resolve())
             p_manifest.outputs["assets_project_file"] = str(assets_project_file.resolve())
+            if failed_scenes:
+                p_manifest.status = ProjectStatus.failed
+                p_manifest.error = "One or more B-roll scenes failed acquisition"
+            else:
+                p_manifest.status = ProjectStatus.complete
+                p_manifest.error = None
+
             project_manifest_file.write_text(
                 json.dumps(p_manifest.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
