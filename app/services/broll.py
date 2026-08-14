@@ -6,7 +6,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import requests
 from loguru import logger
@@ -23,7 +23,11 @@ from app.models.project import (
 )
 from app.models.schema import VideoAspect
 from app.services.material import _get_tls_verify
-from app.services.stock_providers import search_stock_candidates
+from app.services.stock_providers import (
+    StockSearchResult,
+    search_stock_candidates,
+    search_stock_candidates_detailed,
+)
 from app.utils import utils
 
 STOPWORDS = {
@@ -235,25 +239,30 @@ def collect_and_rank_candidates_for_query(
     avoid_terms: list[str],
     context: BrollSelectionContext,
     limit_per_provider: int = 15,
+    providers_searched_out: list[str] | None = None,
+    provider_errors_out: list[str] | None = None,
 ) -> list[BrollCandidate]:
     """Collect and score candidates for a single query across providers."""
     all_candidates: list[BrollCandidate] = []
     seen_ids: set[str] = set()
 
     for provider in providers:
-        try:
-            candidates = search_stock_candidates(
-                provider=provider,
-                query=query,
-                minimum_duration=scene_duration,
-                aspect=target_aspect,
-                limit=limit_per_provider,
-            )
-        except Exception as exc:
-            logger.warning(f"Error searching {provider} for query '{query}': {exc}")
-            continue
+        if providers_searched_out is not None and provider not in providers_searched_out:
+            providers_searched_out.append(provider)
 
-        for c in candidates:
+        search_result = search_stock_candidates_detailed(
+            provider=provider,
+            query=query,
+            minimum_duration=scene_duration,
+            aspect=target_aspect,
+            limit=limit_per_provider,
+        )
+
+        if not search_result.is_success and search_result.error:
+            if provider_errors_out is not None:
+                provider_errors_out.append(search_result.error)
+
+        for c in search_result.candidates:
             if c.id in seen_ids or context.is_duplicate(c) or c.duration < scene_duration:
                 continue
             score, breakdown = score_candidate(
@@ -278,11 +287,7 @@ def collect_and_rank_candidates(
     context: BrollSelectionContext,
     target_pool_size: int = 10,
 ) -> list[BrollCandidate]:
-    """Collect candidates across primary and fallback queries and rank deterministically.
-
-    Preserved as a convenience helper; primary execution loop in acquire_broll_scene
-    processes queries stage-by-stage so fallbacks are never prematurely cut off.
-    """
+    """Collect candidates across primary and fallback queries and rank deterministically."""
     scene_duration = max(0.1, (cue.end or 0.0) - (cue.start or 0.0))
     payload = BrollPayload.model_validate(cue.payload)
     queries = [payload.search_query] + [q for q in payload.fallback_queries if q != payload.search_query]
@@ -340,7 +345,6 @@ def download_candidate(candidate: BrollCandidate, destination_file: Path | str) 
         if not temp_dest.exists() or temp_dest.stat().st_size == 0:
             raise ValueError(f"Downloaded file is missing or empty: {temp_dest}")
 
-        # Validate that video decodes properly
         clip = VideoFileClip(str(temp_dest))
         duration = clip.duration
         fps = clip.fps
@@ -448,7 +452,6 @@ def render_scene_clip(
             f"Source video duration ({source_duration:.2f}s) is shorter than required scene duration ({scene_duration:.2f}s)"
         )
 
-    # Center-biased trim
     trim_start = max(0.0, round((source_duration - scene_duration) / 2.0, 3))
     trim_end = round(trim_start + scene_duration, 3)
 
@@ -517,6 +520,7 @@ def acquire_broll_scene(
     project: ProjectSpec,
     task_directory: Path | str,
     context: BrollSelectionContext,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> SelectedBrollAsset:
     """Acquire, download selected winner, and render exact scene clip for a B-roll VisualCue.
 
@@ -536,12 +540,18 @@ def acquire_broll_scene(
     target_width, target_height = aspect.to_resolution()
     fps = project.project.fps or 30
 
+    if on_progress:
+        on_progress({"status": JobStatus.queued})
+
     # Strict resumability validation
     if metadata_path.exists() and rendered_path.exists():
         try:
             saved_data = json.loads(metadata_path.read_text(encoding="utf-8"))
             asset = SelectedBrollAsset.model_validate(saved_data)
             if asset.scene_id == cue.id:
+                if on_progress:
+                    on_progress({"status": JobStatus.processing, "attempt": 0})
+
                 validate_rendered_clip(
                     rendered_path=rendered_path,
                     scene_duration=scene_duration,
@@ -549,7 +559,6 @@ def acquire_broll_scene(
                     target_height=target_height,
                     target_fps=fps,
                 )
-                # Register resumed asset into context to prevent cross-scene duplication
                 dummy_candidate = BrollCandidate(
                     id=asset.candidate_id,
                     provider=asset.provider,
@@ -563,6 +572,9 @@ def acquire_broll_scene(
                 )
                 context.record_selection(dummy_candidate, asset)
                 logger.info(f"Reusing existing validated B-roll asset for scene {cue.id}")
+
+                if on_progress:
+                    on_progress({"status": JobStatus.ready, "attempt": 0, "asset": asset})
                 return asset
         except Exception as resume_exc:
             logger.warning(
@@ -581,13 +593,13 @@ def acquire_broll_scene(
     providers = payload.source_priority or ["pexels", "pixabay", "coverr"]
 
     attempts = 0
-    queries_attempted: list[str] = []
-    providers_attempted: set[str] = set()
+    queries_searched: list[str] = []
+    providers_searched: list[str] = []
     candidate_ids_attempted: list[str] = []
     errors: list[str] = []
 
-    for query in queries:
-        queries_attempted.append(query)
+    for query_index, query in enumerate(queries):
+        queries_searched.append(query)
         candidates = collect_and_rank_candidates_for_query(
             query=query,
             providers=providers,
@@ -595,12 +607,24 @@ def acquire_broll_scene(
             target_aspect=aspect,
             avoid_terms=payload.avoid,
             context=context,
+            providers_searched_out=providers_searched,
+            provider_errors_out=errors,
         )
 
         for candidate in candidates:
             attempts += 1
-            providers_attempted.add(candidate.provider)
             candidate_ids_attempted.append(candidate.id)
+
+            if on_progress:
+                on_progress(
+                    {
+                        "status": JobStatus.processing,
+                        "attempt": attempts,
+                        "query": query,
+                        "provider": candidate.provider,
+                        "candidate_id": candidate.id,
+                    }
+                )
 
             try:
                 logger.info(
@@ -618,7 +642,6 @@ def acquire_broll_scene(
                     fps=fps,
                 )
 
-                # Strip sensitive tokens from persistent download_url / source_url
                 safe_download_url = sanitize_url_for_persistence(candidate.download_url) or candidate.download_url
                 safe_source_url = sanitize_url_for_persistence(candidate.source_url)
 
@@ -650,7 +673,6 @@ def acquire_broll_scene(
                     },
                 )
 
-                # Persist per-scene metadata.json (free of signed URL tokens)
                 metadata_path.write_text(
                     json.dumps(selected_asset.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n",
                     encoding="utf-8",
@@ -658,23 +680,40 @@ def acquire_broll_scene(
 
                 context.record_selection(candidate, selected_asset)
                 logger.success(f"Acquired and rendered B-roll for {cue.id}: {rendered_path.name}")
+
+                if on_progress:
+                    on_progress({"status": JobStatus.ready, "attempt": attempts, "asset": selected_asset})
+
                 return selected_asset
 
             except Exception as exc:
                 err_msg = f"Candidate {candidate.id} failed (attempt {attempts}): {exc}"
                 logger.warning(err_msg)
                 errors.append(err_msg)
+
+                # Signal retrying state when more candidates or queries exist
+                if on_progress:
+                    on_progress(
+                        {
+                            "status": JobStatus.retrying,
+                            "attempt": attempts,
+                            "error": err_msg,
+                        }
+                    )
                 continue
 
     diagnostics = {
         "scene_id": cue.id,
         "attempt_count": attempts,
-        "queries_attempted": queries_attempted,
-        "providers_attempted": sorted(list(providers_attempted)),
+        "queries_searched": queries_searched,
+        "providers_searched": providers_searched,
         "candidate_ids_attempted": candidate_ids_attempted,
         "errors": errors,
     }
+    if on_progress:
+        on_progress({"status": JobStatus.failed, "attempt": attempts, "diagnostics": diagnostics})
+
     raise BrollAcquisitionError(
-        f"All candidates across {len(queries_attempted)} queries failed for scene {cue.id}",
+        f"All candidates across {len(queries_searched)} queries failed for scene {cue.id}",
         diagnostics=diagnostics,
     )

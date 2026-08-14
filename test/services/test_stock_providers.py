@@ -142,18 +142,37 @@ class TestStockProviders(unittest.TestCase):
         self.assertIsNone(c.source_url)
         self.assertIsNone(c.license)
 
-    def test_provider_http_error_returns_empty_and_does_not_raise(self):
+    def test_search_stock_candidates_detailed_distinguishes_zero_results_from_error(self):
         config.app["pexels_api_keys"] = ["test-pexels-key"]
-        fake_response = SimpleNamespace(status_code=500, json=lambda: {"error": "Server error"})
 
-        with patch("app.services.stock_providers.requests.get", return_value=fake_response):
-            candidates = stock_providers.search_stock_candidates("pexels", "any query")
-        self.assertEqual(candidates, [])
+        # Case 1: Valid search with 0 hits
+        empty_response = SimpleNamespace(status_code=200, json=lambda: {"videos": []})
+        with patch("app.services.stock_providers.requests.get", return_value=empty_response):
+            res_empty = stock_providers.search_stock_candidates_detailed("pexels", "rare query")
+        self.assertTrue(res_empty.is_success)
+        self.assertEqual(res_empty.candidates, [])
+        self.assertIsNone(res_empty.error)
 
-    def test_missing_api_key_returns_empty_and_does_not_raise(self):
+        # Case 2: HTTP 500 server error
+        err_response = SimpleNamespace(status_code=500, json=lambda: {"error": "Internal error"})
+        with patch("app.services.stock_providers.requests.get", return_value=err_response):
+            res_err = stock_providers.search_stock_candidates_detailed("pexels", "any query")
+        self.assertFalse(res_err.is_success)
+        self.assertEqual(res_err.candidates, [])
+        self.assertEqual(res_err.error, "pexels: HTTP 500")
+
+    def test_sanitize_error_message_strips_sensitive_credentials(self):
+        fake_secret_message = "Connection failed to server with Bearer secret_token_12345678 and api_key=topsecretkey123"
+        sanitized = stock_providers._sanitize_error_message(fake_secret_message)
+        self.assertNotIn("secret_token_12345678", sanitized)
+        self.assertNotIn("topsecretkey123", sanitized)
+        self.assertIn("[REDACTED]", sanitized)
+
+    def test_missing_api_key_returns_error_result(self):
         config.app.pop("pexels_api_keys", None)
-        candidates = stock_providers.search_stock_candidates("pexels", "any query")
-        self.assertEqual(candidates, [])
+        res = stock_providers.search_stock_candidates_detailed("pexels", "any query")
+        self.assertFalse(res.is_success)
+        self.assertIn("pexels: ##### pexels_api_keys is not set #####", res.error)
 
 
 if __name__ == "__main__":

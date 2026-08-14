@@ -33,7 +33,7 @@ def run_broll_acquisition(
     2. Ensure planning stage (G03 + G04) is complete; run if needed.
     3. Filter VisualCues for BROLL type only (DATA, DOCUMENT, TEXT untouched).
     4. For each BROLL cue: search, score, download winner only, trim & normalize scene clip.
-    5. Populate AssetJob only for BROLL cues.
+    5. Maintain truthful AssetJob lifecycle and status_history.
     6. Generate broll_manifest.json, project.assets.json, and update project_manifest.json.
     """
     if isinstance(project_input, (str, Path)):
@@ -54,7 +54,6 @@ def run_broll_acquisition(
     # If planned project does not exist on disk, execute planning pipeline first
     if not planned_project_file.exists() or not visual_plan_file.exists():
         if source_path is None:
-            # Write project to task dir to plan it
             source_path = task_directory / "project.json"
             source_path.write_text(project.model_dump_json(indent=2), encoding="utf-8")
         logger.info(f"Planning artifacts not found for task {run_task_id}; running planning stage first")
@@ -79,9 +78,31 @@ def run_broll_acquisition(
             id=f"A{cue.order:03d}",
             scene_id=cue.id,
             kind="broll",
-            status=JobStatus.processing,
+            status=JobStatus.planned,
             attempts=0,
+            metadata={"status_history": ["planned"]},
         )
+
+        def make_progress_handler(target_job: AssetJob):
+            def handle_progress(event: dict[str, Any]) -> None:
+                new_status = event.get("status")
+                if new_status:
+                    status_str = new_status.value if hasattr(new_status, "value") else str(new_status)
+                    target_job.status = new_status
+                    history = target_job.metadata.setdefault("status_history", [])
+                    if not history or history[-1] != status_str:
+                        history.append(status_str)
+                if "attempt" in event:
+                    target_job.attempts = event["attempt"]
+                if "provider" in event:
+                    target_job.provider = event["provider"]
+                if "query" in event:
+                    target_job.query = event["query"]
+                if "error" in event:
+                    target_job.error = event["error"]
+            return handle_progress
+
+        progress_callback = make_progress_handler(job)
 
         try:
             selected_asset = acquire_broll_scene(
@@ -89,29 +110,31 @@ def run_broll_acquisition(
                 project=planned_project,
                 task_directory=task_directory,
                 context=context,
+                on_progress=progress_callback,
             )
             ready_assets.append(selected_asset)
             job.status = JobStatus.ready
-            job.attempts = selected_asset.metadata.get("attempts", 1)
             job.provider = selected_asset.provider
             job.query = selected_asset.query_used
             job.source = selected_asset.source_file
             job.output = selected_asset.rendered_file
-            job.metadata = {
-                "score": selected_asset.score,
-                "score_breakdown": selected_asset.score_breakdown,
-                "source_duration": selected_asset.source_duration,
-                "trim_start": selected_asset.trim_start,
-                "trim_end": selected_asset.trim_end,
-                "scene_duration": selected_asset.scene_duration,
-                "candidate_metadata": selected_asset.metadata.get("candidate_metadata", {}),
-            }
+            job.metadata.update(
+                {
+                    "score": selected_asset.score,
+                    "score_breakdown": selected_asset.score_breakdown,
+                    "source_duration": selected_asset.source_duration,
+                    "trim_start": selected_asset.trim_start,
+                    "trim_end": selected_asset.trim_end,
+                    "scene_duration": selected_asset.scene_duration,
+                    "candidate_metadata": selected_asset.metadata.get("candidate_metadata", {}),
+                }
+            )
         except Exception as exc:
             logger.error(f"B-roll acquisition failed for scene {cue.id}: {exc}")
             diag = exc.diagnostics if isinstance(exc, BrollAcquisitionError) else {}
-            attempt_count = diag.get("attempt_count", 1)
-            queries_attempted = diag.get("queries_attempted", [])
-            providers_attempted = diag.get("providers_attempted", [])
+            attempt_count = diag.get("attempt_count", job.attempts or 1)
+            queries_searched = diag.get("queries_searched", [])
+            providers_searched = diag.get("providers_searched", [])
             candidate_ids_attempted = diag.get("candidate_ids_attempted", [])
             errors = diag.get("errors", [str(exc)])
 
@@ -120,8 +143,8 @@ def run_broll_acquisition(
                     "scene_id": cue.id,
                     "order": cue.order,
                     "attempt_count": attempt_count,
-                    "queries_attempted": queries_attempted,
-                    "providers_attempted": providers_attempted,
+                    "queries_searched": queries_searched,
+                    "providers_searched": providers_searched,
                     "candidate_ids_attempted": candidate_ids_attempted,
                     "errors": errors,
                     "error": str(exc),
@@ -130,7 +153,7 @@ def run_broll_acquisition(
             job.status = JobStatus.failed
             job.attempts = attempt_count
             job.error = str(exc)
-            job.metadata = diag
+            job.metadata.update(diag)
 
         broll_asset_jobs.append(job)
 

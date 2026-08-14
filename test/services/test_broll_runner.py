@@ -127,7 +127,16 @@ class TestBrollRunner(unittest.TestCase):
                 metadata={"attempts": 2},
             )
 
-            with patch("app.services.broll_runner.acquire_broll_scene", return_value=mock_asset), \
+            def mock_acquire(cue, on_progress=None, **kwargs):
+                if on_progress:
+                    on_progress({"status": JobStatus.queued})
+                    on_progress({"status": JobStatus.processing, "attempt": 1, "provider": "pexels", "candidate_id": "c1"})
+                    on_progress({"status": JobStatus.retrying, "attempt": 1, "error": "Fail c1"})
+                    on_progress({"status": JobStatus.processing, "attempt": 2, "provider": "pexels", "candidate_id": "c2"})
+                    on_progress({"status": JobStatus.ready, "attempt": 2, "asset": mock_asset})
+                return mock_asset
+
+            with patch("app.services.broll_runner.acquire_broll_scene", side_effect=mock_acquire), \
                  patch("app.services.broll_runner.utils.task_dir", return_value=str(task_dir)):
                 result = run_broll_acquisition(project_path, task_id="test-task")
 
@@ -145,12 +154,17 @@ class TestBrollRunner(unittest.TestCase):
             self.assertIn("assets_project_file", p_manifest["outputs"])
             self.assertEqual(p_manifest["status"], "complete")
 
-            # Verify AssetJob in project.assets.json is ready and attempts reflects real attempts
+            # Verify AssetJob in project.assets.json is ready and status_history is tracked
             p_assets = json.loads((task_dir / "project.assets.json").read_text(encoding="utf-8"))
             self.assertEqual(len(p_assets["asset_jobs"]), 1)
-            self.assertEqual(p_assets["asset_jobs"][0]["status"], "ready")
-            self.assertEqual(p_assets["asset_jobs"][0]["attempts"], 2)
-            self.assertEqual(p_assets["asset_jobs"][0]["provider"], "pexels")
+            job_data = p_assets["asset_jobs"][0]
+            self.assertEqual(job_data["status"], "ready")
+            self.assertEqual(job_data["attempts"], 2)
+            self.assertEqual(job_data["provider"], "pexels")
+            self.assertEqual(
+                job_data["metadata"]["status_history"],
+                ["planned", "queued", "processing", "retrying", "processing", "ready"],
+            )
 
     def test_only_broll_cues_create_asset_jobs_in_g05(self):
         """Visual cues for DATA, DOCUMENT, and TEXT must not have AssetJobs created in G05."""
@@ -307,7 +321,6 @@ class TestBrollRunner(unittest.TestCase):
             project_path = task_dir / "project.json"
             project_path.write_text(json.dumps(project.model_dump(mode="json")), encoding="utf-8")
 
-            # Project manifest initially created
             now = datetime.now(timezone.utc)
             init_manifest = ProjectManifest(
                 schema_version="1.0",
@@ -343,15 +356,25 @@ class TestBrollRunner(unittest.TestCase):
             diag = {
                 "scene_id": "S002",
                 "attempt_count": 4,
-                "queries_attempted": ["query 2", "fallback 2"],
-                "providers_attempted": ["pexels", "pixabay"],
+                "queries_searched": ["query 2", "fallback 2"],
+                "providers_searched": ["pexels", "pixabay"],
                 "candidate_ids_attempted": ["p1", "p2", "pix1", "pix2"],
                 "errors": ["Candidate p1 download timeout", "Candidate pix1 404"],
             }
 
-            def mock_acquire(cue, **kwargs):
+            def mock_acquire(cue, on_progress=None, **kwargs):
                 if cue.id == "S001":
+                    if on_progress:
+                        on_progress({"status": JobStatus.queued})
+                        on_progress({"status": JobStatus.processing, "attempt": 1})
+                        on_progress({"status": JobStatus.ready, "attempt": 1, "asset": mock_asset_s001})
                     return mock_asset_s001
+                if on_progress:
+                    on_progress({"status": JobStatus.queued})
+                    on_progress({"status": JobStatus.processing, "attempt": 1})
+                    on_progress({"status": JobStatus.retrying, "attempt": 1})
+                    on_progress({"status": JobStatus.processing, "attempt": 2})
+                    on_progress({"status": JobStatus.failed, "attempt": 2, "diagnostics": diag})
                 raise BrollAcquisitionError("All candidates failed for scene S002", diagnostics=diag)
 
             with patch("app.services.broll_runner.acquire_broll_scene", side_effect=mock_acquire), \
@@ -369,13 +392,20 @@ class TestBrollRunner(unittest.TestCase):
             f_scene = manifest["failed_scenes"][0]
             self.assertEqual(f_scene["scene_id"], "S002")
             self.assertEqual(f_scene["attempt_count"], 4)
-            self.assertEqual(f_scene["queries_attempted"], ["query 2", "fallback 2"])
-            self.assertEqual(f_scene["providers_attempted"], ["pexels", "pixabay"])
+            self.assertEqual(f_scene["queries_searched"], ["query 2", "fallback 2"])
+            self.assertEqual(f_scene["providers_searched"], ["pexels", "pixabay"])
 
             # Check project_manifest.json was updated to failed
             p_manifest = json.loads((task_dir / "project_manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(p_manifest["status"], "failed")
             self.assertIsNotNone(p_manifest["error"])
+
+            # Check AssetJob status_history
+            assets_data = json.loads((task_dir / "project.assets.json").read_text(encoding="utf-8"))
+            jobs = {j["scene_id"]: j for j in assets_data["asset_jobs"]}
+            self.assertEqual(jobs["S001"]["status"], "ready")
+            self.assertEqual(jobs["S002"]["status"], "failed")
+            self.assertIn("failed", jobs["S002"]["metadata"]["status_history"])
 
 
 if __name__ == "__main__":

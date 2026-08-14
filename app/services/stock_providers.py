@@ -16,29 +16,50 @@ SUPPORTED_PROVIDERS = {"pexels", "pixabay", "coverr"}
 FORBIDDEN_PROVIDERS = {"douyin", "bilibili", "xiaohongshu", "youtube", "tiktok"}
 
 
+class StockSearchResult:
+    """Encapsulates stock provider query results distinguishing empty results from provider errors."""
+
+    def __init__(
+        self,
+        provider: str,
+        query: str,
+        candidates: list[BrollCandidate] | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.provider = provider
+        self.query = query
+        self.candidates = candidates or []
+        self.error = error
+
+    @property
+    def is_success(self) -> bool:
+        return self.error is None
+
+
 def _sanitize_error_message(message: str) -> str:
-    """Remove potential API keys, authorization tokens, and credentials from log messages."""
-    # Take first line if multiple lines to avoid dumping config json in error logs
+    """Remove potential API keys, authorization tokens, and credentials from log and error messages."""
     first_line = message.strip().split("\n")[0]
     sanitized = re.sub(r"(?:Bearer\s+|key=)[A-Za-z0-9_\-\.]{8,}", "[REDACTED]", first_line)
-    return sanitized
+    sanitized = re.sub(r"(?:api_key=)[A-Za-z0-9_\-\.]{8,}", "api_key=[REDACTED]", sanitized)
+    return sanitized.strip()
 
 
-def search_pexels_candidates(
+def search_pexels_candidates_detailed(
     query: str,
     minimum_duration: float = 0.0,
     aspect: VideoAspect = VideoAspect.landscape,
     limit: int = 20,
-) -> list[BrollCandidate]:
-    """Search Pexels API and return rich normalized BrollCandidate list."""
+) -> StockSearchResult:
+    """Search Pexels API and return rich StockSearchResult."""
     aspect_enum = VideoAspect(aspect)
     orientation = "portrait" if aspect_enum == VideoAspect.portrait else "landscape"
 
     try:
         api_key = get_api_key("pexels_api_keys")
     except Exception as exc:
+        err = f"pexels: {_sanitize_error_message(str(exc))}"
         logger.warning(f"Pexels API key unavailable: {_sanitize_error_message(str(exc))}")
-        return []
+        return StockSearchResult(provider="pexels", query=query, candidates=[], error=err)
 
     headers = {
         "Authorization": api_key,
@@ -60,14 +81,14 @@ def search_pexels_candidates(
             timeout=(15, 30),
         )
         if r.status_code != 200:
+            err = f"pexels: HTTP {r.status_code}"
             logger.warning(f"Pexels search returned HTTP status {r.status_code}")
-            return []
+            return StockSearchResult(provider="pexels", query=query, candidates=[], error=err)
         response = r.json()
     except Exception as e:
-        logger.warning(
-            f"Pexels search failed for query '{query}': {_sanitize_error_message(str(e))}"
-        )
-        return []
+        err = f"pexels: {_sanitize_error_message(str(e))}"
+        logger.warning(f"Pexels search failed for query '{query}': {err}")
+        return StockSearchResult(provider="pexels", query=query, candidates=[], error=err)
 
     videos = response.get("videos", []) if isinstance(response, dict) else []
     candidates: list[BrollCandidate] = []
@@ -82,7 +103,6 @@ def search_pexels_candidates(
             if not video_files:
                 continue
 
-            # Pick the best MP4 video file by resolution (prefer full HD or highest resolution)
             valid_files = [
                 f
                 for f in video_files
@@ -98,7 +118,6 @@ def search_pexels_candidates(
             if not valid_files:
                 continue
 
-            # Sort by area (width * height) descending
             def _file_sort_key(f: dict[str, Any]) -> int:
                 w = int(f.get("width") or 0)
                 h = int(f.get("height") or 0)
@@ -140,21 +159,22 @@ def search_pexels_candidates(
             logger.debug(f"Skipping malformed Pexels video item: {exc}")
             continue
 
-    return candidates
+    return StockSearchResult(provider="pexels", query=query, candidates=candidates, error=None)
 
 
-def search_pixabay_candidates(
+def search_pixabay_candidates_detailed(
     query: str,
     minimum_duration: float = 0.0,
     aspect: VideoAspect = VideoAspect.landscape,
     limit: int = 20,
-) -> list[BrollCandidate]:
-    """Search Pixabay API and return rich normalized BrollCandidate list."""
+) -> StockSearchResult:
+    """Search Pixabay API and return rich StockSearchResult."""
     try:
         api_key = get_api_key("pixabay_api_keys")
     except Exception as exc:
+        err = f"pixabay: {_sanitize_error_message(str(exc))}"
         logger.warning(f"Pixabay API key unavailable: {_sanitize_error_message(str(exc))}")
-        return []
+        return StockSearchResult(provider="pixabay", query=query, candidates=[], error=err)
 
     params = {
         "q": query,
@@ -173,14 +193,14 @@ def search_pixabay_candidates(
             timeout=(15, 30),
         )
         if r.status_code != 200:
+            err = f"pixabay: HTTP {r.status_code}"
             logger.warning(f"Pixabay search returned HTTP status {r.status_code}")
-            return []
+            return StockSearchResult(provider="pixabay", query=query, candidates=[], error=err)
         response = r.json()
     except Exception as e:
-        logger.warning(
-            f"Pixabay search failed for query '{query}': {_sanitize_error_message(str(e))}"
-        )
-        return []
+        err = f"pixabay: {_sanitize_error_message(str(e))}"
+        logger.warning(f"Pixabay search failed for query '{query}': {err}")
+        return StockSearchResult(provider="pixabay", query=query, candidates=[], error=err)
 
     hits = response.get("hits", []) if isinstance(response, dict) else []
     candidates: list[BrollCandidate] = []
@@ -196,7 +216,6 @@ def search_pixabay_candidates(
             if not hit_id or not isinstance(videos_dict, dict) or not videos_dict:
                 continue
 
-            # Preferred rendition order: large, medium, small, tiny
             rendition = None
             for key in ("large", "medium", "small", "tiny"):
                 candidate_variant = videos_dict.get(key)
@@ -234,21 +253,22 @@ def search_pixabay_candidates(
             logger.debug(f"Skipping malformed Pixabay hit: {exc}")
             continue
 
-    return candidates
+    return StockSearchResult(provider="pixabay", query=query, candidates=candidates, error=None)
 
 
-def search_coverr_candidates(
+def search_coverr_candidates_detailed(
     query: str,
     minimum_duration: float = 0.0,
     aspect: VideoAspect = VideoAspect.landscape,
     limit: int = 20,
-) -> list[BrollCandidate]:
-    """Search Coverr API and return rich normalized BrollCandidate list."""
+) -> StockSearchResult:
+    """Search Coverr API and return rich StockSearchResult."""
     try:
         api_key = get_api_key("coverr_api_keys")
     except Exception as exc:
+        err = f"coverr: {_sanitize_error_message(str(exc))}"
         logger.warning(f"Coverr API key unavailable: {_sanitize_error_message(str(exc))}")
-        return []
+        return StockSearchResult(provider="coverr", query=query, candidates=[], error=err)
 
     headers = {"Authorization": f"Bearer {api_key}"}
     params = {
@@ -269,14 +289,14 @@ def search_coverr_candidates(
             timeout=(15, 30),
         )
         if r.status_code != 200:
+            err = f"coverr: HTTP {r.status_code}"
             logger.warning(f"Coverr search returned HTTP status {r.status_code}")
-            return []
+            return StockSearchResult(provider="coverr", query=query, candidates=[], error=err)
         response = r.json()
     except Exception as e:
-        logger.warning(
-            f"Coverr search failed for query '{query}': {_sanitize_error_message(str(e))}"
-        )
-        return []
+        err = f"coverr: {_sanitize_error_message(str(e))}"
+        logger.warning(f"Coverr search failed for query '{query}': {err}")
+        return StockSearchResult(provider="coverr", query=query, candidates=[], error=err)
 
     hits = response.get("hits", []) if isinstance(response, dict) else []
     candidates: list[BrollCandidate] = []
@@ -316,7 +336,6 @@ def search_coverr_candidates(
             width = int(hit.get("width") or 1920)
             height = int(hit.get("height") or 1080)
 
-            # Do not invent source_url if not in response
             source_url = hit.get("pageURL") or hit.get("url") or None
             license_val = hit.get("license") or None
 
@@ -342,17 +361,17 @@ def search_coverr_candidates(
             logger.debug(f"Skipping malformed Coverr hit: {exc}")
             continue
 
-    return candidates
+    return StockSearchResult(provider="coverr", query=query, candidates=candidates, error=None)
 
 
-def search_stock_candidates(
+def search_stock_candidates_detailed(
     provider: str,
     query: str,
     minimum_duration: float = 0.0,
     aspect: VideoAspect = VideoAspect.landscape,
     limit: int = 20,
-) -> list[BrollCandidate]:
-    """Dispatch provider candidate search with strict whitelisting and validation."""
+) -> StockSearchResult:
+    """Dispatch provider candidate search with strict whitelisting returning detailed StockSearchResult."""
     provider_clean = str(provider).strip().lower()
     if provider_clean in FORBIDDEN_PROVIDERS:
         raise ValueError(
@@ -364,16 +383,61 @@ def search_stock_candidates(
         )
 
     if provider_clean == "pexels":
-        return search_pexels_candidates(
+        return search_pexels_candidates_detailed(
             query=query, minimum_duration=minimum_duration, aspect=aspect, limit=limit
         )
     if provider_clean == "pixabay":
-        return search_pixabay_candidates(
+        return search_pixabay_candidates_detailed(
             query=query, minimum_duration=minimum_duration, aspect=aspect, limit=limit
         )
     if provider_clean == "coverr":
-        return search_coverr_candidates(
+        return search_coverr_candidates_detailed(
             query=query, minimum_duration=minimum_duration, aspect=aspect, limit=limit
         )
 
-    return []
+    return StockSearchResult(provider=provider_clean, query=query, candidates=[], error="Unknown provider")
+
+
+def search_stock_candidates(
+    provider: str,
+    query: str,
+    minimum_duration: float = 0.0,
+    aspect: VideoAspect = VideoAspect.landscape,
+    limit: int = 20,
+) -> list[BrollCandidate]:
+    """Dispatch provider candidate search and return candidate list."""
+    res = search_stock_candidates_detailed(
+        provider=provider,
+        query=query,
+        minimum_duration=minimum_duration,
+        aspect=aspect,
+        limit=limit,
+    )
+    return res.candidates
+
+
+def search_pexels_candidates(
+    query: str,
+    minimum_duration: float = 0.0,
+    aspect: VideoAspect = VideoAspect.landscape,
+    limit: int = 20,
+) -> list[BrollCandidate]:
+    return search_pexels_candidates_detailed(query, minimum_duration, aspect, limit).candidates
+
+
+def search_pixabay_candidates(
+    query: str,
+    minimum_duration: float = 0.0,
+    aspect: VideoAspect = VideoAspect.landscape,
+    limit: int = 20,
+) -> list[BrollCandidate]:
+    return search_pixabay_candidates_detailed(query, minimum_duration, aspect, limit).candidates
+
+
+def search_coverr_candidates(
+    query: str,
+    minimum_duration: float = 0.0,
+    aspect: VideoAspect = VideoAspect.landscape,
+    limit: int = 20,
+) -> list[BrollCandidate]:
+    return search_coverr_candidates_detailed(query, minimum_duration, aspect, limit).candidates

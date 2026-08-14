@@ -35,6 +35,7 @@ from app.services.broll import (
     score_candidate,
     validate_rendered_clip,
 )
+from app.services.stock_providers import StockSearchResult
 from app.utils import utils
 
 
@@ -236,12 +237,12 @@ class TestQueryFallbackStagedAcquisition(unittest.TestCase):
                 _candidate(cid="fall-1", query="retiree healthcare", download_url="https://dl.example/fall-1.mp4")
             ]
 
-            def mock_search(provider, query, **kwargs):
+            def mock_search_detailed(provider, query, **kwargs):
                 if query == "senior couple":
-                    return primary_candidates if provider == "pexels" else []
+                    return StockSearchResult(provider=provider, query=query, candidates=primary_candidates if provider == "pexels" else [])
                 if query == "retiree healthcare":
-                    return fallback_candidates if provider == "pexels" else []
-                return []
+                    return StockSearchResult(provider=provider, query=query, candidates=fallback_candidates if provider == "pexels" else [])
+                return StockSearchResult(provider=provider, query=query, candidates=[])
 
             download_attempts = []
 
@@ -253,7 +254,7 @@ class TestQueryFallbackStagedAcquisition(unittest.TestCase):
                 shutil.copyfile(synthetic_source, dest_path)
                 return Path(dest_path)
 
-            with patch("app.services.broll.search_stock_candidates", side_effect=mock_search), \
+            with patch("app.services.broll.search_stock_candidates_detailed", side_effect=mock_search_detailed), \
                  patch("app.services.broll.download_candidate", side_effect=mock_download):
                 asset = acquire_broll_scene(cue, project, task_dir, ctx)
 
@@ -281,10 +282,10 @@ class TestWinnerOnlyDownloadAndRetry(unittest.TestCase):
 
             download_attempts = []
 
-            def mock_search(provider, query, **kwargs):
+            def mock_search_detailed(provider, query, **kwargs):
                 if query == "senior couple" and provider == "pexels":
-                    return [cand1, cand2, cand3]
-                return []
+                    return StockSearchResult(provider="pexels", query=query, candidates=[cand1, cand2, cand3])
+                return StockSearchResult(provider=provider, query=query, candidates=[])
 
             def mock_download(candidate, dest_path):
                 download_attempts.append(candidate.id)
@@ -293,7 +294,7 @@ class TestWinnerOnlyDownloadAndRetry(unittest.TestCase):
                 shutil.copyfile(synthetic_source, dest_path)
                 return Path(dest_path)
 
-            with patch("app.services.broll.search_stock_candidates", side_effect=mock_search), \
+            with patch("app.services.broll.search_stock_candidates_detailed", side_effect=mock_search_detailed), \
                  patch("app.services.broll.download_candidate", side_effect=mock_download):
                 asset = acquire_broll_scene(cue, project, task_dir, ctx)
 
@@ -361,10 +362,8 @@ class TestExactDurationAndSceneRendering(unittest.TestCase):
     def test_render_validation_rejects_excessive_duration_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             temp_path = Path(tmp_dir)
-            # Create a 2.0s clip
             short_clip = _create_synthetic_video(temp_path / "short.mp4", duration=2.0, width=1920, height=1080, fps=30)
 
-            # Expecting 4.0s -> must raise RenderValidationError
             with self.assertRaises(RenderValidationError):
                 validate_rendered_clip(
                     rendered_path=short_clip,
@@ -379,7 +378,6 @@ class TestExactDurationAndSceneRendering(unittest.TestCase):
             temp_path = Path(tmp_dir)
             clip_720p = _create_synthetic_video(temp_path / "720p.mp4", duration=3.0, width=1280, height=720, fps=30)
 
-            # Expecting 1920x1080 -> must raise RenderValidationError
             with self.assertRaises(RenderValidationError):
                 validate_rendered_clip(
                     rendered_path=clip_720p,
@@ -431,7 +429,6 @@ class TestResumeAndProvenance(unittest.TestCase):
             task_dir = Path(tmp_dir)
             scene_dir = task_dir / "broll" / "S001"
             scene_dir.mkdir(parents=True, exist_ok=True)
-            # Write corrupted 0-byte rendered file and invalid metadata
             (scene_dir / "rendered.mp4").write_text("corrupted content", encoding="utf-8")
             (scene_dir / "metadata.json").write_text("{invalid json", encoding="utf-8")
 
@@ -442,14 +439,14 @@ class TestResumeAndProvenance(unittest.TestCase):
 
             cand = _candidate(cid="fresh-1", query="senior couple", download_url="https://dl.example/fresh.mp4")
 
-            def mock_search(provider, query, **kwargs):
-                return [cand] if provider == "pexels" else []
+            def mock_search_detailed(provider, query, **kwargs):
+                return StockSearchResult(provider=provider, query=query, candidates=[cand] if provider == "pexels" else [])
 
             def mock_download(candidate, dest_path):
                 shutil.copyfile(synthetic_source, dest_path)
                 return Path(dest_path)
 
-            with patch("app.services.broll.search_stock_candidates", side_effect=mock_search), \
+            with patch("app.services.broll.search_stock_candidates_detailed", side_effect=mock_search_detailed), \
                  patch("app.services.broll.download_candidate", side_effect=mock_download):
                 asset = acquire_broll_scene(cue, project, task_dir, ctx)
 
@@ -470,26 +467,78 @@ class TestResumeAndProvenance(unittest.TestCase):
 
             cand = _candidate(cid="signed-1", query="senior couple", download_url=raw_signed_url)
 
-            def mock_search(provider, query, **kwargs):
-                return [cand] if provider == "pexels" else []
+            def mock_search_detailed(provider, query, **kwargs):
+                return StockSearchResult(provider=provider, query=query, candidates=[cand] if provider == "pexels" else [])
 
             def mock_download(candidate, dest_path):
-                # Verify that runtime download uses the actual signed URL
                 self.assertEqual(candidate.download_url, raw_signed_url)
                 shutil.copyfile(synthetic_source, dest_path)
                 return Path(dest_path)
 
-            with patch("app.services.broll.search_stock_candidates", side_effect=mock_search), \
+            with patch("app.services.broll.search_stock_candidates_detailed", side_effect=mock_search_detailed), \
                  patch("app.services.broll.download_candidate", side_effect=mock_download):
                 asset = acquire_broll_scene(cue, project, task_dir, ctx)
 
-            # Check asset in memory
             self.assertNotIn(secret_token, asset.download_url)
             self.assertEqual(asset.download_url, "https://signed-cdn.example.com/video.mp4")
 
-            # Check persisted metadata.json
             meta_json = (task_dir / "broll" / "S001" / "metadata.json").read_text(encoding="utf-8")
             self.assertNotIn(secret_token, meta_json)
+
+    def test_providers_searched_recorded_when_all_searches_return_zero_results(self):
+        """When all 3 providers return valid empty results, providers_searched contains all 3,
+
+        candidate_ids_attempted is empty, and errors is empty.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            task_dir = Path(tmp_dir)
+            project = _sample_project()
+            cue = project.visual_cues[0]
+            ctx = BrollSelectionContext()
+
+            def mock_search_detailed(provider, query, **kwargs):
+                return StockSearchResult(provider=provider, query=query, candidates=[])
+
+            with patch("app.services.broll.search_stock_candidates_detailed", side_effect=mock_search_detailed):
+                with self.assertRaises(BrollAcquisitionError) as cm:
+                    acquire_broll_scene(cue, project, task_dir, ctx)
+
+            diag = cm.exception.diagnostics
+            self.assertEqual(diag["scene_id"], "S001")
+            self.assertEqual(diag["providers_searched"], ["pexels", "pixabay", "coverr"])
+            self.assertEqual(diag["candidate_ids_attempted"], [])
+            self.assertEqual(diag["errors"], [])
+
+    def test_provider_error_recorded_and_fallback_provider_succeeds(self):
+        """When Pexels fails with HTTP 500, Pixabay returns zero, Coverr succeeds."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            task_dir = Path(tmp_dir)
+            synthetic_source = _create_synthetic_video(task_dir / "coverr_winner.mp4", duration=8.0)
+            project = _sample_project()
+            cue = project.visual_cues[0]
+            ctx = BrollSelectionContext()
+
+            coverr_cand = _candidate(cid="cov-1", provider="coverr", query="senior couple", download_url="https://dl.example/cov.mp4")
+
+            def mock_search_detailed(provider, query, **kwargs):
+                if provider == "pexels":
+                    return StockSearchResult(provider="pexels", query=query, candidates=[], error="pexels: HTTP 500")
+                if provider == "pixabay":
+                    return StockSearchResult(provider="pixabay", query=query, candidates=[])
+                if provider == "coverr":
+                    return StockSearchResult(provider="coverr", query=query, candidates=[coverr_cand])
+                return StockSearchResult(provider=provider, query=query, candidates=[])
+
+            def mock_download(candidate, dest_path):
+                shutil.copyfile(synthetic_source, dest_path)
+                return Path(dest_path)
+
+            with patch("app.services.broll.search_stock_candidates_detailed", side_effect=mock_search_detailed), \
+                 patch("app.services.broll.download_candidate", side_effect=mock_download):
+                asset = acquire_broll_scene(cue, project, task_dir, ctx)
+
+            self.assertEqual(asset.provider, "coverr")
+            self.assertEqual(asset.candidate_id, "cov-1")
 
 
 if __name__ == "__main__":
