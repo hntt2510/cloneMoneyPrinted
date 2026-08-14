@@ -9,7 +9,12 @@ from loguru import logger
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from app.config import config
-from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
+from app.models.schema import (
+    STOCK_VIDEO_SOURCES,
+    MaterialInfo,
+    VideoAspect,
+    VideoConcatMode,
+)
 from app.utils import utils
 
 # Thread-safe counter for API key rotation
@@ -311,11 +316,14 @@ def download_videos(
     max_clip_duration: int = 5,
     match_script_order: bool = False,
 ) -> List[str]:
-    search_videos = search_videos_pexels
-    if source == "pixabay":
-        search_videos = search_videos_pixabay
-    elif source == "coverr":
-        search_videos = search_videos_coverr
+    video_search_providers = {
+        "pexels": search_videos_pexels,
+        "pixabay": search_videos_pixabay,
+        "coverr": search_videos_coverr,
+    }
+    if source not in STOCK_VIDEO_SOURCES:
+        raise ValueError(f"Unsupported video source: {source}")
+    search_videos = video_search_providers[source]
 
     material_directory = config.app.get("material_directory", "").strip()
     if material_directory == "task":

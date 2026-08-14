@@ -18,26 +18,28 @@ if root_dir not in sys.path:
 from app.config import config
 from app.models.schema import (
     MaterialInfo,
+    SUPPORTED_VIDEO_SOURCES,
     VideoAspect,
     VideoConcatMode,
     VideoParams,
+    VideoSource,
     VideoTransitionMode,
+    normalize_saved_video_source,
 )
 from app.services import llm, voice
 from app.services import task as tm
 from app.utils import utils
 
 st.set_page_config(
-    page_title="MoneyPrinterTurbo",
+    page_title="Video Research & Asset Builder",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="auto",
     menu_items={
         "Report a bug": "https://github.com/harry0703/MoneyPrinterTurbo/issues",
-        "About": "# MoneyPrinterTurbo\nSimply provide a topic or keyword for a video, and it will "
-        "automatically generate the video copy, video materials, video subtitles, "
-        "and video background music before synthesizing a high-definition short "
-        "video.\n\nhttps://github.com/harry0703/MoneyPrinterTurbo",
+        "About": "# Video Research & Asset Builder\nEvolving from MoneyPrinterTurbo, this project "
+        "helps research, source, process, and render video assets.\n\n"
+        "https://github.com/harry0703/MoneyPrinterTurbo",
     },
 )
 
@@ -151,7 +153,7 @@ locales = utils.load_locales(i18n_dir)
 title_col, lang_col = st.columns([3, 1])
 
 with title_col:
-    st.title(f"MoneyPrinterTurbo v{config.project_version}")
+    st.title(f"{config.project_name} v{config.project_version}")
 
 with lang_col:
     display_languages = []
@@ -423,6 +425,7 @@ if not config.app.get("hide_config", False):
                                 - 如果 `MoneyPrinterTurbo` 是 `Docker` 部署，建议填写 `http://host.docker.internal:11434/v1`{docker_hint}
                             - **Model Name**: 使用 `ollama list` 查看，比如 `qwen:7b`
                             """
+                    tips = tips.replace("MoneyPrinterTurbo", config.project_name)
 
             if llm_provider == "openai":
                 if not llm_model_name:
@@ -889,17 +892,26 @@ with middle_panel:
             (tr("Sequential"), "sequential"),
             (tr("Random"), "random"),
         ]
+        video_source_labels = {
+            VideoSource.pexels.value: "Pexels",
+            VideoSource.pixabay.value: "Pixabay",
+            VideoSource.coverr.value: "Coverr",
+            VideoSource.local.value: "Local file",
+        }
         video_sources = [
-            (tr("Pexels"), "pexels"),
-            (tr("Pixabay"), "pixabay"),
-            (tr("Coverr"), "coverr"),
-            (tr("Local file"), "local"),
-            (tr("TikTok"), "douyin"),
-            (tr("Bilibili"), "bilibili"),
-            (tr("Xiaohongshu"), "xiaohongshu"),
+            (tr(video_source_labels[source]), source)
+            for source in SUPPORTED_VIDEO_SOURCES
         ]
 
-        saved_video_source_name = config.app.get("video_source", "pexels")
+        saved_video_source_raw = config.app.get("video_source", VideoSource.pexels.value)
+        saved_video_source_name = normalize_saved_video_source(saved_video_source_raw)
+        if saved_video_source_name != saved_video_source_raw:
+            logger.warning(
+                "Unsupported saved video source {!r}; migrated to {!r}",
+                saved_video_source_raw,
+                saved_video_source_name,
+            )
+            config.app["video_source"] = saved_video_source_name
         saved_video_source_index = [v[1] for v in video_sources].index(
             saved_video_source_name
         )
@@ -1680,7 +1692,7 @@ if start_button:
         scroll_to_bottom()
         st.stop()
 
-    if params.video_source not in ["pexels", "pixabay", "coverr", "local"]:
+    if params.video_source not in SUPPORTED_VIDEO_SOURCES:
         st.error(tr("Please Select a Valid Video Source"))
         scroll_to_bottom()
         st.stop()

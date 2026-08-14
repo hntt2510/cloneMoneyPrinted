@@ -129,6 +129,38 @@ class TestMaterialTlsVerification(unittest.TestCase):
 
         self.assertEqual(result, [])
 
+    def test_download_videos_rejects_non_stock_sources(self):
+        for source in ("local", "douyin", "bilibili", "xiaohongshu", "random_unknown"):
+            with self.subTest(source=source):
+                with self.assertRaisesRegex(ValueError, "Unsupported video source"):
+                    material.download_videos(
+                        task_id="unsupported-source",
+                        search_terms=[],
+                        source=source,
+                    )
+
+    def test_download_videos_dispatches_each_stock_provider(self):
+        item = material.MaterialInfo(
+            provider="stock", url="https://example.com/video.mp4", duration=10
+        )
+        for source, provider_name in (
+            ("pexels", "search_videos_pexels"),
+            ("pixabay", "search_videos_pixabay"),
+            ("coverr", "search_videos_coverr"),
+        ):
+            with self.subTest(source=source):
+                with patch.object(material, provider_name, return_value=[item]) as search, patch.object(
+                    material, "save_video", return_value="/tmp/video.mp4"
+                ):
+                    result = material.download_videos(
+                        task_id=f"dispatch-{source}",
+                        search_terms=["test"],
+                        source=source,
+                        audio_duration=1,
+                    )
+                search.assert_called_once()
+                self.assertEqual(result, ["/tmp/video.mp4"])
+
     def test_download_videos_can_round_robin_terms_in_script_order(self):
         """
         开启按文案顺序匹配素材后，不能让第一个关键词的多个候选先把

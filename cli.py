@@ -5,7 +5,7 @@ from typing import Sequence
 
 from loguru import logger
 
-from app.models.schema import MaterialInfo, VideoParams
+from app.models.schema import MaterialInfo, SUPPORTED_VIDEO_SOURCES, VideoParams
 from app.services import task as tm
 from app.utils import utils
 
@@ -81,7 +81,7 @@ def _bgm_type(value: str) -> str:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="MoneyPrinterTurbo command line video generation"
+        description="Video Research & Asset Builder command line video generation"
     )
     parser.add_argument("--video-subject", required=True, help="video subject")
     parser.add_argument("--video-script", default="", help="custom script")
@@ -110,7 +110,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--video-source",
         default="pexels",
-        choices=["pexels", "pixabay", "coverr", "local"],
+        choices=SUPPORTED_VIDEO_SOURCES,
         help="video material source",
     )
     parser.add_argument(

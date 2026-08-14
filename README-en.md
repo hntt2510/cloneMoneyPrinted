@@ -1,5 +1,5 @@
 <div align="center">
-<h1 align="center">MoneyPrinterTurbo 💸</h1>
+<h1 align="center">Video Research &amp; Asset Builder</h1>
 
 <p align="center">
   <a href="https://github.com/harry0703/MoneyPrinterTurbo/stargazers"><img src="https://img.shields.io/github/stars/harry0703/MoneyPrinterTurbo.svg?style=for-the-badge" alt="Stargazers"></a>
@@ -14,8 +14,9 @@
   <a href="https://trendshift.io/repositories/8731" target="_blank"><img src="https://trendshift.io/api/badge/repositories/8731" alt="harry0703%2FMoneyPrinterTurbo | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </div>
 
-Simply provide a <b>topic</b> or <b>keyword</b> for a video, and it will automatically generate the video copy, video
-materials, video subtitles, and video background music before synthesizing a high-definition short video.
+Video Research &amp; Asset Builder is being evolved from MoneyPrinterTurbo into a workflow for researching, sourcing,
+processing, and rendering video assets. Current video sources are <b>Pexels</b>, <b>Pixabay</b>, <b>Coverr</b>, and
+<b>local files</b>, while the existing script, voice, subtitle, and render pipeline remains available.
 
 ### WebUI
 

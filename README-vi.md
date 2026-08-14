@@ -1,6 +1,6 @@
-# MoneyPrinterTurbo
+# Video Research & Asset Builder
 
-MoneyPrinterTurbo là công cụ tạo video ngắn tự động. Bạn nhập chủ đề hoặc từ khóa, ứng dụng có thể tạo kịch bản, tìm/tải tư liệu video, tạo phụ đề, thêm nhạc nền và xuất video hoàn chỉnh.
+Video Research & Asset Builder được phát triển từ MoneyPrinterTurbo thành workflow nghiên cứu, tìm nguồn, xử lý và render tài sản video. Hiện hỗ trợ Pexels, Pixabay, Coverr và tệp local, đồng thời giữ pipeline script, voice, subtitle và render hiện tại.
 
 ## Chạy nhanh trên Windows
 
