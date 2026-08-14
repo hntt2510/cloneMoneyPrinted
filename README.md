@@ -442,4 +442,15 @@ Trying to load the model directly from the local cache, if it exists.
 
 ## Star History
 
+## Project file mode
+
+运行或验证项目文件（不影响旧版 CLI）：
+
+```shell
+python cli.py --project examples/project.example.json
+python cli.py --project examples/project.example.json --validate-only
+```
+
+旁白和本地素材的相对路径以项目文件所在目录为基准。
+
 [![Star History Chart](https://api.star-history.com/svg?repos=harry0703/MoneyPrinterTurbo&type=Date)](https://star-history.com/#harry0703/MoneyPrinterTurbo&Date)

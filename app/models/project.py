@@ -1,0 +1,242 @@
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.models.schema import (
+    VideoAspect,
+    VideoConcatMode,
+    VideoSource,
+    VideoTransitionMode,
+)
+
+
+class ProjectModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProjectMetadata(ProjectModel):
+    title: str
+    language: str = "en-US"
+    aspect_ratio: VideoAspect = VideoAspect.landscape
+    fps: int = Field(default=30, ge=1, le=120)
+
+    @field_validator("title", "language")
+    @classmethod
+    def require_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
+
+
+class ScriptSpec(ProjectModel):
+    subject: str
+    script: str = ""
+    search_terms: list[str] = Field(default_factory=list)
+
+    @field_validator("subject")
+    @classmethod
+    def require_subject(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
+
+    @field_validator("script")
+    @classmethod
+    def normalize_script(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("search_terms")
+    @classmethod
+    def normalize_terms(cls, value: list[str]) -> list[str]:
+        return [term.strip() for term in value if term.strip()]
+
+
+class NarrationMode(str, Enum):
+    tts = "tts"
+    file = "file"
+
+
+class NarrationSpec(ProjectModel):
+    mode: NarrationMode = NarrationMode.tts
+    file: str | None = None
+    voice_name: str = ""
+    voice_rate: float = Field(default=1.0, ge=0)
+    voice_volume: float = Field(default=1.0, ge=0)
+
+    @field_validator("file", "voice_name")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @model_validator(mode="after")
+    def validate_file_mode(self) -> NarrationSpec:
+        if self.mode == NarrationMode.file and not self.file:
+            raise ValueError("file is required when narration mode is file")
+        return self
+
+
+class ProductionConfig(ProjectModel):
+    video_source: VideoSource = VideoSource.pexels
+    video_style_preset: Literal[
+        "auto",
+        "stock_clean",
+        "cinematic_vlog",
+        "real_life_documentary",
+        "minimal_business",
+        "shorts_fast",
+    ] = "auto"
+    video_clip_duration: int = Field(default=5, ge=1)
+    match_materials_to_script: bool = True
+    match_local_clips_to_script_timing: bool = False
+    local_materials: list[str] = Field(default_factory=list)
+    subtitle_enabled: bool = True
+    reference_mode_enabled: bool = False
+    reference_image_sources: list[str] = Field(
+        default_factory=lambda: ["pexels", "pixabay", "wikimedia"]
+    )
+    reference_image_count: int = Field(default=8, ge=1, le=20)
+    reference_effect_preset: Literal["old_paper_explained"] = "old_paper_explained"
+    video_count: int = Field(default=1, ge=1)
+    video_concat_mode: VideoConcatMode = VideoConcatMode.sequential
+    video_transition_mode: VideoTransitionMode | None = None
+    n_threads: int = Field(default=2, ge=1)
+
+    @field_validator("local_materials")
+    @classmethod
+    def normalize_materials(cls, value: list[str]) -> list[str]:
+        return [item.strip() for item in value if item.strip()]
+
+    @field_validator("reference_image_sources")
+    @classmethod
+    def validate_reference_sources(cls, value: list[str]) -> list[str]:
+        supported = {"pexels", "pixabay", "wikimedia"}
+        normalized = [item.strip().lower() for item in value]
+        invalid = [item for item in normalized if item not in supported]
+        if invalid:
+            raise ValueError(
+                "reference_image_sources must contain only pexels, pixabay, or wikimedia"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_local_materials(self) -> ProductionConfig:
+        if self.video_source == VideoSource.local and not self.local_materials:
+            raise ValueError("local_materials is required when video_source is local")
+        return self
+
+
+class VisualType(str, Enum):
+    broll = "broll"
+    data = "data"
+    document = "document"
+    text = "text"
+
+
+class VisualPurpose(str, Enum):
+    context = "context"
+    emotion = "emotion"
+    example = "example"
+    evidence = "evidence"
+    explain = "explain"
+    compare = "compare"
+    emphasis = "emphasis"
+    transition = "transition"
+
+
+class JobStatus(str, Enum):
+    planned = "planned"
+    queued = "queued"
+    processing = "processing"
+    retrying = "retrying"
+    ready = "ready"
+    failed = "failed"
+
+
+class VisualCue(ProjectModel):
+    id: str
+    order: int = Field(ge=1)
+    start: float | None = Field(default=None, ge=0)
+    end: float | None = Field(default=None, ge=0)
+    narration: str = ""
+    visual_type: VisualType
+    purpose: VisualPurpose
+    status: JobStatus = JobStatus.planned
+    notes: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("id")
+    @classmethod
+    def require_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def validate_timing(self) -> VisualCue:
+        if self.start is not None and self.end is not None and self.end < self.start:
+            raise ValueError("end must be greater than or equal to start")
+        return self
+
+
+class AssetJob(ProjectModel):
+    id: str
+    scene_id: str
+    kind: str
+    provider: str | None = None
+    query: str | None = None
+    source: str | None = None
+    output: str | None = None
+    status: JobStatus = JobStatus.planned
+    attempts: int = Field(default=0, ge=0)
+    error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RenderJob(ProjectModel):
+    id: str
+    scene_id: str
+    input_asset: str | None = None
+    output: str | None = None
+    duration: float | None = Field(default=None, ge=0)
+    status: JobStatus = JobStatus.planned
+    attempts: int = Field(default=0, ge=0)
+    error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectSpec(ProjectModel):
+    schema_version: Literal["1.0"]
+    project: ProjectMetadata
+    script: ScriptSpec
+    narration: NarrationSpec = Field(default_factory=NarrationSpec)
+    production: ProductionConfig = Field(default_factory=ProductionConfig)
+    visual_cues: list[VisualCue] = Field(default_factory=list)
+    asset_jobs: list[AssetJob] = Field(default_factory=list)
+    render_jobs: list[RenderJob] = Field(default_factory=list)
+
+
+class ProjectStatus(str, Enum):
+    processing = "processing"
+    complete = "complete"
+    failed = "failed"
+
+
+class ProjectManifest(ProjectModel):
+    schema_version: Literal["1.0"]
+    project_title: str
+    project_file: str
+    task_id: str
+    status: ProjectStatus
+    fps: int
+    aspect_ratio: VideoAspect
+    created_at: datetime
+    updated_at: datetime
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None

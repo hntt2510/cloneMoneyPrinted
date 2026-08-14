@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "project": {
+    "title": "The 5-Year Medicare Gap",
+    "language": "en-US",
+    "aspect_ratio": "16:9",
+    "fps": 30
+  },
+  "script": {
+    "subject": "The five-year health insurance gap before Medicare",
+    "script": "Most Americans become eligible for Medicare at age 65...",
+    "search_terms": []
+  },
+  "narration": {
+    "mode": "tts",
+    "voice_name": "",
+    "voice_rate": 1.0,
+    "voice_volume": 1.0
+  },
+  "production": {
+    "video_source": "pexels",
+    "video_style_preset": "minimal_business",
+    "video_clip_duration": 5,
+    "match_materials_to_script": true,
+    "match_local_clips_to_script_timing": false,
+    "local_materials": [],
+    "subtitle_enabled": true,
+    "reference_mode_enabled": false,
+    "reference_image_sources": ["pexels", "pixabay", "wikimedia"],
+    "reference_image_count": 8,
+    "reference_effect_preset": "old_paper_explained",
+    "video_count": 1,
+    "video_concat_mode": "sequential",
+    "video_transition_mode": null,
+    "n_threads": 2
+  },
+  "visual_cues": [],
+  "asset_jobs": [],
+  "render_jobs": []
+}
