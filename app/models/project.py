@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
@@ -171,6 +171,12 @@ class JobStatus(str, Enum):
     failed = "failed"
 
 
+class ProjectStatus(str, Enum):
+    processing = "processing"
+    complete = "complete"
+    failed = "failed"
+
+
 class BrollPayload(ProjectModel):
     search_query: str
     fallback_queries: list[str] = Field(default_factory=list)
@@ -243,6 +249,79 @@ class TextPayload(ProjectModel):
         if len(value) > 120:
             raise ValueError("text payload is too long")
         return value
+
+
+class BrollCandidate(ProjectModel):
+    id: str
+    provider: Literal["pexels", "pixabay", "coverr"]
+    provider_asset_id: str
+    query: str
+    download_url: str
+    source_url: str | None = None
+    duration: float = Field(gt=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    fps: float | None = None
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    author: str | None = None
+    license: str | None = None
+    score: float = 0.0
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("id", "provider_asset_id", "query", "download_url")
+    @classmethod
+    def require_non_empty(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
+
+
+class SelectedBrollAsset(ProjectModel):
+    scene_id: str
+    provider: Literal["pexels", "pixabay", "coverr"]
+    provider_asset_id: str
+    query_used: str
+    candidate_id: str
+    source_url: str | None = None
+    download_url: str
+    source_duration: float = Field(gt=0)
+    trim_start: float = Field(ge=0)
+    trim_end: float = Field(gt=0)
+    scene_duration: float = Field(gt=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    score: float = 0.0
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+    source_file: str
+    rendered_file: str
+    license: str | None = None
+    author: str | None = None
+    status: JobStatus = JobStatus.ready
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("scene_id", "provider_asset_id", "query_used", "candidate_id", "download_url", "source_file", "rendered_file")
+    @classmethod
+    def require_non_empty(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
+
+
+class BrollManifest(ProjectModel):
+    schema_version: Literal["1.0"] = "1.0"
+    project_title: str
+    task_id: str
+    status: ProjectStatus = ProjectStatus.complete
+    assets: list[SelectedBrollAsset] = Field(default_factory=list)
+    failed_scenes: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    error: str | None = None
 
 
 class VisualCue(ProjectModel):
@@ -433,12 +512,6 @@ class ProjectSpec(ProjectModel):
                 if orders_for_group != list(range(min(orders_for_group), max(orders_for_group) + 1)):
                     raise ValueError("visual groups must refer to contiguous cues")
         return self
-
-
-class ProjectStatus(str, Enum):
-    processing = "processing"
-    complete = "complete"
-    failed = "failed"
 
 
 class ProjectManifest(ProjectModel):

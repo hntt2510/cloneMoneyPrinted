@@ -252,5 +252,39 @@ class TestCli(unittest.TestCase):
         self.assertNotEqual(cm.exception.code, 0)
 
 
+    def test_acquire_broll_only_requires_project(self):
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--acquire-broll-only"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_acquire_broll_only_conflicts(self):
+        # Conflicts with validate-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--validate-only", "--acquire-broll-only"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with plan-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--plan-only", "--acquire-broll-only"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with stop-at
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--acquire-broll-only", "--stop-at", "video"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_run_cli_dispatches_acquire_broll_only(self):
+        with patch("cli.load_project_spec") as mock_load, \
+             patch("cli.preflight_project"), \
+             patch("app.services.broll_runner.run_broll_acquisition", return_value={"ready_count": 2}) as mock_runner, \
+             patch("builtins.print") as mock_print:
+            code = cli.run_cli(["--project", "project.json", "--acquire-broll-only", "--task-id", "broll-task-1"])
+
+        self.assertEqual(code, 0)
+        mock_runner.assert_called_once_with("project.json", task_id="broll-task-1")
+        mock_print.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
+
