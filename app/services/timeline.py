@@ -267,7 +267,7 @@ def acquire_timing_file(
             voice.create_subtitle(sub_maker=sub_maker, text=script, subtitle_file=str(target))
             cues = parse_srt_file(target)
             return str(target), cues
-        except (TimelineError, OSError):
+        except Exception:
             target.unlink(missing_ok=True)
 
     try:
@@ -276,7 +276,7 @@ def acquire_timing_file(
             subtitle_correct(subtitle_file=str(target), video_script=script)
             cues = parse_srt_file(target)
             return str(target), cues
-    except (TimelineError, OSError, RuntimeError):
+    except Exception:
         target.unlink(missing_ok=True)
 
     cues = _write_fallback_srt(target, script, max(duration, 0.001))
