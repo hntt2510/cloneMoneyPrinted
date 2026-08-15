@@ -222,6 +222,7 @@ class DocumentPayload(ProjectModel):
     source_hint: str
     highlight_target: str | None = None
     evidence_required: bool = True
+    source_ids: list[str] = Field(default_factory=list)
 
     @field_validator("search_query", "source_hint", "highlight_target")
     @classmethod
@@ -232,6 +233,11 @@ class DocumentPayload(ProjectModel):
         if not value:
             raise ValueError("document intent text must not be empty")
         return value
+
+    @field_validator("source_ids")
+    @classmethod
+    def validate_source_ids(cls, value: list[str]) -> list[str]:
+        return [" ".join(item.split()).strip() for item in value if item and item.strip()]
 
 
 class TextPayload(ProjectModel):

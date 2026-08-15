@@ -1,0 +1,198 @@
+from __future__ import annotations
+
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+import pymupdf
+
+from app.models.evidence import (
+    EvidenceBBox,
+    EvidenceCandidate,
+    EvidenceSource,
+    EvidenceSourceKind,
+    EvidenceSourceTrust,
+)
+from app.models.project import DocumentPayload, VisualCue, VisualPurpose, VisualType
+from app.services.evidence_selector import (
+    extract_webpage_evidence_passage,
+    inspect_and_extract_pdf_evidence,
+    rank_and_select_candidate,
+    score_evidence_candidate,
+)
+
+
+def _create_synthetic_test_pdf(dest_path: Path) -> Path:
+    """Create a 3-page synthetic PDF for deterministic test evaluation."""
+    doc = pymupdf.open()
+
+    # Page 1: General intro
+    p1 = doc.new_page(width=612, height=792)
+    p1.insert_text((50, 100), "CHAPTER 1: Overview of Federal Benefits", fontsize=16)
+    p1.insert_text((50, 140), "This report outlines key retirement policy considerations.", fontsize=12)
+
+    # Page 2: Target evidence
+    p2 = doc.new_page(width=612, height=792)
+    p2.insert_text((50, 100), "CHAPTER 2: Medicare and Social Security Rules", fontsize=16)
+    p2.insert_text((50, 140), "Medicare eligibility generally begins at age 65 for qualified individuals.", fontsize=12)
+    p2.insert_text((50, 170), "Early claiming before full retirement age results in permanent reduction.", fontsize=12)
+
+    # Page 3: Appendix
+    p3 = doc.new_page(width=612, height=792)
+    p3.insert_text((50, 100), "APPENDIX A: Glossary and Historical Data", fontsize=16)
+    p3.insert_text((50, 140), "Historical indices from 1980 through 2024.", fontsize=12)
+
+    doc.save(str(dest_path))
+    doc.close()
+    return dest_path
+
+
+class TestEvidenceSelector(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="evidence_sel_test_")
+        self.pdf_path = Path(self.temp_dir) / "sample_policy.pdf"
+        _create_synthetic_test_pdf(self.pdf_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_pdf_exact_target_match_and_bounding_rect(self):
+        p_num, p_count, matched_txt, m_type, bboxes = inspect_and_extract_pdf_evidence(
+            pdf_path=self.pdf_path,
+            highlight_target="age 65",
+            search_query="medicare eligibility age",
+        )
+        self.assertEqual(p_count, 3)
+        self.assertEqual(p_num, 2)  # Page 2 contains "age 65"
+        self.assertEqual(m_type, "exact_target")
+        self.assertIn("Medicare eligibility generally begins at age 65", matched_txt)
+        self.assertTrue(len(bboxes) >= 1)
+        b = bboxes[0]
+        self.assertTrue(0.0 <= b.x <= 1.0)
+        self.assertTrue(0.0 <= b.y <= 1.0)
+        self.assertTrue(0.0 < b.width <= 1.0)
+        self.assertTrue(0.0 < b.height <= 1.0)
+
+    def test_pdf_query_relevance_fallback(self):
+        # Query matching page 1 without exact highlight target
+        p_num, p_count, matched_txt, m_type, bboxes = inspect_and_extract_pdf_evidence(
+            pdf_path=self.pdf_path,
+            highlight_target=None,
+            search_query="overview of federal benefits report considerations",
+        )
+        self.assertEqual(p_num, 1)
+        self.assertEqual(m_type, "query_relevance")
+        self.assertEqual(len(bboxes), 0)  # No fake bounding box
+
+    def test_webpage_exact_excerpt_extraction(self):
+        html_doc = """
+        <html><head><title>IRS Contribution Limits</title></head>
+        <body>
+            <p>For tax year 2026, the IRA contribution limit is $7,000.</p>
+            <p>Catch-up contributions allow an additional $1,000 for individuals aged 50 and older.</p>
+        </body></html>
+        """
+        title, pub, full_txt, snippet, m_type = extract_webpage_evidence_passage(
+            html_text=html_doc,
+            source_url="https://www.irs.gov/retirement/limits",
+            highlight_target="$7,000",
+            search_query="IRA contribution limit 2026",
+        )
+        self.assertEqual(m_type, "exact_target")
+        self.assertIn("the IRA contribution limit is $7,000", snippet)
+        # Verify exact excerpt words are preserved without modification
+        self.assertEqual(snippet, "For tax year 2026, the IRA contribution limit is $7,000.")
+
+    def test_evidence_scoring_and_ranking(self):
+        cue = VisualCue(
+            id="S001",
+            order=1,
+            visual_type=VisualType.document,
+            purpose=VisualPurpose.evidence,
+            start=0.0,
+            end=2.0,
+            narration="Medicare eligibility begins at age 65.",
+            payload={"search_query": "Medicare eligibility age 65", "source_hint": "SSA Report", "highlight_target": "age 65"},
+        )
+        payload = DocumentPayload.model_validate(cue.payload)
+
+        # Candidate A: Official source with exact target match
+        src_a = EvidenceSource(
+            id="SRC_OFFICIAL",
+            kind=EvidenceSourceKind.pdf,
+            url="https://ssa.gov/medicare.pdf",
+            title="Official Medicare Eligibility Rules",
+            publisher="Social Security Administration",
+            trust=EvidenceSourceTrust.official,
+            tags=["medicare", "age 65", "eligibility"],
+        )
+        cand_a = EvidenceCandidate(
+            id="A_p2",
+            source_id="SRC_OFFICIAL",
+            kind=EvidenceSourceKind.pdf,
+            title=src_a.title,
+            publisher=src_a.publisher,
+            trust=src_a.trust,
+            query=payload.search_query,
+            page_number=2,
+            matched_text="Medicare eligibility generally begins at age 65",
+            match_type="exact_target",
+            highlight_boxes=[EvidenceBBox(x=0.1, y=0.15, width=0.3, height=0.05)],
+            score=0.0,
+        )
+        score_a, breakdown_a = score_evidence_candidate(
+            cue=cue, payload=payload, source=src_a, match_type="exact_target", matched_text=cand_a.matched_text
+        )
+        cand_a.score = score_a
+        cand_a.score_breakdown = breakdown_a
+
+        # Candidate B: Licensed generic source without exact target
+        src_b = EvidenceSource(
+            id="SRC_GENERIC",
+            kind=EvidenceSourceKind.image,
+            url="https://stock.example.com/building.jpg",
+            title="Social Security Administration Headquarters Building Exterior",
+            publisher="Stock Photography Corp",
+            trust=EvidenceSourceTrust.licensed,
+            tags=["building", "exterior", "government"],
+        )
+        cand_b = EvidenceCandidate(
+            id="B_img",
+            source_id="SRC_GENERIC",
+            kind=EvidenceSourceKind.image,
+            title=src_b.title,
+            publisher=src_b.publisher,
+            trust=src_b.trust,
+            query=payload.search_query,
+            matched_text=src_b.title,
+            match_type="query_relevance",
+            highlight_boxes=[],
+            score=0.0,
+        )
+        score_b, breakdown_b = score_evidence_candidate(
+            cue=cue, payload=payload, source=src_b, match_type="query_relevance", matched_text=cand_b.matched_text
+        )
+        cand_b.score = score_b
+        cand_b.score_breakdown = breakdown_b
+
+        # Candidate A must strictly outscore Candidate B
+        self.assertGreater(cand_a.score, cand_b.score)
+
+        selected, fail_reason = rank_and_select_candidate([cand_b, cand_a], evidence_required=True)
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.source_id, "SRC_OFFICIAL")
+
+    def test_required_evidence_fails_when_no_candidates(self):
+        selected, fail_reason = rank_and_select_candidate([], evidence_required=True)
+        self.assertIsNone(selected)
+        self.assertIn("No evidence sources available", fail_reason)
+
+    def test_optional_evidence_skips_when_no_candidates(self):
+        selected, fail_reason = rank_and_select_candidate([], evidence_required=False)
+        self.assertIsNone(selected)
+        self.assertIn("optional evidence", fail_reason)
+
+
+if __name__ == "__main__":
+    unittest.main()
