@@ -20,11 +20,14 @@ from app.models.motion import RenderedMotionAsset
 from app.models.project import (
     DocumentPayload,
     JobStatus,
+    NarrationMode,
     ProjectManifest,
     ProjectSpec,
     ProjectStatus,
     RenderJob,
+    TimelinePlan,
     VisualCue,
+    VisualPlan,
     VisualPurpose,
     VisualType,
 )
@@ -134,8 +137,18 @@ def _is_planning_reusable(
     task_dir: Path,
     expected_fingerprint: str,
     project_spec: ProjectSpec,
+    has_prior_ownership: bool = False,
 ) -> tuple[bool, str]:
-    """Check whether existing planning stage artifacts can be reused safely."""
+    """Check whether existing planning stage artifacts can be reused safely.
+
+    Strictly requires trustworthy prior ownership metadata matching expected_fingerprint,
+    valid project.planned.json, visual_plan.json, timeline.json, and existing/non-empty
+    audio and timing files.
+    """
+    if not has_prior_ownership:
+        return False, "No trustworthy prior project fingerprint ownership record found in task directory"
+
+    # 2. Check artifact files existence
     planned_file = task_dir / "project.planned.json"
     visual_plan_file = task_dir / "visual_plan.json"
     timeline_file = task_dir / "timeline.json"
@@ -143,6 +156,7 @@ def _is_planning_reusable(
     if not (planned_file.exists() and visual_plan_file.exists() and timeline_file.exists()):
         return False, "Planning artifacts missing"
 
+    # 3. Parse and validate project.planned.json
     try:
         planned_project = load_project_spec(planned_file)
     except Exception as exc:
@@ -154,24 +168,46 @@ def _is_planning_reusable(
     if len(planned_project.visual_cues) != len(planned_project.timeline_cues):
         return False, "Mismatch between visual cues and timeline cues count"
 
-    # Check audio file
-    if not planned_project.narration.file:
-        return False, "No narration audio file referenced in planning"
-    audio_path = Path(planned_project.narration.file)
-    if not (audio_path.exists() and audio_path.stat().st_size > 0):
-        return False, f"Narration audio file is missing or empty: {audio_path}"
-
-    # Check timing file
-    if planned_project.narration.timing_file:
-        timing_path = Path(planned_project.narration.timing_file)
-        if not (timing_path.exists() and timing_path.stat().st_size > 0):
-            return False, f"Timing file is missing or empty: {timing_path}"
-
     # Verify project parameters match
     if planned_project.project.fps != project_spec.project.fps:
         return False, "Project FPS mismatch"
     if planned_project.project.aspect_ratio != project_spec.project.aspect_ratio:
         return False, "Project aspect ratio mismatch"
+
+    # 4. Parse and validate visual_plan.json
+    try:
+        vplan = VisualPlan.model_validate_json(visual_plan_file.read_text(encoding="utf-8"))
+        if not vplan.cues:
+            return False, "visual_plan.json has no cues"
+    except Exception as exc:
+        return False, f"visual_plan.json validation failure: {exc}"
+
+    # 5. Parse and validate timeline.json and runtime audio/timing files
+    try:
+        tplan = TimelinePlan.model_validate_json(timeline_file.read_text(encoding="utf-8"))
+        if not tplan.cues:
+            return False, "timeline.json has no cues"
+    except Exception as exc:
+        return False, f"timeline.json validation failure: {exc}"
+
+    if not tplan.audio_file:
+        return False, "timeline.json does not reference an audio file"
+    audio_path = Path(tplan.audio_file)
+    if not (audio_path.exists() and audio_path.is_file() and audio_path.stat().st_size > 0):
+        return False, f"Narration audio file in timeline.json is missing or empty: {audio_path}"
+
+    if not tplan.timing_file:
+        return False, "timeline.json does not reference a timing file"
+    timing_path = Path(tplan.timing_file)
+    if not (timing_path.exists() and timing_path.is_file() and timing_path.stat().st_size > 0):
+        return False, f"Timing file in timeline.json is missing or empty: {timing_path}"
+
+    # For narration mode = file, validate original input file if specified
+    if project_spec.narration.mode == NarrationMode.file:
+        if project_spec.narration.file:
+            src_audio = Path(project_spec.narration.file)
+            if not (src_audio.exists() and src_audio.is_file() and src_audio.stat().st_size > 0):
+                return False, f"Source narration audio file is missing or empty: {src_audio}"
 
     return True, "Valid planning artifacts present"
 
@@ -180,6 +216,7 @@ def _render_text_fallback_scene(
     cue: VisualCue,
     project: ProjectSpec,
     task_dir: Path,
+    existing_doc_job: RenderJob | None = None,
 ) -> tuple[RenderJob, RenderedMotionAsset | None, str | None]:
     """Deterministically render G06 TEXT motion fallback for an optional DOCUMENT cue."""
     motion_dir = task_dir / "motion"
@@ -200,7 +237,6 @@ def _render_text_fallback_scene(
     start_frame = round((cue.start or 0.0) * fps)
     end_frame = round((cue.end or 0.0) * fps)
     duration_frames = max(1, end_frame - start_frame)
-    aspect = project.project.aspect_ratio
 
     fallback_cue = VisualCue(
         id=cue.id,
@@ -213,11 +249,21 @@ def _render_text_fallback_scene(
         payload={"headline": headline, "subheadline": None},
     )
 
+    doc_job_id = existing_doc_job.id if existing_doc_job else None
+    doc_job_status = (
+        existing_doc_job.status.value
+        if (existing_doc_job and hasattr(existing_doc_job.status, "value"))
+        else (str(existing_doc_job.status) if existing_doc_job else None)
+    )
+    doc_job_err = sanitize_error_message(existing_doc_job.error) if existing_doc_job else None
+
+    fallback_job_id = f"RF{cue.order:03d}"
+
     try:
         scene_spec = normalize_motion_spec(fallback_cue, project)
         rendered_asset = render_scene_motion(scene_spec, task_directory=task_dir)
         render_job = RenderJob(
-            id=f"job_fallback_{cue.id}",
+            id=fallback_job_id,
             scene_id=cue.id,
             kind="text_fallback",
             status=JobStatus.ready,
@@ -226,6 +272,9 @@ def _render_text_fallback_scene(
             metadata={
                 "fallback_from": "document",
                 "fallback_reason": "optional evidence unavailable",
+                "original_document_render_job_id": doc_job_id,
+                "original_document_render_job_status": doc_job_status,
+                "original_document_error": doc_job_err,
                 "spec_fingerprint": rendered_asset.metadata.get("spec_fingerprint"),
                 "status_history": ["planned", "processing", "ready"],
             },
@@ -235,7 +284,7 @@ def _render_text_fallback_scene(
         err_msg = f"TEXT fallback rendering failed for scene {cue.id}: {exc}"
         logger.error(err_msg)
         render_job = RenderJob(
-            id=f"job_fallback_{cue.id}",
+            id=fallback_job_id,
             scene_id=cue.id,
             kind="text_fallback",
             status=JobStatus.failed,
@@ -243,10 +292,85 @@ def _render_text_fallback_scene(
             metadata={
                 "fallback_from": "document",
                 "fallback_reason": "optional evidence unavailable",
+                "original_document_render_job_id": doc_job_id,
+                "original_document_render_job_status": doc_job_status,
+                "original_document_error": doc_job_err,
                 "status_history": ["planned", "processing", "failed"],
             },
         )
         return render_job, None, err_msg
+
+
+def resolve_final_render_job(scene_id: str, render_jobs: list[RenderJob]) -> RenderJob | None:
+    """Resolve the definitive RenderJob for a scene taking fallback precedence into account."""
+    scene_jobs = [j for j in render_jobs if j.scene_id == scene_id]
+    if not scene_jobs:
+        return None
+
+    # Priority 1: Ready text_fallback job (from successful fallback recovery)
+    rf_ready = next((j for j in scene_jobs if j.kind == "text_fallback" and j.status == JobStatus.ready), None)
+    if rf_ready:
+        return rf_ready
+
+    # Priority 2: Ready primary stage job (motion / document)
+    primary_ready = next((j for j in scene_jobs if j.kind != "text_fallback" and j.status == JobStatus.ready), None)
+    if primary_ready:
+        return primary_ready
+
+    # Priority 3: Any ready job
+    any_ready = next((j for j in scene_jobs if j.status == JobStatus.ready), None)
+    if any_ready:
+        return any_ready
+
+    # Priority 4: Failed text_fallback job
+    rf_failed = next((j for j in scene_jobs if j.kind == "text_fallback" and j.status == JobStatus.failed), None)
+    if rf_failed:
+        return rf_failed
+
+    # Priority 5: Failed primary job
+    failed_any = next((j for j in scene_jobs if j.status == JobStatus.failed), None)
+    if failed_any:
+        return failed_any
+
+    return scene_jobs[-1]
+
+
+def _persist_execution_manifest_snapshot(
+    task_dir: Path,
+    project_title: str,
+    run_task_id: str,
+    source_project_file: str,
+    project_fingerprint: str,
+    source_registry_sha256: str | None,
+    stages: list[StageExecutionRecord],
+    scenes: list[SceneExecutionRecord],
+    progress_percent: int,
+    status: ExecutionStageStatus,
+    created_at: str,
+    error: str | None = None,
+    outputs: dict[str, Any] | None = None,
+) -> ExecutionManifest:
+    """Atomically persist execution manifest snapshot to disk."""
+    manifest = ExecutionManifest(
+        schema_version="1.0",
+        project_title=project_title,
+        task_id=run_task_id,
+        source_project_file=source_project_file,
+        source_project_fingerprint=project_fingerprint,
+        source_registry_sha256=source_registry_sha256,
+        status=status,
+        progress_percent=progress_percent,
+        stages=list(stages),
+        scenes=list(scenes),
+        ready_scene_count=sum(1 for s in scenes if s.status == "ready"),
+        failed_scene_count=sum(1 for s in scenes if s.status == "failed"),
+        created_at=created_at,
+        updated_at=_utc_now(),
+        error=error,
+        outputs=outputs or {},
+    )
+    _atomic_write_json(task_dir / "execution_manifest.json", manifest.model_dump(mode="json"))
+    return manifest
 
 
 def run_all_project(
@@ -257,14 +381,13 @@ def run_all_project(
     """Execute end-to-end autonomous research and asset generation pipeline (G08).
 
     Stages:
-    1. Preflight
-    2. Planning
-    3. B-roll Acquisition
-    4. Motion Rendering
-    5. Evidence Acquisition
-    6. Fallback (Optional DOCUMENT -> TEXT)
-    7. Final Validation
-    8. Finalize & Manifest Reconciliation
+    1. Preflight (5%)
+    2. Planning (25%)
+    3. B-roll Acquisition (45%)
+    4. Motion Rendering (65%)
+    5. Evidence Acquisition (85%)
+    6. Fallback (Optional DOCUMENT -> TEXT) (95%)
+    7. Final Validation & Manifest Reconciliation (100%)
     """
     created_at = _utc_now()
 
@@ -303,8 +426,49 @@ def run_all_project(
 
     _notify("preflight", "processing", 5)
 
-    # Check for same-task fingerprint mismatch
+    # Check task ownership and fingerprint mismatch
+    orchestrator_state_file = task_dir / "orchestrator_state.json"
     existing_exec_manifest = task_dir / "execution_manifest.json"
+    prior_ownership_verified = False
+
+    if orchestrator_state_file.exists():
+        try:
+            saved_state = json.loads(orchestrator_state_file.read_text(encoding="utf-8"))
+            saved_fp = saved_state.get("source_project_fingerprint")
+            if saved_fp and saved_fp != project_fingerprint:
+                err = f"Task '{run_task_id}' belongs to a different project input (fingerprint mismatch). Use a new task ID."
+                logger.error(err)
+                stages_records.append(
+                    StageExecutionRecord(
+                        name="preflight",
+                        status=ExecutionStageStatus.failed,
+                        started_at=created_at,
+                        completed_at=_utc_now(),
+                        error=err,
+                    )
+                )
+                _persist_execution_manifest_snapshot(
+                    task_dir=task_dir,
+                    project_title=project_spec.project.title,
+                    run_task_id=run_task_id,
+                    source_project_file=source_project_file or str(task_dir / "project.json"),
+                    project_fingerprint=project_fingerprint,
+                    source_registry_sha256=source_registry_sha256,
+                    stages=stages_records,
+                    scenes=[],
+                    progress_percent=5,
+                    status=ExecutionStageStatus.failed,
+                    created_at=created_at,
+                    error=err,
+                )
+                raise ProjectRunError(err)
+            elif saved_fp and saved_fp == project_fingerprint:
+                prior_ownership_verified = True
+        except ProjectRunError:
+            raise
+        except Exception:
+            pass
+
     if existing_exec_manifest.exists():
         try:
             saved_exec = json.loads(existing_exec_manifest.read_text(encoding="utf-8"))
@@ -321,29 +485,38 @@ def run_all_project(
                         error=err,
                     )
                 )
-                manifest = ExecutionManifest(
-                    schema_version="1.0",
+                _persist_execution_manifest_snapshot(
+                    task_dir=task_dir,
                     project_title=project_spec.project.title,
-                    task_id=run_task_id,
+                    run_task_id=run_task_id,
                     source_project_file=source_project_file or str(task_dir / "project.json"),
-                    source_project_fingerprint=project_fingerprint,
+                    project_fingerprint=project_fingerprint,
                     source_registry_sha256=source_registry_sha256,
-                    status=ExecutionStageStatus.failed,
-                    progress_percent=5,
                     stages=stages_records,
                     scenes=[],
-                    ready_scene_count=0,
-                    failed_scene_count=0,
+                    progress_percent=5,
+                    status=ExecutionStageStatus.failed,
                     created_at=created_at,
-                    updated_at=_utc_now(),
                     error=err,
                 )
-                _atomic_write_json(task_dir / "execution_manifest.json", manifest.model_dump(mode="json"))
                 raise ProjectRunError(err)
+            elif saved_fp and saved_fp == project_fingerprint:
+                prior_ownership_verified = True
         except ProjectRunError:
             raise
         except Exception:
             pass
+
+    # Persist orchestrator ownership state
+    state_data = {
+        "schema_version": "1.0",
+        "task_id": run_task_id,
+        "source_project_fingerprint": project_fingerprint,
+        "source_project_file": source_project_file or str(source_path or (task_dir / "project.json")),
+        "created_at": created_at,
+        "updated_at": _utc_now(),
+    }
+    _atomic_write_json(orchestrator_state_file, state_data)
 
     # Run preflight validation
     try:
@@ -369,24 +542,20 @@ def run_all_project(
                 error=err,
             )
         )
-        manifest = ExecutionManifest(
-            schema_version="1.0",
+        _persist_execution_manifest_snapshot(
+            task_dir=task_dir,
             project_title=project_spec.project.title,
-            task_id=run_task_id,
+            run_task_id=run_task_id,
             source_project_file=source_project_file or str(task_dir / "project.json"),
-            source_project_fingerprint=project_fingerprint,
+            project_fingerprint=project_fingerprint,
             source_registry_sha256=source_registry_sha256,
-            status=ExecutionStageStatus.failed,
-            progress_percent=5,
             stages=stages_records,
             scenes=[],
-            ready_scene_count=0,
-            failed_scene_count=0,
+            progress_percent=5,
+            status=ExecutionStageStatus.failed,
             created_at=created_at,
-            updated_at=_utc_now(),
             error=err,
         )
-        _atomic_write_json(task_dir / "execution_manifest.json", manifest.model_dump(mode="json"))
         raise ProjectRunError(err) from exc
 
     # Save normalized project
@@ -395,10 +564,27 @@ def run_all_project(
         source_path = task_dir / "project.json"
         save_project_spec(project_spec, source_path)
 
+    # Preflight snapshot
+    _persist_execution_manifest_snapshot(
+        task_dir=task_dir,
+        project_title=project_spec.project.title,
+        run_task_id=run_task_id,
+        source_project_file=source_project_file or str(source_path),
+        project_fingerprint=project_fingerprint,
+        source_registry_sha256=source_registry_sha256,
+        stages=stages_records,
+        scenes=[],
+        progress_percent=5,
+        status=ExecutionStageStatus.processing,
+        created_at=created_at,
+    )
+
     # --- 2. PLANNING ---
     _notify("planning", "processing", 25)
     planning_start = _utc_now()
-    can_reuse_plan, reuse_reason = _is_planning_reusable(task_dir, project_fingerprint, project_spec)
+    can_reuse_plan, reuse_reason = _is_planning_reusable(
+        task_dir, project_fingerprint, project_spec, has_prior_ownership=prior_ownership_verified
+    )
 
     try:
         if can_reuse_plan:
@@ -446,24 +632,20 @@ def run_all_project(
                 error=err,
             )
         )
-        manifest = ExecutionManifest(
-            schema_version="1.0",
+        _persist_execution_manifest_snapshot(
+            task_dir=task_dir,
             project_title=project_spec.project.title,
-            task_id=run_task_id,
+            run_task_id=run_task_id,
             source_project_file=source_project_file or str(source_path),
-            source_project_fingerprint=project_fingerprint,
+            project_fingerprint=project_fingerprint,
             source_registry_sha256=source_registry_sha256,
-            status=ExecutionStageStatus.failed,
-            progress_percent=25,
             stages=stages_records,
             scenes=[],
-            ready_scene_count=0,
-            failed_scene_count=0,
+            progress_percent=25,
+            status=ExecutionStageStatus.failed,
             created_at=created_at,
-            updated_at=_utc_now(),
             error=err,
         )
-        _atomic_write_json(task_dir / "execution_manifest.json", manifest.model_dump(mode="json"))
         return {
             "status": "failed",
             "task_id": run_task_id,
@@ -472,6 +654,21 @@ def run_all_project(
             "execution_manifest": str((task_dir / "execution_manifest.json").resolve()),
             "error": err,
         }
+
+    # Planning snapshot
+    _persist_execution_manifest_snapshot(
+        task_dir=task_dir,
+        project_title=project_spec.project.title,
+        run_task_id=run_task_id,
+        source_project_file=source_project_file or str(source_path),
+        project_fingerprint=project_fingerprint,
+        source_registry_sha256=source_registry_sha256,
+        stages=stages_records,
+        scenes=[],
+        progress_percent=25,
+        status=ExecutionStageStatus.processing,
+        created_at=created_at,
+    )
 
     # --- 3. B-ROLL ACQUISITION ---
     _notify("broll", "processing", 45)
@@ -493,11 +690,12 @@ def run_all_project(
                     started_at=broll_start,
                     completed_at=_utc_now(),
                     input_file=str((task_dir / "project.planned.json").resolve()),
-                    output_file=str((task_dir / "project.assets.json").resolve()),
-                    manifest_file=str((task_dir / "broll_manifest.json").resolve()),
-                    ready_count=broll_res.get("acquired_assets_count", 0),
-                    failed_count=broll_res.get("failed_scenes_count", 0),
+                    output_file=broll_res.get("broll_manifest_file") or str((task_dir / "broll_manifest.json").resolve()),
+                    manifest_file=broll_res.get("broll_manifest_file") or str((task_dir / "broll_manifest.json").resolve()),
+                    ready_count=broll_res.get("ready_count", 0),
+                    failed_count=broll_res.get("failed_count", 0),
                     error=sanitize_error_message(broll_res.get("error")),
+                    metadata={"assets_project_file": broll_res.get("assets_project_file")},
                 )
             )
         except Exception as exc:
@@ -526,6 +724,21 @@ def run_all_project(
             )
         )
 
+    # B-roll snapshot
+    _persist_execution_manifest_snapshot(
+        task_dir=task_dir,
+        project_title=project_spec.project.title,
+        run_task_id=run_task_id,
+        source_project_file=source_project_file or str(source_path),
+        project_fingerprint=project_fingerprint,
+        source_registry_sha256=source_registry_sha256,
+        stages=stages_records,
+        scenes=[],
+        progress_percent=45,
+        status=ExecutionStageStatus.processing,
+        created_at=created_at,
+    )
+
     # --- 4. MOTION RENDERING ---
     _notify("motion", "processing", 65)
     motion_start = _utc_now()
@@ -551,11 +764,12 @@ def run_all_project(
                     started_at=motion_start,
                     completed_at=_utc_now(),
                     input_file=str(motion_input_file.resolve()),
-                    output_file=str((task_dir / "project.motion.json").resolve()),
-                    manifest_file=str((task_dir / "motion" / "motion_manifest.json").resolve()),
-                    ready_count=motion_res.get("rendered_scenes_count", 0),
-                    failed_count=motion_res.get("failed_scenes_count", 0),
+                    output_file=motion_res.get("manifest") or str((task_dir / "motion" / "motion_manifest.json").resolve()),
+                    manifest_file=motion_res.get("manifest") or str((task_dir / "motion" / "motion_manifest.json").resolve()),
+                    ready_count=motion_res.get("motion_count", 0),
+                    failed_count=motion_res.get("failed_count", 0),
                     error=sanitize_error_message(motion_res.get("error")),
+                    metadata={"motion_project_file": motion_res.get("project_motion")},
                 )
             )
         except Exception as exc:
@@ -584,6 +798,21 @@ def run_all_project(
             )
         )
 
+    # Motion snapshot
+    _persist_execution_manifest_snapshot(
+        task_dir=task_dir,
+        project_title=project_spec.project.title,
+        run_task_id=run_task_id,
+        source_project_file=source_project_file or str(source_path),
+        project_fingerprint=project_fingerprint,
+        source_registry_sha256=source_registry_sha256,
+        stages=stages_records,
+        scenes=[],
+        progress_percent=65,
+        status=ExecutionStageStatus.processing,
+        created_at=created_at,
+    )
+
     # --- 5. EVIDENCE ACQUISITION ---
     _notify("evidence", "processing", 85)
     evidence_start = _utc_now()
@@ -591,14 +820,21 @@ def run_all_project(
 
     if has_evidence:
         if (task_dir / "project.motion.json").exists():
-            ev_input_file = task_dir / "project.motion.json"
+            ev_effective_input_file = task_dir / "project.motion.json"
         elif (task_dir / "project.assets.json").exists():
-            ev_input_file = task_dir / "project.assets.json"
+            ev_effective_input_file = task_dir / "project.assets.json"
         else:
-            ev_input_file = task_dir / "project.planned.json"
+            ev_effective_input_file = task_dir / "project.planned.json"
+
+        # Pass original project file so G07 discovers sources.json from original project directory
+        evidence_call_input = (
+            str(source_project_file)
+            if (source_project_file and Path(source_project_file).exists())
+            else str(ev_effective_input_file)
+        )
 
         try:
-            ev_res = run_evidence_acquisition(str(ev_input_file), task_id=run_task_id)
+            ev_res = run_evidence_acquisition(evidence_call_input, task_id=run_task_id)
             ev_status = (
                 ExecutionStageStatus.complete
                 if ev_res.get("status") == "complete"
@@ -610,13 +846,14 @@ def run_all_project(
                     status=ev_status,
                     started_at=evidence_start,
                     completed_at=_utc_now(),
-                    input_file=str(ev_input_file.resolve()),
-                    output_file=str((task_dir / "project.evidence.json").resolve()),
-                    manifest_file=str((task_dir / "evidence" / "evidence_manifest.json").resolve()),
-                    ready_count=ev_res.get("rendered_scenes_count", 0),
-                    failed_count=ev_res.get("failed_scenes_count", 0),
-                    skipped_count=ev_res.get("skipped_scenes_count", 0),
+                    input_file=str(ev_effective_input_file.resolve()),
+                    output_file=ev_res.get("manifest") or str((task_dir / "evidence" / "evidence_manifest.json").resolve()),
+                    manifest_file=ev_res.get("manifest") or str((task_dir / "evidence" / "evidence_manifest.json").resolve()),
+                    ready_count=ev_res.get("evidence_count", 0),
+                    failed_count=ev_res.get("failed_count", 0),
+                    skipped_count=ev_res.get("skipped_count", 0),
                     error=sanitize_error_message(ev_res.get("error")),
+                    metadata={"evidence_project_file": ev_res.get("project_evidence")},
                 )
             )
         except Exception as exc:
@@ -628,6 +865,7 @@ def run_all_project(
                     status=ExecutionStageStatus.failed,
                     started_at=evidence_start,
                     completed_at=_utc_now(),
+                    input_file=str(ev_effective_input_file.resolve()),
                     error=sanitize_error_message(err),
                 )
             )
@@ -644,6 +882,21 @@ def run_all_project(
                 metadata={"skipped_reason": "No DOCUMENT visual cues in project"},
             )
         )
+
+    # Evidence snapshot
+    _persist_execution_manifest_snapshot(
+        task_dir=task_dir,
+        project_title=project_spec.project.title,
+        run_task_id=run_task_id,
+        source_project_file=source_project_file or str(source_path),
+        project_fingerprint=project_fingerprint,
+        source_registry_sha256=source_registry_sha256,
+        stages=stages_records,
+        scenes=[],
+        progress_percent=85,
+        status=ExecutionStageStatus.processing,
+        created_at=created_at,
+    )
 
     # --- 6. FALLBACK (Optional DOCUMENT -> TEXT) ---
     _notify("fallback", "processing", 95)
@@ -667,8 +920,11 @@ def run_all_project(
         if cue.visual_type == VisualType.document:
             payload = DocumentPayload.model_validate(cue.payload)
             if not payload.evidence_required:
-                # Check if evidence output exists
-                existing_doc_job = next((j for j in working_project.render_jobs if j.scene_id == cue.id), None)
+                # Check if valid evidence output exists
+                existing_doc_job = next(
+                    (j for j in working_project.render_jobs if j.scene_id == cue.id and j.kind != "text_fallback"),
+                    None,
+                )
                 has_valid_evidence = (
                     existing_doc_job is not None
                     and existing_doc_job.status == JobStatus.ready
@@ -679,9 +935,14 @@ def run_all_project(
 
                 if not has_valid_evidence:
                     logger.info(f"Rendering TEXT fallback for optional DOCUMENT scene {cue.id}")
-                    fb_job, fb_asset, fb_err = _render_text_fallback_scene(cue, working_project, task_dir)
-                    # Replace or append render job
-                    working_project.render_jobs = [j for j in working_project.render_jobs if j.scene_id != cue.id] + [fb_job]
+                    fb_job, fb_asset, fb_err = _render_text_fallback_scene(
+                        cue, working_project, task_dir, existing_doc_job=existing_doc_job
+                    )
+                    # Preserve original DOCUMENT RenderJob and append fallback RenderJob
+                    working_project.render_jobs = [
+                        j for j in working_project.render_jobs if j.id != fb_job.id
+                    ] + [fb_job]
+
                     if fb_job.status == JobStatus.ready:
                         fallback_ready_count += 1
                     else:
@@ -696,6 +957,21 @@ def run_all_project(
             ready_count=fallback_ready_count,
             failed_count=fallback_failed_count,
         )
+    )
+
+    # Fallback snapshot
+    _persist_execution_manifest_snapshot(
+        task_dir=task_dir,
+        project_title=project_spec.project.title,
+        run_task_id=run_task_id,
+        source_project_file=source_project_file or str(source_path),
+        project_fingerprint=project_fingerprint,
+        source_registry_sha256=source_registry_sha256,
+        stages=stages_records,
+        scenes=[],
+        progress_percent=95,
+        status=ExecutionStageStatus.processing,
+        created_at=created_at,
     )
 
     # --- 7. FINAL VALIDATION & RECONCILIATION ---
@@ -735,27 +1011,27 @@ def run_all_project(
 
         elif cue.visual_type in (VisualType.data, VisualType.text):
             source_stage = "motion"
-            motion_job = next((j for j in working_project.render_jobs if j.scene_id == cue.id), None)
+            motion_job = resolve_final_render_job(cue.id, working_project.render_jobs)
             if motion_job:
                 render_job_id = motion_job.id
                 if motion_job.status == JobStatus.ready and motion_job.output:
                     output_file = motion_job.output
 
         elif cue.visual_type == VisualType.document:
-            doc_job = next((j for j in working_project.render_jobs if j.scene_id == cue.id), None)
-            if doc_job and doc_job.kind == "text_fallback":
+            resolved_job = resolve_final_render_job(cue.id, working_project.render_jobs)
+            if resolved_job and resolved_job.kind == "text_fallback":
                 source_stage = "fallback"
                 resolved_type = VisualType.text
                 fallback_from = VisualType.document
-                fallback_reason = doc_job.metadata.get("fallback_reason", "optional evidence unavailable")
-                render_job_id = doc_job.id
-                if doc_job.status == JobStatus.ready and doc_job.output:
-                    output_file = doc_job.output
-            elif doc_job:
+                fallback_reason = resolved_job.metadata.get("fallback_reason", "optional evidence unavailable")
+                render_job_id = resolved_job.id
+                if resolved_job.status == JobStatus.ready and resolved_job.output:
+                    output_file = resolved_job.output
+            elif resolved_job:
                 source_stage = "evidence"
-                render_job_id = doc_job.id
-                if doc_job.status == JobStatus.ready and doc_job.output and doc_job.output != "skipped":
-                    output_file = doc_job.output
+                render_job_id = resolved_job.id
+                if resolved_job.status == JobStatus.ready and resolved_job.output and resolved_job.output != "skipped":
+                    output_file = resolved_job.output
 
         # Validate media output file
         if output_file and output_file != "skipped" and Path(output_file).exists():
@@ -859,28 +1135,24 @@ def run_all_project(
         manifest_outputs["evidence_manifest_file"] = str((task_dir / "evidence" / "evidence_manifest.json").resolve())
 
     # Build and save execution manifest
-    execution_manifest = ExecutionManifest(
-        schema_version="1.0",
+    execution_manifest = _persist_execution_manifest_snapshot(
+        task_dir=task_dir,
         project_title=project_spec.project.title,
-        task_id=run_task_id,
+        run_task_id=run_task_id,
         source_project_file=source_project_file or str(source_path),
-        source_project_fingerprint=project_fingerprint,
+        project_fingerprint=project_fingerprint,
         source_registry_sha256=source_registry_sha256,
-        status=overall_status,
-        progress_percent=100,
         stages=stages_records,
         scenes=scene_records,
-        ready_scene_count=ready_count,
-        failed_scene_count=failed_count,
+        progress_percent=100,
+        status=overall_status,
         created_at=created_at,
-        updated_at=_utc_now(),
         error=None if overall_status == ExecutionStageStatus.complete else f"{failed_count} scenes failed execution",
         outputs=manifest_outputs,
     )
 
-    # Save project.executed.json and execution_manifest.json atomically
-    save_project_spec(working_project, task_dir / "project.executed.json")
-    _atomic_write_json(task_dir / "execution_manifest.json", execution_manifest.model_dump(mode="json"))
+    # Save project.executed.json atomically
+    _atomic_write_json(task_dir / "project.executed.json", working_project.model_dump(mode="json"))
 
     # Reconcile project_manifest.json
     project_manifest_file = task_dir / "project_manifest.json"
@@ -892,12 +1164,19 @@ def run_all_project(
             p_manifest.outputs["execution_manifest_file"] = str((task_dir / "execution_manifest.json").resolve())
             p_manifest.outputs["executed_project_file"] = str((task_dir / "project.executed.json").resolve())
 
-            # Current stage errors
-            current_stage_errors = [
-                s.error for s in stages_records if s.error and s.status == ExecutionStageStatus.failed
-            ]
-            p_manifest.outputs["stage_errors"] = current_stage_errors
-            p_manifest.error = None if overall_status == ExecutionStageStatus.complete else ("; ".join(current_stage_errors) if current_stage_errors else f"{failed_count} scenes failed")
+            # Current stage errors as a labelled dict
+            active_stage_errors: dict[str, str] = {}
+            for s in stages_records:
+                if s.error and s.status == ExecutionStageStatus.failed:
+                    active_stage_errors[s.name] = s.error
+
+            if overall_status == ExecutionStageStatus.complete:
+                p_manifest.error = None
+                p_manifest.outputs["stage_errors"] = {}
+            else:
+                p_manifest.outputs["stage_errors"] = active_stage_errors
+                p_manifest.error = "; ".join(active_stage_errors.values()) if active_stage_errors else f"{failed_count} scenes failed"
+
             _atomic_write_json(project_manifest_file, p_manifest.model_dump(mode="json"))
         except Exception as pm_exc:
             logger.warning(f"project_manifest.json reconciliation warning: {pm_exc}")
