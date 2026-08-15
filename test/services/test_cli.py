@@ -315,7 +315,7 @@ class TestCli(unittest.TestCase):
             cli.parse_args(["--project", "project.json", "--acquire-evidence-only", "--stop-at", "video"])
         self.assertNotEqual(cm.exception.code, 0)
 
-    def test_run_cli_dispatches_acquire_evidence_only(self):
+    def test_acquire_evidence_only_dispatches(self):
         with patch("cli.load_project_spec") as mock_load, \
              patch("cli.preflight_project"), \
              patch("app.services.evidence_runner.run_evidence_acquisition", return_value={"evidence_count": 2}) as mock_runner, \
@@ -324,6 +324,64 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(code, 0)
         mock_runner.assert_called_once_with("project.json", task_id="ev-task-1")
+        mock_print.assert_called_once()
+
+    def test_run_all_requires_project(self):
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--run-all"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_run_all_conflicts(self):
+        # Conflicts with validate-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--validate-only", "--run-all"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with plan-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--plan-only", "--run-all"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with acquire-broll-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--acquire-broll-only", "--run-all"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with render-motion-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--render-motion-only", "--run-all"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with acquire-evidence-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--acquire-evidence-only", "--run-all"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with stop-at
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--run-all", "--stop-at", "video"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_run_cli_dispatches_run_all_success(self):
+        with patch("cli.load_project_spec"), \
+             patch("cli.preflight_project"), \
+             patch("app.services.scene_orchestrator.run_all_project", return_value={"status": "complete", "ready_scenes": 3}) as mock_orchestrator, \
+             patch("builtins.print") as mock_print:
+            code = cli.run_cli(["--project", "project.json", "--run-all", "--task-id", "orchestrator-task-1"])
+
+        self.assertEqual(code, 0)
+        mock_orchestrator.assert_called_once_with("project.json", task_id="orchestrator-task-1")
+        mock_print.assert_called_once()
+
+    def test_run_cli_dispatches_run_all_failure(self):
+        with patch("cli.load_project_spec"), \
+             patch("cli.preflight_project"), \
+             patch("app.services.scene_orchestrator.run_all_project", return_value={"status": "failed", "ready_scenes": 2, "failed_scenes": 1}) as mock_orchestrator, \
+             patch("builtins.print") as mock_print:
+            code = cli.run_cli(["--project", "project.json", "--run-all"])
+
+        self.assertEqual(code, 1)
+        mock_orchestrator.assert_called_once_with("project.json", task_id=None)
         mock_print.assert_called_once()
 
 
