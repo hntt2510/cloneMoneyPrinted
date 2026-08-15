@@ -395,7 +395,7 @@ def rank_and_select_candidate(
     evidence_required: bool = True,
     min_score_threshold: float = 35.0,
 ) -> tuple[EvidenceCandidate | None, str | None]:
-    """Rank candidates deterministically and select the best candidate.
+    """Filter for factually defensible candidates, rank deterministically, and select the best candidate.
 
     Returns:
         (selected_candidate, failure_reason)
@@ -405,9 +405,26 @@ def rank_and_select_candidate(
             return None, "No evidence sources available or matched for required DOCUMENT cue"
         return None, "No evidence sources available (optional evidence)"
 
-    # Stable deterministic sorting
+    # 1. Filter each candidate for factual defensibility
+    defensible_candidates: list[EvidenceCandidate] = []
+    rejected_reasons: list[str] = []
+
+    for c in candidates:
+        is_defensible, reason = is_candidate_factually_defensible(c)
+        if is_defensible:
+            defensible_candidates.append(c)
+        else:
+            rejected_reasons.append(f"{c.source_id} ({reason})")
+
+    if not defensible_candidates:
+        if evidence_required:
+            diag = f": {'; '.join(rejected_reasons[:3])}" if rejected_reasons else ""
+            return None, f"No factually defensible evidence candidates found for required DOCUMENT cue{diag}"
+        return None, "No factually defensible evidence candidates available (optional fallback recommended)"
+
+    # 2. Stable deterministic sorting ONLY among defensible candidates
     sorted_candidates = sorted(
-        candidates,
+        defensible_candidates,
         key=lambda c: (
             -c.score,
             -c.score_breakdown.get("target_match", 0.0),
@@ -420,15 +437,10 @@ def rank_and_select_candidate(
 
     top = sorted_candidates[0]
 
-    # Check factual defensibility
-    is_defensible, def_reason = is_candidate_factually_defensible(top)
-    if evidence_required and not is_defensible:
-        return None, f"Top evidence candidate '{top.source_id}' is not factually defensible: {def_reason}"
-
-    if not is_defensible and top.score < min_score_threshold:
-        return None, f"Top candidate scored {top.score:.1f} (below threshold; optional fallback recommended)"
-
-    if evidence_required and top.score < min_score_threshold and top.match_type not in ("exact_target", "exact_quote_hint"):
-        return None, f"Top evidence candidate '{top.source_id}' scored {top.score:.1f} < threshold {min_score_threshold}"
+    # 3. Apply score threshold
+    if top.score < min_score_threshold and top.match_type not in ("exact_target", "exact_quote_hint"):
+        if evidence_required:
+            return None, f"Top defensible candidate '{top.source_id}' scored {top.score:.1f} < threshold {min_score_threshold}"
+        return None, f"Top defensible candidate scored {top.score:.1f} (below threshold; optional fallback recommended)"
 
     return top, None

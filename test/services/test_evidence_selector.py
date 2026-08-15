@@ -210,7 +210,7 @@ class TestEvidenceSelector(unittest.TestCase):
         )
         selected, fail_reason = rank_and_select_candidate([cand_building], evidence_required=True)
         self.assertIsNone(selected)
-        self.assertIn("not factually defensible", fail_reason)
+        self.assertIn("factually defensible", fail_reason)
 
     def test_approved_user_provided_image_with_quote_hint_allowed(self):
         # User provided image with registered quote_hint has registry_evidence_hint match type and can be selected
@@ -265,7 +265,7 @@ class TestEvidenceSelector(unittest.TestCase):
 
         selected, fail_reason = rank_and_select_candidate([cand_trap], evidence_required=True)
         self.assertIsNone(selected)
-        self.assertIn("not factually defensible", fail_reason)
+        self.assertIn("factually defensible", fail_reason)
 
     def test_webpage_metadata_trap_rejected_when_body_is_unrelated(self):
         trap_html = """
@@ -299,7 +299,7 @@ class TestEvidenceSelector(unittest.TestCase):
 
         selected, fail_reason = rank_and_select_candidate([cand_trap_web], evidence_required=True)
         self.assertIsNone(selected)
-        self.assertIn("not factually defensible", fail_reason)
+        self.assertIn("factually defensible", fail_reason)
 
     def test_pdf_query_relevance_true_positive(self):
         p_num, p_count, matched_txt, m_type, bboxes, body_meta = inspect_and_extract_pdf_evidence(
@@ -377,6 +377,130 @@ class TestEvidenceSelector(unittest.TestCase):
         self.assertEqual(p_num, 2)
         self.assertEqual(m_type, "query_relevance")
         self.assertGreaterEqual(body_meta.get("ratio", 0.0), 0.25)
+
+    def test_invalid_top_scoring_candidate_does_not_block_valid_second(self):
+        # Candidate A: score=95, match_type=none (metadata trap)
+        cand_a = EvidenceCandidate(
+            id="SRC_A",
+            source_id="SRC_A",
+            kind=EvidenceSourceKind.pdf,
+            title="Official SSA Report",
+            publisher="SSA",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility age 65",
+            matched_text="Unrelated procurement guidelines",
+            match_type="none",
+            score=95.0,
+            metadata=dict(body_relevance_ratio=0.0),
+        )
+        # Candidate B: score=70, match_type=exact_target
+        cand_b = EvidenceCandidate(
+            id="SRC_B",
+            source_id="SRC_B",
+            kind=EvidenceSourceKind.pdf,
+            title="Medicare Rules",
+            publisher="HHS",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility age 65",
+            matched_text="Medicare eligibility begins at age 65",
+            match_type="exact_target",
+            highlight_boxes=[EvidenceBBox(x=0.1, y=0.1, width=0.5, height=0.05)],
+            score=70.0,
+            metadata=dict(body_relevance_ratio=0.8),
+        )
+
+        # Test both orderings [cand_a, cand_b] and [cand_b, cand_a]
+        sel1, _ = rank_and_select_candidate([cand_a, cand_b], evidence_required=True)
+        self.assertIsNotNone(sel1)
+        self.assertEqual(sel1.source_id, "SRC_B")
+
+        sel2, _ = rank_and_select_candidate([cand_b, cand_a], evidence_required=True)
+        self.assertIsNotNone(sel2)
+        self.assertEqual(sel2.source_id, "SRC_B")
+
+    def test_invalid_top_query_relevant_second_selected(self):
+        # Candidate A: score=90, match_type=none
+        cand_a = EvidenceCandidate(
+            id="SRC_A",
+            source_id="SRC_A",
+            kind=EvidenceSourceKind.pdf,
+            title="Official SSA Admin Guide",
+            publisher="SSA",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility age 65",
+            matched_text="Office furniture order procedures",
+            match_type="none",
+            score=90.0,
+            metadata=dict(body_relevance_ratio=0.0),
+        )
+        # Candidate B: score=60, match_type=query_relevance, body_relevance_ratio=0.5
+        cand_b = EvidenceCandidate(
+            id="SRC_B",
+            source_id="SRC_B",
+            kind=EvidenceSourceKind.pdf,
+            title="Medicare Benefit Guide",
+            publisher="SSA",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility age 65",
+            matched_text="Medicare eligibility generally begins at age 65",
+            match_type="query_relevance",
+            score=60.0,
+            metadata=dict(body_relevance_ratio=0.5),
+        )
+
+        sel, _ = rank_and_select_candidate([cand_a, cand_b], evidence_required=True)
+        self.assertIsNotNone(sel)
+        self.assertEqual(sel.source_id, "SRC_B")
+
+    def test_optional_evidence_with_all_invalid_candidates_skips(self):
+        cand_a = EvidenceCandidate(
+            id="SRC_A",
+            source_id="SRC_A",
+            kind=EvidenceSourceKind.pdf,
+            title="Official SSA Admin Guide",
+            publisher="SSA",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility age 65",
+            matched_text="Office furniture order procedures",
+            match_type="none",
+            score=95.0,
+            metadata=dict(body_relevance_ratio=0.0),
+        )
+        sel, reason = rank_and_select_candidate([cand_a], evidence_required=False)
+        self.assertIsNone(sel)
+        self.assertIn("optional fallback recommended", reason)
+
+    def test_optional_evidence_selects_valid_candidate_over_invalid_top(self):
+        cand_a = EvidenceCandidate(
+            id="SRC_A",
+            source_id="SRC_A",
+            kind=EvidenceSourceKind.pdf,
+            title="Official SSA Admin Guide",
+            publisher="SSA",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility age 65",
+            matched_text="Office furniture order procedures",
+            match_type="none",
+            score=95.0,
+            metadata=dict(body_relevance_ratio=0.0),
+        )
+        cand_b = EvidenceCandidate(
+            id="SRC_B",
+            source_id="SRC_B",
+            kind=EvidenceSourceKind.pdf,
+            title="Medicare Rules",
+            publisher="HHS",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility age 65",
+            matched_text="Medicare eligibility begins at age 65",
+            match_type="exact_target",
+            highlight_boxes=[EvidenceBBox(x=0.1, y=0.1, width=0.5, height=0.05)],
+            score=60.0,
+            metadata=dict(body_relevance_ratio=0.8),
+        )
+        sel, _ = rank_and_select_candidate([cand_a, cand_b], evidence_required=False)
+        self.assertIsNotNone(sel)
+        self.assertEqual(sel.source_id, "SRC_B")
 
 
 if __name__ == "__main__":
