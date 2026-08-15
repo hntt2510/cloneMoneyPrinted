@@ -88,11 +88,14 @@ class EvidenceSource(EvidenceModel):
         has_local = bool(self.local_file and self.local_file.strip())
 
         if self.kind in (EvidenceSourceKind.pdf, EvidenceSourceKind.image, EvidenceSourceKind.webpage):
+            if has_url and has_local:
+                raise ValueError(f"Source {self.id} of kind {self.kind} must specify either 'url' or 'local_file', not both")
             if not has_url and not has_local:
                 raise ValueError(f"Source {self.id} of kind {self.kind} must specify either 'url' or 'local_file'")
         elif self.kind == EvidenceSourceKind.wikimedia:
-            # Wikimedia can have a direct URL, local_file, or title/query in metadata/title
-            if not has_url and not has_local and not self.title:
+            if has_url and has_local:
+                raise ValueError(f"Wikimedia source {self.id} must not specify both 'url' and 'local_file'")
+            if not has_url and not has_local and not (self.title and self.title.strip()):
                 raise ValueError(f"Wikimedia source {self.id} must specify 'url', 'local_file', or 'title'")
 
         return self
@@ -121,11 +124,20 @@ class EvidenceCandidate(EvidenceModel):
     license: str | None = None
     source_url: str | None = None
     local_file: str | None = None
+    detected_mime: str | None = None
     query: str
     page_number: int | None = None
     page_count: int | None = None
     matched_text: str | None = None
-    match_type: Literal["exact_target", "exact_quote_hint", "query_relevance", "page_hint", "none"] = "none"
+    match_type: Literal[
+        "exact_target",
+        "exact_quote_hint",
+        "registry_evidence_hint",
+        "approved_region",
+        "query_relevance",
+        "page_hint",
+        "none",
+    ] = "none"
     highlight_boxes: list[EvidenceBBox] = Field(default_factory=list)
     width: int | None = None
     height: int | None = None
@@ -144,6 +156,7 @@ class SelectedEvidenceAsset(EvidenceModel):
     source_url: str | None = None
     local_source_file: str | None = None
     source_sha256: str | None = None
+    detected_mime: str | None = None
     page_number: int | None = None
     matched_text: str | None = None
     match_type: str

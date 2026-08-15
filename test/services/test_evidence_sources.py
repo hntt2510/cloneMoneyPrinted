@@ -92,5 +92,58 @@ class TestEvidenceSources(unittest.TestCase):
         self.assertNotIn("font-size", extracted["text"])
 
 
+    def test_content_length_oversized_rejected_before_streaming(self):
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td) / "large.pdf"
+            with patch("app.services.evidence_sources.is_safe_remote_url", return_value=(True, None)):
+                with patch("requests.Session.get") as mock_get:
+                    mock_resp = MagicMock()
+                    mock_resp.status_code = 200
+                    mock_resp.headers = {"Content-Length": "200000000"}  # 200 MB > 100 MB limit
+                    mock_get.return_value.__enter__.return_value = mock_resp
+
+                    with self.assertRaises(ValueError) as ctx:
+                        download_evidence_file("https://example.com/large.pdf", dest_path=dest, max_bytes=104857600)
+                    self.assertIn("exceeds maximum limit", str(ctx.exception))
+                    mock_resp.iter_content.assert_not_called()
+
+    def test_validate_source_kind_mime(self):
+        from app.models.evidence import EvidenceSourceKind
+        from app.services.evidence_sources import validate_source_kind_mime
+
+        # PDF valid
+        valid, mime = validate_source_kind_mime(EvidenceSourceKind.pdf, "application/pdf")
+        self.assertTrue(valid)
+
+        # PDF with image mime -> rejected
+        valid, reason = validate_source_kind_mime(EvidenceSourceKind.pdf, "image/jpeg")
+        self.assertFalse(valid)
+        self.assertIn("does not match detected MIME type", reason)
+
+        # Webpage with PDF mime -> rejected
+        valid, reason = validate_source_kind_mime(EvidenceSourceKind.webpage, "application/pdf")
+        self.assertFalse(valid)
+
+        # Image with HTML mime -> rejected
+        valid, reason = validate_source_kind_mime(EvidenceSourceKind.image, "text/html")
+        self.assertFalse(valid)
+
+    def test_ssrf_safe_session_blocks_redirect_to_localhost_and_private(self):
+        from app.services.evidence_sources import SSRFSafeSession, SSRFValidationError
+
+        session = SSRFSafeSession()
+        req = MagicMock()
+
+        # Redirect to 127.0.0.1
+        req.url = "http://127.0.0.1/secret"
+        with self.assertRaises(SSRFValidationError):
+            session.rebuild_auth(req, MagicMock())
+
+        # Redirect to 10.0.0.1
+        req.url = "http://10.0.0.1/internal/admin"
+        with self.assertRaises(SSRFValidationError):
+            session.rebuild_auth(req, MagicMock())
+
+
 if __name__ == "__main__":
     unittest.main()

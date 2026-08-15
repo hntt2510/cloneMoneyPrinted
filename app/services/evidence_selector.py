@@ -281,11 +281,15 @@ def score_evidence_candidate(
         target_match_score = 30.0
     elif match_type == "exact_quote_hint":
         target_match_score = 22.0
-    elif match_type == "query_relevance":
-        # Scale between 8.0 and 16.0 based on relevance
-        target_match_score = round(8.0 + min(1.0, relevance_ratio) * 8.0, 2)
-    elif match_type == "page_hint":
+    elif match_type == "registry_evidence_hint":
+        target_match_score = 18.0
+    elif match_type == "approved_region":
         target_match_score = 10.0
+    elif match_type == "query_relevance":
+        # Scale between 4.0 and 12.0 based on relevance
+        target_match_score = round(4.0 + min(1.0, relevance_ratio) * 8.0, 2)
+    elif match_type == "page_hint":
+        target_match_score = 8.0
     else:
         target_match_score = 0.0
     breakdown["target_match"] = target_match_score
@@ -363,9 +367,14 @@ def rank_and_select_candidate(
 
     top = sorted_candidates[0]
 
-    # If top candidate is below minimum score threshold and has no target match
-    has_target_match = top.match_type in ("exact_target", "exact_quote_hint")
-    if top.score < min_score_threshold and not has_target_match:
+    # Check factual defensibility for image sources under evidence_required
+    has_defensible_match = top.match_type in ("exact_target", "exact_quote_hint", "registry_evidence_hint")
+    if top.kind in (EvidenceSourceKind.image, EvidenceSourceKind.wikimedia) and not has_defensible_match:
+        if evidence_required:
+            return None, f"Image candidate '{top.source_id}' lacks verified factual evidence text or registry quote hint"
+
+    # Check minimum score threshold
+    if top.score < min_score_threshold and not has_defensible_match:
         if evidence_required:
             return None, f"Top evidence candidate '{top.source_id}' scored {top.score:.1f} < threshold {min_score_threshold}"
         return None, f"Top candidate scored {top.score:.1f} (below threshold; optional fallback recommended)"

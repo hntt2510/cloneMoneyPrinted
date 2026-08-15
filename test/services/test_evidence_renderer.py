@@ -138,6 +138,53 @@ class TestEvidenceRenderer(unittest.TestCase):
         self.assertEqual(fp1, fp2)
         self.assertEqual(len(fp1), 64)
 
+    def test_spec_fingerprint_changes_when_render_metadata_changes(self):
+        base_kwargs = dict(
+            scene_id="S001",
+            search_query="social security",
+            highlight_target="age 65",
+            source_id="SRC001",
+            source_sha256="abcdef123456",
+            page_number=2,
+            match_type="exact_target",
+            highlight_boxes=[EvidenceBBox(x=0.1, y=0.2, width=0.3, height=0.05)],
+            duration_frames=30,
+            fps=30,
+            width=1920,
+            height=1080,
+            render_mode="document_page",
+            title="Title A",
+            publisher="Publisher A",
+            trust="official",
+            license="Public Domain",
+            matched_text="Matched snippet A",
+        )
+        fp_base = compute_evidence_spec_fingerprint(**base_kwargs)
+
+        # 1. Title change
+        kwargs_title = dict(base_kwargs, title="Title B")
+        self.assertNotEqual(fp_base, compute_evidence_spec_fingerprint(**kwargs_title))
+
+        # 2. Publisher change
+        kwargs_pub = dict(base_kwargs, publisher="Publisher B")
+        self.assertNotEqual(fp_base, compute_evidence_spec_fingerprint(**kwargs_pub))
+
+        # 3. Trust change
+        kwargs_trust = dict(base_kwargs, trust="licensed")
+        self.assertNotEqual(fp_base, compute_evidence_spec_fingerprint(**kwargs_trust))
+
+        # 4. License change
+        kwargs_lic = dict(base_kwargs, license="CC-BY-4.0")
+        self.assertNotEqual(fp_base, compute_evidence_spec_fingerprint(**kwargs_lic))
+
+        # 5. Excerpt / matched text change
+        kwargs_text = dict(base_kwargs, matched_text="Matched snippet B")
+        self.assertNotEqual(fp_base, compute_evidence_spec_fingerprint(**kwargs_text))
+
+        # 6. Source byte SHA change
+        kwargs_sha = dict(base_kwargs, source_sha256="999999ffffff")
+        self.assertNotEqual(fp_base, compute_evidence_spec_fingerprint(**kwargs_sha))
+
 
 if __name__ == "__main__":
     unittest.main()

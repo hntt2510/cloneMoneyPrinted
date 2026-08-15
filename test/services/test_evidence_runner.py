@@ -254,6 +254,161 @@ class TestEvidenceRunner(unittest.TestCase):
         # Verify S001 output still exists
         self.assertTrue((self.task_dir / "evidence" / "S001" / "S001_DOCUMENT.mp4").exists())
 
+    def test_allowed_for_evidence_false_never_used_and_diagnostics_recorded(self):
+        sources = [
+            EvidenceSource(
+                id="SRC_DISALLOWED",
+                kind=EvidenceSourceKind.pdf,
+                local_file="sample_policy.pdf",
+                title="Disallowed Evidence Document",
+                trust=EvidenceSourceTrust.official,
+                allowed_for_evidence=False,
+            )
+        ]
+        registry = EvidenceSourceRegistry(sources=sources)
+        (self.task_dir / "sources.json").write_text(json.dumps(registry.model_dump(mode="json"), indent=2), encoding="utf-8")
+
+        project_spec = ProjectSpec(
+            schema_version="1.0",
+            project=ProjectMetadata(title="Disallowed Source Video", aspect_ratio=VideoAspect.landscape, fps=30),
+            script=ScriptSpec(subject="Test", script="Doc."),
+            narration=NarrationSpec(mode=NarrationMode.file, file=str(self.audio_file)),
+            production=ProductionConfig(),
+            timeline_cues=[TimelineCue(id="S001", order=1, start=0.0, end=1.0, narration="Medicare")],
+            visual_cues=[
+                VisualCue(
+                    id="S001",
+                    order=1,
+                    visual_type=VisualType.document,
+                    purpose=VisualPurpose.evidence,
+                    start=0.0,
+                    end=1.0,
+                    narration="Medicare",
+                    payload={"search_query": "Medicare", "source_hint": "SSA", "source_ids": ["SRC_DISALLOWED", "SRC_UNKNOWN"], "evidence_required": True},
+                )
+            ],
+        )
+        plan_path = self.task_dir / "project.planned.json"
+        plan_path.write_text(json.dumps(project_spec.model_dump(mode="json"), indent=2), encoding="utf-8")
+        (self.task_dir / "visual_plan.json").write_text("{}", encoding="utf-8")
+
+        result = run_evidence_acquisition(plan_path, task_id=self.task_id)
+        self.assertEqual(result["status"], "failed")
+
+        # Verify diagnostics recorded
+        manifest_data = json.loads((self.task_dir / "evidence" / "evidence_manifest.json").read_text(encoding="utf-8"))
+        failed_entry = manifest_data["failed_scenes"][0]
+        diags = failed_entry.get("diagnostics", [])
+        self.assertTrue(any("is not allowed for evidence" in d for d in diags))
+        self.assertTrue(any("not found in registry" in d for d in diags))
+
+    def test_registry_candidate_prevents_wikimedia_calls(self):
+        from unittest.mock import patch
+
+        sources = [
+            EvidenceSource(
+                id="SRC_VALID",
+                kind=EvidenceSourceKind.pdf,
+                local_file="sample_policy.pdf",
+                title="Official Medicare Rules",
+                trust=EvidenceSourceTrust.official,
+            )
+        ]
+        registry = EvidenceSourceRegistry(sources=sources)
+        (self.task_dir / "sources.json").write_text(json.dumps(registry.model_dump(mode="json"), indent=2), encoding="utf-8")
+
+        project_spec = ProjectSpec(
+            schema_version="1.0",
+            project=ProjectMetadata(title="Registry First Video", aspect_ratio=VideoAspect.landscape, fps=30),
+            script=ScriptSpec(subject="Test", script="Doc."),
+            narration=NarrationSpec(mode=NarrationMode.file, file=str(self.audio_file)),
+            production=ProductionConfig(),
+            timeline_cues=[TimelineCue(id="S001", order=1, start=0.0, end=1.0, narration="Medicare")],
+            visual_cues=[
+                VisualCue(
+                    id="S001",
+                    order=1,
+                    visual_type=VisualType.document,
+                    purpose=VisualPurpose.evidence,
+                    start=0.0,
+                    end=1.0,
+                    narration="Medicare",
+                    payload={"search_query": "Medicare eligibility age 65", "source_hint": "SSA", "evidence_required": True},
+                )
+            ],
+        )
+        plan_path = self.task_dir / "project.planned.json"
+        plan_path.write_text(json.dumps(project_spec.model_dump(mode="json"), indent=2), encoding="utf-8")
+        (self.task_dir / "visual_plan.json").write_text("{}", encoding="utf-8")
+
+        with patch("app.services.evidence_runner.search_wikimedia_evidence") as mock_wiki:
+            result = run_evidence_acquisition(plan_path, task_id=self.task_id)
+            self.assertEqual(result["status"], "complete")
+            # Proves Wikimedia was NOT called because registry candidate was valid and accepted
+            mock_wiki.assert_not_called()
+
+    def test_local_source_modification_refreshes_cache_and_rerenders(self):
+        # Run 1: initial render
+        sources = [
+            EvidenceSource(
+                id="SRC_MUTABLE",
+                kind=EvidenceSourceKind.pdf,
+                local_file="sample_policy.pdf",
+                title="Mutable Rules",
+                trust=EvidenceSourceTrust.official,
+            )
+        ]
+        registry = EvidenceSourceRegistry(sources=sources)
+        (self.task_dir / "sources.json").write_text(json.dumps(registry.model_dump(mode="json"), indent=2), encoding="utf-8")
+
+        project_spec = ProjectSpec(
+            schema_version="1.0",
+            project=ProjectMetadata(title="Mutable Video", aspect_ratio=VideoAspect.landscape, fps=30),
+            script=ScriptSpec(subject="Test", script="Doc."),
+            narration=NarrationSpec(mode=NarrationMode.file, file=str(self.audio_file)),
+            production=ProductionConfig(),
+            timeline_cues=[TimelineCue(id="S001", order=1, start=0.0, end=1.0, narration="Medicare")],
+            visual_cues=[
+                VisualCue(
+                    id="S001",
+                    order=1,
+                    visual_type=VisualType.document,
+                    purpose=VisualPurpose.evidence,
+                    start=0.0,
+                    end=1.0,
+                    narration="Medicare",
+                    payload={"search_query": "Medicare", "source_hint": "SSA", "source_ids": ["SRC_MUTABLE"]},
+                )
+            ],
+        )
+        plan_path = self.task_dir / "project.planned.json"
+        plan_path.write_text(json.dumps(project_spec.model_dump(mode="json"), indent=2), encoding="utf-8")
+        (self.task_dir / "visual_plan.json").write_text("{}", encoding="utf-8")
+
+        res1 = run_evidence_acquisition(plan_path, task_id=self.task_id)
+        self.assertEqual(res1["status"], "complete")
+        meta1 = json.loads((self.task_dir / "evidence" / "S001" / "metadata.json").read_text(encoding="utf-8"))
+        fp1 = meta1["spec_fingerprint"]
+        sha1 = meta1["source_sha256"]
+
+        # Modify original PDF bytes
+        doc = pymupdf.open()
+        p = doc.new_page(width=612, height=792)
+        p.insert_text((50, 100), "MODIFIED RULES VERSION 2", fontsize=18)
+        p.insert_text((50, 150), "Medicare coverage begins at age 70 in new policy.", fontsize=14)
+        doc.save(str(self.pdf_path))
+        doc.close()
+
+        # Run 2: cache must refresh, SHA change, fingerprint change, rerender
+        res2 = run_evidence_acquisition(plan_path, task_id=self.task_id)
+        self.assertEqual(res2["status"], "complete")
+        meta2 = json.loads((self.task_dir / "evidence" / "S001" / "metadata.json").read_text(encoding="utf-8"))
+        fp2 = meta2["spec_fingerprint"]
+        sha2 = meta2["source_sha256"]
+
+        self.assertNotEqual(sha1, sha2)
+        self.assertNotEqual(fp1, fp2)
+
 
 if __name__ == "__main__":
     unittest.main()
