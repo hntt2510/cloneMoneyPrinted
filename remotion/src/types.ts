@@ -12,7 +12,14 @@ export interface Theme {
   border: string;
 }
 
-export interface NumberProps {
+export interface BaseTemplateProps {
+  theme?: Partial<Theme>;
+  isGrouped?: boolean;
+  isFirstInGroup?: boolean;
+  groupSceneIndex?: number;
+}
+
+export interface NumberProps extends BaseTemplateProps {
   headline: string;
   value: string;
   numeric_value?: number | null;
@@ -22,7 +29,7 @@ export interface NumberProps {
   subtext?: string | null;
 }
 
-export interface CounterProps {
+export interface CounterProps extends BaseTemplateProps {
   headline: string;
   start_value: number;
   end_value: number;
@@ -40,7 +47,7 @@ export interface ComparisonItem {
   highlight?: boolean;
 }
 
-export interface ComparisonProps {
+export interface ComparisonProps extends BaseTemplateProps {
   headline: string;
   items: ComparisonItem[];
   subtext?: string | null;
@@ -53,7 +60,7 @@ export interface TimelineItem {
   is_active?: boolean;
 }
 
-export interface TimelineProps {
+export interface TimelineProps extends BaseTemplateProps {
   headline: string;
   milestones: TimelineItem[];
   highlight_index?: number | null;
@@ -66,7 +73,7 @@ export interface BarChartItem {
   color?: string | null;
 }
 
-export interface BarChartProps {
+export interface BarChartProps extends BaseTemplateProps {
   headline: string;
   items: BarChartItem[];
   unit?: string | null;
@@ -79,14 +86,14 @@ export interface LineChartPoint {
   display_value?: string | null;
 }
 
-export interface LineChartProps {
+export interface LineChartProps extends BaseTemplateProps {
   headline: string;
   points: LineChartPoint[];
   unit?: string | null;
   show_area?: boolean;
 }
 
-export interface ThresholdProps {
+export interface ThresholdProps extends BaseTemplateProps {
   headline: string;
   current_value: number;
   current_display?: string | null;
@@ -102,19 +109,19 @@ export interface AgeMarkerItem {
   highlight?: boolean;
 }
 
-export interface AgeMarkerProps {
+export interface AgeMarkerProps extends BaseTemplateProps {
   headline: string;
   markers: AgeMarkerItem[];
   subtext?: string | null;
 }
 
-export interface CalloutProps {
+export interface CalloutProps extends BaseTemplateProps {
   headline: string;
   emphasis?: string | null;
   subtext?: string | null;
 }
 
-export interface TextProps {
+export interface TextProps extends BaseTemplateProps {
   headline: string;
   subheadline?: string | null;
   style_variant?: string;

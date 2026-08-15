@@ -6,7 +6,7 @@ import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
 import { NumberProps, Theme } from '../types';
 
-export const NumberTemplate: React.FC<NumberProps & { theme?: Partial<Theme> }> = ({
+export const NumberTemplate: React.FC<NumberProps> = ({
   headline,
   value,
   prefix,
@@ -14,11 +14,15 @@ export const NumberTemplate: React.FC<NumberProps & { theme?: Partial<Theme> }> 
   label,
   subtext,
   theme: customTheme,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
+
+  const isContinuous = isGrouped && !isFirstInGroup;
 
   const spr = spring({
     frame: Math.max(0, frame - 5),
@@ -26,8 +30,8 @@ export const NumberTemplate: React.FC<NumberProps & { theme?: Partial<Theme> }> 
     config: { damping: 12, stiffness: 90, mass: 0.8 },
   });
 
-  const numberScale = interpolate(spr, [0, 1], [0.85, 1]);
-  const numberOpacity = interpolate(spr, [0, 1], [0, 1]);
+  const numberScale = isContinuous ? 1 : interpolate(spr, [0, 1], [0.85, 1]);
+  const numberOpacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
 
   const valueFontSize = isPortrait ? width * 0.16 : width * 0.085;
   const labelFontSize = isPortrait ? width * 0.045 : width * 0.024;
@@ -35,9 +39,15 @@ export const NumberTemplate: React.FC<NumberProps & { theme?: Partial<Theme> }> 
   const displayString = `${prefix || ''}${value}${suffix || ''}`;
 
   return (
-    <Layout theme={theme}>
-      <Header headline={headline} theme={theme} />
-      <Card theme={theme} delayFrames={4} style={{ width: isPortrait ? '90%' : '65%' }}>
+    <Layout theme={theme} isGrouped={isGrouped}>
+      <Header headline={headline} theme={theme} isGrouped={isGrouped} isFirstInGroup={isFirstInGroup} />
+      <Card
+        theme={theme}
+        delayFrames={4}
+        isGrouped={isGrouped}
+        isFirstInGroup={isFirstInGroup}
+        style={{ width: isPortrait ? '90%' : '65%' }}
+      >
         <div
           style={{
             opacity: numberOpacity,

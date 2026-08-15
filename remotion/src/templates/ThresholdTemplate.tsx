@@ -6,7 +6,7 @@ import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
 import { Theme, ThresholdProps } from '../types';
 
-export const ThresholdTemplate: React.FC<ThresholdProps & { theme?: Partial<Theme> }> = ({
+export const ThresholdTemplate: React.FC<ThresholdProps> = ({
   headline,
   current_value,
   current_display,
@@ -15,32 +15,46 @@ export const ThresholdTemplate: React.FC<ThresholdProps & { theme?: Partial<Them
   threshold_label = 'Threshold',
   subtext,
   theme: customTheme,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
+  const isContinuous = isGrouped && !isFirstInGroup;
   const maxVal = Math.max(current_value, threshold_value, 1) * 1.25;
   const currentPct = Math.min(100, Math.max(5, (current_value / maxVal) * 100));
   const thresholdPct = Math.min(95, Math.max(5, (threshold_value / maxVal) * 100));
 
   const spr = spring({
-    frame: Math.max(0, frame - 8),
+    frame: Math.max(0, frame - (isContinuous ? 0 : 8)),
     fps,
     config: { damping: 14, stiffness: 90, mass: 0.9 },
   });
 
-  const progress = interpolate(spr, [0, 1], [0, 1]);
+  const progress = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
   const animatedCurrentPct = currentPct * progress;
 
   const meetsThreshold = current_value >= threshold_value;
   const statusColor = meetsThreshold ? theme.positive : theme.warning;
 
   return (
-    <Layout theme={theme}>
-      <Header headline={headline} subheadline={subtext} theme={theme} />
-      <Card theme={theme} style={{ width: isPortrait ? '92%' : '75%', padding: '36px 32px' }}>
+    <Layout theme={theme} isGrouped={isGrouped}>
+      <Header
+        headline={headline}
+        subheadline={subtext}
+        theme={theme}
+        isGrouped={isGrouped}
+        isFirstInGroup={isFirstInGroup}
+      />
+      <Card
+        theme={theme}
+        isGrouped={isGrouped}
+        isFirstInGroup={isFirstInGroup}
+        style={{ width: isPortrait ? '92%' : '75%', padding: '36px 32px' }}
+      >
         <div
           style={{
             display: 'flex',

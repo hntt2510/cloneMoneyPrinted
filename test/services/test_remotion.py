@@ -123,6 +123,50 @@ class TestRemotionEngine(unittest.TestCase):
                 expected_fps=30,
             )
 
+    def test_fingerprint_computation_and_resumption(self):
+        from app.services.remotion import compute_group_fingerprint, compute_scene_fingerprint
+
+        s1 = MotionSceneSpec(
+            scene_id="S020",
+            order=20,
+            visual_type="data",
+            requested_template="number",
+            rendered_template="number",
+            props=NumberProps(headline="FP TEST", value="100").model_dump(mode="json"),
+            start_time=0.0,
+            end_time=1.0,
+            start_frame=0,
+            end_frame=30,
+            duration_frames=30,
+            fps=30,
+            width=640,
+            height=360,
+        )
+
+        fp1 = compute_scene_fingerprint(s1)
+        fp2 = compute_scene_fingerprint(s1)
+        self.assertEqual(fp1, fp2)
+        self.assertEqual(len(fp1), 64)
+
+        # First render
+        asset1 = render_scene_motion(s1, self.temp_dir)
+        self.assertEqual(asset1.metadata.get("spec_fingerprint"), fp1)
+
+        # Second render with identical spec -> reuses asset without re-rendering
+        progress_events = []
+        asset2 = render_scene_motion(s1, self.temp_dir, on_progress=lambda p: progress_events.append(p))
+        self.assertEqual(asset2.output_file, asset1.output_file)
+        self.assertTrue(any(p.get("is_reuse") for p in progress_events))
+
+        # Third render with changed headline -> fingerprint changes -> re-renders
+        s1_modified = s1.model_copy(deep=True)
+        s1_modified.props["headline"] = "CHANGED HEADLINE"
+        fp_modified = compute_scene_fingerprint(s1_modified)
+        self.assertNotEqual(fp1, fp_modified)
+
+        asset3 = render_scene_motion(s1_modified, self.temp_dir)
+        self.assertEqual(asset3.metadata.get("spec_fingerprint"), fp_modified)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,27 +6,32 @@ import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
 import { BarChartProps, Theme } from '../types';
 
-export const BarChartTemplate: React.FC<BarChartProps & { theme?: Partial<Theme> }> = ({
+export const BarChartTemplate: React.FC<BarChartProps> = ({
   headline,
   items = [],
   unit,
   theme: customTheme,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
+  const isContinuous = isGrouped && !isFirstInGroup;
   const validItems = items.slice(0, 6);
   const maxVal = Math.max(...validItems.map((it) => Math.abs(it.value)), 1);
 
   const chartHeight = Math.round(height * (isPortrait ? 0.45 : 0.42));
 
   return (
-    <Layout theme={theme}>
-      <Header headline={headline} theme={theme} />
+    <Layout theme={theme} isGrouped={isGrouped}>
+      <Header headline={headline} theme={theme} isGrouped={isGrouped} isFirstInGroup={isFirstInGroup} />
       <Card
         theme={theme}
+        isGrouped={isGrouped}
+        isFirstInGroup={isFirstInGroup}
         style={{
           width: '92%',
           height: chartHeight,
@@ -47,12 +52,13 @@ export const BarChartTemplate: React.FC<BarChartProps & { theme?: Partial<Theme>
           }}
         >
           {validItems.map((item, idx) => {
+            const delay = isContinuous ? 0 : 8 + idx * 4;
             const spr = spring({
-              frame: Math.max(0, frame - (8 + idx * 4)),
+              frame: Math.max(0, frame - delay),
               fps,
               config: { damping: 14, stiffness: 90, mass: 0.9 },
             });
-            const progress = interpolate(spr, [0, 1], [0, 1]);
+            const progress = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
             const targetRatio = Math.max(0.05, Math.abs(item.value) / maxVal);
             const currentHeightPct = targetRatio * progress * 80;
 

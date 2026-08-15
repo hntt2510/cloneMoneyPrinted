@@ -52,6 +52,37 @@ class TestMotionGrouper(unittest.TestCase):
         self.assertIsInstance(groups[0], MotionSceneSpec)
         self.assertEqual(groups[0].scene_id, "S001")
 
+    def test_form_groups_split_on_timing_gap(self):
+        # s1: 0-60, s2: 65-120 (gap of 5 frames)
+        s1 = self._make_spec("S001", 1, "grp_gap", 0, 60)
+        s2 = self._make_spec("S002", 2, "grp_gap", 65, 120)
+        groups = form_motion_groups([s1, s2])
+        # Gap prevents single group formation; each becomes standalone MotionSceneSpec
+        self.assertEqual(len(groups), 2)
+        self.assertIsInstance(groups[0], MotionSceneSpec)
+        self.assertIsInstance(groups[1], MotionSceneSpec)
+        self.assertEqual(groups[0].scene_id, "S001")
+        self.assertEqual(groups[1].scene_id, "S002")
+
+    def test_form_groups_split_on_timing_overlap(self):
+        # s1: 0-60, s2: 58-120 (overlap of 2 frames)
+        s1 = self._make_spec("S001", 1, "grp_overlap", 0, 60)
+        s2 = self._make_spec("S002", 2, "grp_overlap", 58, 120)
+        groups = form_motion_groups([s1, s2])
+        self.assertEqual(len(groups), 2)
+        self.assertIsInstance(groups[0], MotionSceneSpec)
+        self.assertIsInstance(groups[1], MotionSceneSpec)
+
+    def test_form_groups_split_on_fps_or_dimension_mismatch(self):
+        s1 = self._make_spec("S001", 1, "grp_dim", 0, 60)
+        s2 = self._make_spec("S002", 2, "grp_dim", 60, 120)
+        s2.width = 1080
+        s2.height = 1920
+        groups = form_motion_groups([s1, s2])
+        self.assertEqual(len(groups), 2)
+        self.assertIsInstance(groups[0], MotionSceneSpec)
+        self.assertIsInstance(groups[1], MotionSceneSpec)
+
 
 if __name__ == "__main__":
     unittest.main()

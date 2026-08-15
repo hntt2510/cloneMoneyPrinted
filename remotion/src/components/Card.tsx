@@ -9,6 +9,8 @@ interface CardProps {
   delayFrames?: number;
   highlight?: boolean;
   style?: React.CSSProperties;
+  isGrouped?: boolean;
+  isFirstInGroup?: boolean;
 }
 
 export const Card: React.FC<CardProps> = ({
@@ -17,10 +19,14 @@ export const Card: React.FC<CardProps> = ({
   delayFrames = 0,
   highlight = false,
   style = {},
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
+
+  const isContinuous = isGrouped && !isFirstInGroup;
 
   const spr = spring({
     frame: Math.max(0, frame - delayFrames),
@@ -28,8 +34,8 @@ export const Card: React.FC<CardProps> = ({
     config: { damping: 14, stiffness: 90, mass: 0.9 },
   });
 
-  const opacity = interpolate(spr, [0, 1], [0, 1]);
-  const scale = interpolate(spr, [0, 1], [0.92, 1]);
+  const opacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
+  const scale = isContinuous ? 1 : interpolate(spr, [0, 1], [0.92, 1]);
 
   return (
     <div

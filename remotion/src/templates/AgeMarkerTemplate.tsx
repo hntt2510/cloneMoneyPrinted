@@ -6,22 +6,31 @@ import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
 import { AgeMarkerProps, Theme } from '../types';
 
-export const AgeMarkerTemplate: React.FC<AgeMarkerProps & { theme?: Partial<Theme> }> = ({
+export const AgeMarkerTemplate: React.FC<AgeMarkerProps> = ({
   headline,
   markers = [],
   subtext,
   theme: customTheme,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
+  const isContinuous = isGrouped && !isFirstInGroup;
   const validMarkers = markers.slice(0, 4);
 
   return (
-    <Layout theme={theme}>
-      <Header headline={headline} subheadline={subtext} theme={theme} />
+    <Layout theme={theme} isGrouped={isGrouped}>
+      <Header
+        headline={headline}
+        subheadline={subtext}
+        theme={theme}
+        isGrouped={isGrouped}
+        isFirstInGroup={isFirstInGroup}
+      />
       <div
         style={{
           display: 'flex',
@@ -33,14 +42,15 @@ export const AgeMarkerTemplate: React.FC<AgeMarkerProps & { theme?: Partial<Them
         }}
       >
         {validMarkers.map((m, idx) => {
+          const delay = isContinuous ? 0 : 6 + idx * 5;
           const spr = spring({
-            frame: Math.max(0, frame - (6 + idx * 5)),
+            frame: Math.max(0, frame - delay),
             fps,
             config: { damping: 12, stiffness: 90, mass: 0.8 },
           });
 
-          const scale = interpolate(spr, [0, 1], [0.8, 1]);
-          const opacity = interpolate(spr, [0, 1], [0, 1]);
+          const scale = isContinuous ? 1 : interpolate(spr, [0, 1], [0.8, 1]);
+          const opacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
           const isHighlighted = !!m.highlight;
 
           return (
@@ -58,6 +68,8 @@ export const AgeMarkerTemplate: React.FC<AgeMarkerProps & { theme?: Partial<Them
               <Card
                 theme={theme}
                 highlight={isHighlighted}
+                isGrouped={isGrouped}
+                isFirstInGroup={isFirstInGroup}
                 style={{
                   width: '100%',
                   padding: `${Math.round(height * 0.035)}px ${Math.round(width * 0.03)}px`,

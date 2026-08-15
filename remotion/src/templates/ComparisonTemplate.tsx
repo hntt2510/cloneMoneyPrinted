@@ -6,22 +6,31 @@ import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
 import { ComparisonProps, Theme } from '../types';
 
-export const ComparisonTemplate: React.FC<ComparisonProps & { theme?: Partial<Theme> }> = ({
+export const ComparisonTemplate: React.FC<ComparisonProps> = ({
   headline,
   items = [],
   subtext,
   theme: customTheme,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
+  const isContinuous = isGrouped && !isFirstInGroup;
   const validItems = items.slice(0, 4);
 
   return (
-    <Layout theme={theme}>
-      <Header headline={headline} subheadline={subtext} theme={theme} />
+    <Layout theme={theme} isGrouped={isGrouped}>
+      <Header
+        headline={headline}
+        subheadline={subtext}
+        theme={theme}
+        isGrouped={isGrouped}
+        isFirstInGroup={isFirstInGroup}
+      />
       <div
         style={{
           display: 'flex',
@@ -33,14 +42,14 @@ export const ComparisonTemplate: React.FC<ComparisonProps & { theme?: Partial<Th
         }}
       >
         {validItems.map((item, idx) => {
-          const delay = 6 + idx * 5;
+          const delay = isContinuous ? 0 : 6 + idx * 5;
           const spr = spring({
             frame: Math.max(0, frame - delay),
             fps,
             config: { damping: 14, stiffness: 90, mass: 0.9 },
           });
-          const itemOpacity = interpolate(spr, [0, 1], [0, 1]);
-          const itemTranslateY = interpolate(spr, [0, 1], [20, 0]);
+          const itemOpacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
+          const itemTranslateY = isContinuous ? 0 : interpolate(spr, [0, 1], [20, 0]);
 
           const isHighlighted = !!item.highlight;
           const valFontSize = isPortrait ? width * 0.09 : width * 0.052;
@@ -59,6 +68,8 @@ export const ComparisonTemplate: React.FC<ComparisonProps & { theme?: Partial<Th
               <Card
                 theme={theme}
                 highlight={isHighlighted}
+                isGrouped={isGrouped}
+                isFirstInGroup={isFirstInGroup}
                 style={{ width: '100%', padding: `${Math.round(height * 0.03)}px ${Math.round(width * 0.03)}px` }}
               >
                 <div

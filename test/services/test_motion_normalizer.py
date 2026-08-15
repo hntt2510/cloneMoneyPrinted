@@ -278,6 +278,71 @@ class TestMotionNormalizer(unittest.TestCase):
         self.assertIsNotNone(spec.fallback_reason)
         self.assertEqual(spec.props["headline"], "INSUFFICIENT COMPARISON")
 
+    def test_numeric_parsing_scales_and_formats(self):
+        test_cases = [
+            ("$12,000", 12000.0),
+            ("$12K", 12000.0),
+            ("12k", 12000.0),
+            ("$1.5M", 1500000.0),
+            ("1.5m", 1500000.0),
+            ("2B", 2000000000.0),
+            ("2b", 2000000000.0),
+            ("5.5%", 5.5),
+            ("0", 0.0),
+            (0, 0.0),
+            (0.0, 0.0),
+            ("$0", 0.0),
+            ("100", 100.0),
+        ]
+        for val_str, expected_num in test_cases:
+            cue = VisualCue(
+                id="S001",
+                order=1,
+                visual_type=VisualType.data,
+                purpose=VisualPurpose.explain,
+                start=0.0,
+                end=2.0,
+                narration="Scale test",
+                payload={"template": "number", "headline": "SCALE TEST", "data": {"value": val_str}},
+            )
+            spec = normalize_motion_spec(cue, self.project)
+            self.assertEqual(spec.rendered_template, "number")
+            self.assertEqual(spec.props["numeric_value"], expected_num)
+            self.assertEqual(spec.props["value"], str(val_str))
+
+    def test_zero_value_preservation_across_templates(self):
+        # Counter with start_value 0 and end_value 0
+        cue_counter = VisualCue(
+            id="S001",
+            order=1,
+            visual_type=VisualType.data,
+            purpose=VisualPurpose.explain,
+            start=0.0,
+            end=2.0,
+            narration="Zero counter",
+            payload={"template": "counter", "headline": "ZERO COUNTER", "data": {"start_value": 0, "end_value": 0}},
+        )
+        spec_counter = normalize_motion_spec(cue_counter, self.project)
+        self.assertEqual(spec_counter.rendered_template, "counter")
+        self.assertEqual(spec_counter.props["start_value"], 0.0)
+        self.assertEqual(spec_counter.props["end_value"], 0.0)
+
+        # Threshold with current_value 0
+        cue_thresh = VisualCue(
+            id="S002",
+            order=2,
+            visual_type=VisualType.data,
+            purpose=VisualPurpose.explain,
+            start=2.0,
+            end=4.0,
+            narration="Zero threshold",
+            payload={"template": "threshold", "headline": "ZERO THRESH", "data": {"current_value": 0, "threshold_value": 100}},
+        )
+        spec_thresh = normalize_motion_spec(cue_thresh, self.project)
+        self.assertEqual(spec_thresh.rendered_template, "threshold")
+        self.assertEqual(spec_thresh.props["current_value"], 0.0)
+        self.assertEqual(spec_thresh.props["threshold_value"], 100.0)
+
 
 if __name__ == "__main__":
     unittest.main()
