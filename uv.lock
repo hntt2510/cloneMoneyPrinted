@@ -1146,7 +1146,7 @@ requires-dist = [
     { name = "moviepy", specifier = "==2.2.1" },
     { name = "openai", specifier = "==2.24.0" },
     { name = "pydub", specifier = "==0.25.1" },
-    { name = "pymupdf", specifier = ">=1.28.2" },
+    { name = "pymupdf", specifier = "==1.28.2" },
     { name = "python-multipart", specifier = "==0.0.27" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "redis", specifier = "==5.2.0" },

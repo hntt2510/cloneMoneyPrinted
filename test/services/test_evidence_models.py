@@ -67,6 +67,17 @@ class TestEvidenceModels(unittest.TestCase):
                 trust=EvidenceSourceTrust.official,
             )
 
+    def test_evidence_source_both_url_and_local_file_rejected(self):
+        with self.assertRaises(ValidationError):
+            EvidenceSource(
+                id="SRC004",
+                kind=EvidenceSourceKind.pdf,
+                url="https://example.com/doc.pdf",
+                local_file="sources/doc.pdf",
+                title="Ambiguous Location PDF",
+                trust=EvidenceSourceTrust.official,
+            )
+
     def test_evidence_registry_unique_ids(self):
         s1 = EvidenceSource(
             id="SRC001",

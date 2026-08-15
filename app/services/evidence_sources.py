@@ -158,13 +158,21 @@ def compute_file_sha256(file_path: Path | str) -> str:
     return hasher.hexdigest()
 
 
+ALLOWED_MIMES_BY_KIND = {
+    EvidenceSourceKind.pdf: {"application/pdf"},
+    EvidenceSourceKind.image: {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"},
+    EvidenceSourceKind.webpage: {"text/html", "application/xhtml+xml"},
+    EvidenceSourceKind.wikimedia: {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif", "image/svg+xml"},
+}
+
+
 def detect_file_mime(file_path: Path | str, header_bytes: bytes | None = None) -> str:
     """Detect file MIME type from magic bytes and file extension."""
     path = Path(file_path)
     if header_bytes is None and path.exists():
         try:
             with open(path, "rb") as f:
-                header_bytes = f.read(1024)
+                header_bytes = f.read(2048)
         except Exception:
             header_bytes = b""
 
@@ -186,12 +194,69 @@ def detect_file_mime(file_path: Path | str, header_bytes: bytes | None = None) -
 
     # HTML detection
     lower_hdr = hdr.lower()
-    if b"<!doctype html" in lower_hdr or b"<html" in lower_hdr or b"<body" in lower_hdr or b"<head" in lower_hdr:
+    if (
+        b"<!doctype html" in lower_hdr
+        or b"<html" in lower_hdr
+        or b"<body" in lower_hdr
+        or b"<head" in lower_hdr
+        or b"<main" in lower_hdr
+        or b"<article" in lower_hdr
+    ):
         return "text/html"
 
     # Fallback to extension
     ext_guess, _ = mimetypes.guess_type(str(path))
     return ext_guess or "application/octet-stream"
+
+
+def validate_source_kind_mime(
+    kind: EvidenceSourceKind | str,
+    detected_mime: str,
+    content_type_header: str | None = None,
+    file_path: Path | str | None = None,
+) -> tuple[bool, str]:
+    """Validate that detected MIME and content header match the expected source kind."""
+    if isinstance(kind, str):
+        try:
+            kind = EvidenceSourceKind(kind)
+        except ValueError:
+            return False, f"Unknown source kind: '{kind}'"
+
+    allowed = ALLOWED_MIMES_BY_KIND.get(kind, set())
+    clean_detected = (detected_mime or "").split(";")[0].strip().lower()
+
+    if clean_detected not in allowed:
+        return False, (
+            f"Source kind '{kind.value}' does not match detected MIME type '{clean_detected}' "
+            f"(expected one of: {', '.join(sorted(allowed))})"
+        )
+
+    # Additional decoder verification as defense in depth
+    if file_path and Path(file_path).exists():
+        p = Path(file_path)
+        if kind == EvidenceSourceKind.pdf:
+            import pymupdf
+            doc = None
+            try:
+                doc = pymupdf.open(str(p))
+                if len(doc) == 0:
+                    return False, "PDF decoder validation failed: document has 0 pages"
+            except Exception as exc:
+                return False, f"PDF decoder validation failed: {exc}"
+            finally:
+                if doc is not None:
+                    try:
+                        doc.close()
+                    except Exception:
+                        pass
+        elif kind in (EvidenceSourceKind.image, EvidenceSourceKind.wikimedia):
+            try:
+                with Image.open(p) as im:
+                    im.verify()
+            except Exception as exc:
+                return False, f"Image decoder validation failed: {exc}"
+
+    return True, clean_detected
 
 
 class SSRFSafeSession(requests.Session):
@@ -211,8 +276,14 @@ def download_evidence_file(
     dest_path: Path | str,
     max_bytes: int = 104857600,  # 100 MB default limit
     timeout: tuple[int, int] = (15, 30),
-) -> tuple[str, str]:
-    """Safely stream-download a remote evidence file with SSRF checks, size limits, and SHA-256 calculation."""
+    etag: str | None = None,
+    last_modified: str | None = None,
+) -> tuple[str, str, str | None, str | None, bool]:
+    """Safely stream-download a remote evidence file with SSRF checks, size limits, and SHA-256 calculation.
+
+    Returns:
+        (sha256_hex, mime_type, response_etag, response_last_modified, is_not_modified_304)
+    """
     is_safe, reason = is_safe_remote_url(url)
     if not is_safe:
         raise SSRFValidationError(f"Remote URL blocked by SSRF policy: {reason}")
@@ -225,6 +296,10 @@ def download_evidence_file(
         "User-Agent": "MoneyPrinterTurbo/1.3 (Evidence Acquisition Engine; +https://github.com/hntt2510/cloneMoneyPrinted)",
         "Accept": "*/*",
     }
+    if etag:
+        headers["If-None-Match"] = etag
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
 
     try:
         with session.get(
@@ -236,19 +311,27 @@ def download_evidence_file(
             stream=True,
             allow_redirects=True,
         ) as response:
+            if response.status_code == 304 and dest.exists() and dest.stat().st_size > 0:
+                # Not modified, reuse existing
+                existing_sha = compute_file_sha256(dest)
+                existing_mime = detect_file_mime(dest)
+                return existing_sha, existing_mime, etag, last_modified, True
+
             if response.status_code >= 400:
                 raise RuntimeError(f"HTTP {response.status_code} error downloading from {sanitize_secret_url(url)}")
 
             content_length_hdr = response.headers.get("Content-Length")
             if content_length_hdr:
+                parsed_len: int | None = None
                 try:
-                    content_length = int(content_length_hdr)
-                    if content_length > max_bytes:
-                        raise ValueError(
-                            f"Remote file size ({content_length} bytes) exceeds maximum limit of {max_bytes} bytes"
-                        )
+                    parsed_len = int(content_length_hdr.strip())
                 except (ValueError, TypeError):
-                    pass
+                    parsed_len = None
+
+                if parsed_len is not None and parsed_len > max_bytes:
+                    raise ValueError(
+                        f"Remote file size ({parsed_len} bytes) exceeds maximum limit of {max_bytes} bytes"
+                    )
 
             hasher = hashlib.sha256()
             bytes_downloaded = 0
@@ -262,8 +345,8 @@ def download_evidence_file(
                     if bytes_downloaded > max_bytes:
                         dest.unlink(missing_ok=True)
                         raise ValueError(f"Downloaded stream exceeded maximum limit of {max_bytes} bytes")
-                    if len(header_sample) < 1024:
-                        header_sample.extend(chunk[: 1024 - len(header_sample)])
+                    if len(header_sample) < 2048:
+                        header_sample.extend(chunk[: 2048 - len(header_sample)])
                     hasher.update(chunk)
                     f.write(chunk)
 
@@ -272,11 +355,21 @@ def download_evidence_file(
                 raise ValueError("Downloaded file is empty (0 bytes)")
 
             sha256_hex = hasher.hexdigest()
+            resp_content_type = response.headers.get("Content-Type")
             mime_type = detect_file_mime(dest, bytes(header_sample))
-            return sha256_hex, mime_type
+
+            # If Content-Type header exists and magic detection was generic octet-stream, adopt header MIME
+            if mime_type == "application/octet-stream" and resp_content_type:
+                clean_ct = resp_content_type.split(";")[0].strip().lower()
+                if clean_ct:
+                    mime_type = clean_ct
+
+            resp_etag = response.headers.get("ETag")
+            resp_last_modified = response.headers.get("Last-Modified")
+            return sha256_hex, mime_type, resp_etag, resp_last_modified, False
 
     except Exception as exc:
-        if dest.exists():
+        if dest.exists() and not (etag and response.status_code == 304):
             try:
                 dest.unlink()
             except Exception:

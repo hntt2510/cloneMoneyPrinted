@@ -38,6 +38,11 @@ def compute_evidence_spec_fingerprint(
     width: int,
     height: int,
     render_mode: str,
+    title: str = "",
+    publisher: str | None = None,
+    trust: str = "",
+    license: str | None = None,
+    matched_text: str | None = None,
 ) -> str:
     """Compute deterministic SHA-256 fingerprint for an evidence scene specification."""
     clean_boxes = []
@@ -61,6 +66,11 @@ def compute_evidence_spec_fingerprint(
         "width": width,
         "height": height,
         "render_mode": render_mode,
+        "title": title,
+        "publisher": publisher or "",
+        "trust": trust,
+        "license": license or "",
+        "matched_text": matched_text or "",
     }
     dumped = json.dumps(canonical, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(dumped.encode("utf-8")).hexdigest()

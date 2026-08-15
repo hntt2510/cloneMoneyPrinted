@@ -47,9 +47,11 @@ from app.services.evidence_selector import (
 )
 from app.services.evidence_sources import (
     compute_file_sha256,
+    detect_file_mime,
     download_evidence_file,
     sanitize_secret_url,
     search_wikimedia_evidence,
+    validate_source_kind_mime,
 )
 from app.services.project_spec import load_project_spec, preflight_project
 from app.services.project_timeline_runner import run_project_plan
@@ -296,89 +298,112 @@ def run_evidence_acquisition(
         end_f = round(cue.end * fps)
         duration_f = max(1, end_f - start_f)
 
-        # 1. Resolve eligible sources
-        eligible_sources: list[tuple[EvidenceSource, bool]] = []
-        # A. Explicitly pinned source_ids
-        pinned_set = set(payload.source_ids)
-        for s in registry.sources:
-            if s.id in pinned_set:
-                eligible_sources.append((s, True))
+        diagnostics: list[str] = []
 
-        # B. Matching sources from registry
-        for s in registry.sources:
-            if s.id not in pinned_set and s.allowed_for_evidence:
-                # Include if query / hint has any match
-                eligible_sources.append((s, False))
-
-        # C. Autonomous Wikimedia discovery if registry has no candidates or no pinned matches
-        wikimedia_sources: list[EvidenceSource] = []
-        if not pinned_set:
-            try:
-                wiki_results = search_wikimedia_evidence(payload.search_query, limit=4)
-                for idx, wr in enumerate(wiki_results):
-                    w_source = EvidenceSource(
-                        id=f"WIKI_{cue.id}_{idx+1}",
-                        kind=EvidenceSourceKind.wikimedia,
-                        url=wr["image_url"],
-                        title=wr["title"],
-                        publisher=wr.get("author") or "Wikimedia Commons",
-                        trust=EvidenceSourceTrust.public_domain if wr.get("license") and "public domain" in wr.get("license", "").lower() else EvidenceSourceTrust.licensed,
-                        license=wr.get("license"),
-                        tags=wr.get("categories", []),
-                        metadata={"description_url": wr.get("source_url")},
-                    )
-                    wikimedia_sources.append(w_source)
-            except Exception as w_exc:
-                logger.warning(f"Wikimedia search error for {cue.id}: {w_exc}")
-
-        all_candidate_sources = eligible_sources + [(ws, False) for ws in wikimedia_sources]
-
-        # 2. Acquire and evaluate candidates
-        candidates: list[EvidenceCandidate] = []
-        for source, is_pinned in all_candidate_sources:
+        # Helper to acquire, validate MIME, and score a source
+        def _evaluate_source(source: EvidenceSource, is_pinned: bool) -> EvidenceCandidate | None:
             source_cache_dir = cache_dir / source.id
             source_cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_meta_file = source_cache_dir / "cache_metadata.json"
 
             local_source_file: Path | None = None
             source_sha256: str | None = None
+            detected_mime: str | None = None
 
-            # Download or load local source bytes
             try:
                 if source.local_file:
-                    # Resolve local file
+                    # Resolve local file path
                     p_loc = Path(source.local_file).expanduser()
                     if not p_loc.is_absolute() and project_dir:
                         p_loc = project_dir / p_loc
                     if not p_loc.exists() and (task_dir / source.local_file).exists():
                         p_loc = task_dir / source.local_file
                     if not p_loc.exists():
-                        continue
+                        logger.warning(f"Local source file '{source.local_file}' for {source.id} not found on disk")
+                        return None
+
+                    orig_sha = compute_file_sha256(p_loc)
                     dest_file = source_cache_dir / p_loc.name
-                    if not dest_file.exists():
+
+                    # Check if cached copy exists and has matching SHA
+                    cached_sha = None
+                    if cache_meta_file.exists() and dest_file.exists():
+                        try:
+                            c_meta = json.loads(cache_meta_file.read_text(encoding="utf-8"))
+                            cached_sha = c_meta.get("source_sha256")
+                        except Exception:
+                            cached_sha = None
+
+                    if not dest_file.exists() or cached_sha != orig_sha:
                         shutil.copy2(p_loc, dest_file)
+                        detected_mime = detect_file_mime(dest_file)
+                        cache_meta = {
+                            "source_sha256": orig_sha,
+                            "source_path": str(p_loc.resolve()),
+                            "detected_mime": detected_mime,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        cache_meta_file.write_text(json.dumps(cache_meta, indent=2), encoding="utf-8")
+                    else:
+                        detected_mime = detect_file_mime(dest_file)
+
                     local_source_file = dest_file
-                    source_sha256 = compute_file_sha256(dest_file)
+                    source_sha256 = orig_sha
 
                 elif source.url:
                     parsed_url = source.url.split("?")[0]
                     ext = Path(parsed_url).suffix or ".bin"
                     dest_file = source_cache_dir / f"source{ext}"
-                    if dest_file.exists() and dest_file.stat().st_size > 0:
-                        local_source_file = dest_file
-                        source_sha256 = compute_file_sha256(dest_file)
-                    else:
-                        sha, _ = download_evidence_file(source.url, dest_file)
-                        local_source_file = dest_file
-                        source_sha256 = sha
+
+                    cached_etag = None
+                    cached_last_modified = None
+                    if cache_meta_file.exists():
+                        try:
+                            c_meta = json.loads(cache_meta_file.read_text(encoding="utf-8"))
+                            cached_etag = c_meta.get("etag")
+                            cached_last_modified = c_meta.get("last_modified")
+                        except Exception:
+                            pass
+
+                    sha, mime, resp_etag, resp_last_mod, is_304 = download_evidence_file(
+                        url=source.url,
+                        dest_path=dest_file,
+                        etag=cached_etag,
+                        last_modified=cached_last_modified,
+                    )
+                    local_source_file = dest_file
+                    source_sha256 = sha
+                    detected_mime = mime
+
+                    if not is_304 or not cache_meta_file.exists():
+                        cache_meta = {
+                            "url": sanitize_secret_url(source.url),
+                            "source_sha256": sha,
+                            "detected_mime": mime,
+                            "etag": resp_etag,
+                            "last_modified": resp_last_mod,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        cache_meta_file.write_text(json.dumps(cache_meta, indent=2), encoding="utf-8")
 
             except Exception as src_err:
                 logger.warning(f"Could not load source {source.id} ({source.title}): {src_err}")
-                continue
+                return None
 
             if not local_source_file or not local_source_file.exists():
-                continue
+                return None
 
-            # Process source content by kind
+            # Enforce Source Kind MIME Validation
+            is_valid_mime, mime_reason = validate_source_kind_mime(
+                kind=source.kind,
+                detected_mime=detected_mime or "",
+                file_path=local_source_file,
+            )
+            if not is_valid_mime:
+                logger.warning(f"Source {source.id} rejected due to MIME validation failure: {mime_reason}")
+                return None
+
+            # Content Extraction and Matching
             try:
                 if source.kind == EvidenceSourceKind.pdf:
                     p_num, p_count, matched_txt, m_type, bboxes = inspect_and_extract_pdf_evidence(
@@ -397,7 +422,7 @@ def run_evidence_acquisition(
                         page_number=p_num,
                         is_pinned_source=is_pinned,
                     )
-                    cand = EvidenceCandidate(
+                    return EvidenceCandidate(
                         id=f"{source.id}_p{p_num}",
                         source_id=source.id,
                         kind=source.kind,
@@ -407,6 +432,7 @@ def run_evidence_acquisition(
                         license=source.license,
                         source_url=sanitize_secret_url(source.url),
                         local_file=str(local_source_file),
+                        detected_mime=detected_mime,
                         query=payload.search_query,
                         page_number=p_num,
                         page_count=p_count,
@@ -417,7 +443,6 @@ def run_evidence_acquisition(
                         score_breakdown=breakdown,
                         metadata={"source_sha256": source_sha256},
                     )
-                    candidates.append(cand)
 
                 elif source.kind == EvidenceSourceKind.webpage:
                     html_content = local_source_file.read_text(encoding="utf-8", errors="replace")
@@ -436,7 +461,7 @@ def run_evidence_acquisition(
                         matched_text=snippet,
                         is_pinned_source=is_pinned,
                     )
-                    cand = EvidenceCandidate(
+                    return EvidenceCandidate(
                         id=f"{source.id}_web",
                         source_id=source.id,
                         kind=source.kind,
@@ -446,6 +471,7 @@ def run_evidence_acquisition(
                         license=source.license,
                         source_url=sanitize_secret_url(source.url),
                         local_file=str(local_source_file),
+                        detected_mime=detected_mime,
                         query=payload.search_query,
                         matched_text=snippet,
                         match_type=m_type,
@@ -454,24 +480,32 @@ def run_evidence_acquisition(
                         score_breakdown=breakdown,
                         metadata={"source_sha256": source_sha256, "full_text": full_txt},
                     )
-                    candidates.append(cand)
 
                 elif source.kind in (EvidenceSourceKind.image, EvidenceSourceKind.wikimedia):
-                    # Check if valid image
                     with Image.open(local_source_file) as im:
                         im_w, im_h = im.size
 
                     boxes = [source.bbox_hint] if source.bbox_hint else []
-                    m_type = "exact_target" if boxes else "query_relevance"
+                    # Accurate image match semantics without OCR
+                    if source.quote_hint or source.metadata.get("evidence_text"):
+                        m_type = "registry_evidence_hint"
+                        matched_txt = source.quote_hint or source.metadata.get("evidence_text")
+                    elif boxes:
+                        m_type = "approved_region"
+                        matched_txt = source.title
+                    else:
+                        m_type = "query_relevance"
+                        matched_txt = source.title
+
                     score, breakdown = score_evidence_candidate(
                         cue=cue,
                         payload=payload,
                         source=source,
                         match_type=m_type,
-                        matched_text=source.title,
+                        matched_text=matched_txt,
                         is_pinned_source=is_pinned,
                     )
-                    cand = EvidenceCandidate(
+                    return EvidenceCandidate(
                         id=f"{source.id}_img",
                         source_id=source.id,
                         kind=source.kind,
@@ -481,8 +515,9 @@ def run_evidence_acquisition(
                         license=source.license,
                         source_url=sanitize_secret_url(source.url),
                         local_file=str(local_source_file),
+                        detected_mime=detected_mime,
                         query=payload.search_query,
-                        matched_text=source.title,
+                        matched_text=matched_txt,
                         match_type=m_type,
                         highlight_boxes=boxes,
                         width=im_w,
@@ -491,32 +526,109 @@ def run_evidence_acquisition(
                         score_breakdown=breakdown,
                         metadata={"source_sha256": source_sha256},
                     )
-                    candidates.append(cand)
-
             except Exception as cand_err:
                 logger.warning(f"Error evaluating candidate from {source.id}: {cand_err}")
+                return None
 
-        # 3. Rank and select best candidate
-        selected_cand, fail_reason = rank_and_select_candidate(
-            candidates,
-            evidence_required=payload.evidence_required,
-            min_score_threshold=35.0,
-        )
+        # STAGE 1: Evaluate pinned sources
+        registry_sources_by_id = {s.id: s for s in registry.sources}
+        stage1_candidates: list[EvidenceCandidate] = []
+
+        for sid in payload.source_ids:
+            if sid not in registry_sources_by_id:
+                diag = f"Pinned source ID '{sid}' not found in registry"
+                logger.warning(diag)
+                diagnostics.append(diag)
+            else:
+                s = registry_sources_by_id[sid]
+                if not s.allowed_for_evidence:
+                    diag = f"Source {sid} is not allowed for evidence"
+                    logger.warning(diag)
+                    diagnostics.append(diag)
+                else:
+                    cand = _evaluate_source(s, is_pinned=True)
+                    if cand:
+                        stage1_candidates.append(cand)
+
+        selected_cand: EvidenceCandidate | None = None
+        fail_reason: str | None = None
+
+        if stage1_candidates:
+            cand, reason = rank_and_select_candidate(stage1_candidates, evidence_required=payload.evidence_required)
+            if cand and cand.score >= 35.0:
+                selected_cand = cand
+
+        # STAGE 2: Evaluate eligible registry sources
+        if selected_cand is None:
+            pinned_set = set(payload.source_ids)
+            stage2_candidates: list[EvidenceCandidate] = list(stage1_candidates)
+            for s in registry.sources:
+                if s.id not in pinned_set and s.allowed_for_evidence:
+                    cand = _evaluate_source(s, is_pinned=False)
+                    if cand:
+                        stage2_candidates.append(cand)
+
+            if stage2_candidates:
+                cand, reason = rank_and_select_candidate(stage2_candidates, evidence_required=payload.evidence_required)
+                if cand and cand.score >= 35.0:
+                    selected_cand = cand
+                else:
+                    fail_reason = reason
+
+        # STAGE 3: Wikimedia Discovery Fallback (ONLY if Stage 1 & 2 failed)
+        if selected_cand is None and not payload.source_ids:
+            wikimedia_sources: list[EvidenceSource] = []
+            try:
+                wiki_results = search_wikimedia_evidence(payload.search_query, limit=4)
+                for idx, wr in enumerate(wiki_results):
+                    w_source = EvidenceSource(
+                        id=f"WIKI_{cue.id}_{idx+1}",
+                        kind=EvidenceSourceKind.wikimedia,
+                        url=wr["image_url"],
+                        title=wr["title"],
+                        publisher=wr.get("author") or "Wikimedia Commons",
+                        trust=EvidenceSourceTrust.public_domain if wr.get("license") and "public domain" in wr.get("license", "").lower() else EvidenceSourceTrust.licensed,
+                        license=wr.get("license"),
+                        tags=wr.get("categories", []),
+                        metadata={"description_url": wr.get("source_url")},
+                    )
+                    wikimedia_sources.append(w_source)
+            except Exception as w_exc:
+                logger.warning(f"Wikimedia search error for {cue.id}: {w_exc}")
+
+            stage3_candidates: list[EvidenceCandidate] = []
+            for ws in wikimedia_sources:
+                cand = _evaluate_source(ws, is_pinned=False)
+                if cand:
+                    stage3_candidates.append(cand)
+
+            if stage3_candidates:
+                cand, reason = rank_and_select_candidate(stage3_candidates, evidence_required=payload.evidence_required)
+                if cand and cand.score >= 35.0:
+                    selected_cand = cand
+                else:
+                    fail_reason = reason
+
+        if diagnostics:
+            a_job.metadata.setdefault("diagnostics", []).extend(diagnostics)
+            r_job.metadata.setdefault("diagnostics", []).extend(diagnostics)
 
         if selected_cand is None:
+            final_err = fail_reason or "No eligible evidence sources met quality threshold"
             if payload.evidence_required:
-                logger.error(f"Scene {cue.id} evidence acquisition failed: {fail_reason}")
-                _transition_job(a_job, JobStatus.failed, error=fail_reason)
-                _transition_job(r_job, JobStatus.failed, error=fail_reason)
-                failed_scenes.append({"scene_id": cue.id, "error": fail_reason})
+                logger.error(f"Scene {cue.id} evidence acquisition failed: {final_err}")
+                _transition_job(a_job, JobStatus.failed, error=final_err)
+                _transition_job(r_job, JobStatus.failed, error=final_err)
+                failed_scenes.append({"scene_id": cue.id, "error": final_err, "diagnostics": diagnostics})
             else:
-                logger.info(f"Scene {cue.id} optional evidence skipped: {fail_reason}")
+                logger.info(f"Scene {cue.id} optional evidence skipped: {final_err}")
                 _transition_job(a_job, JobStatus.ready, output="skipped")
                 _transition_job(r_job, JobStatus.ready, output="skipped")
                 skipped_scenes.append({
                     "scene_id": cue.id,
-                    "reason": fail_reason,
+                    "reason": final_err,
                     "fallback_recommendation": "text",
+                    "diagnostics": diagnostics,
                 })
             continue
 
@@ -552,6 +664,11 @@ def run_evidence_acquisition(
             width=target_w,
             height=target_h,
             render_mode=render_mode,
+            title=selected_cand.title,
+            publisher=selected_cand.publisher,
+            trust=selected_cand.trust.value,
+            license=selected_cand.license,
+            matched_text=selected_cand.matched_text,
         )
 
         # Safe Resumability Check
@@ -680,6 +797,7 @@ def run_evidence_acquisition(
             source_url=selected_cand.source_url,
             local_source_file=selected_cand.local_file,
             source_sha256=source_sha,
+            detected_mime=selected_cand.detected_mime,
             page_number=selected_cand.page_number,
             matched_text=selected_cand.matched_text,
             match_type=selected_cand.match_type,

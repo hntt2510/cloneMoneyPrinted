@@ -193,6 +193,45 @@ class TestEvidenceSelector(unittest.TestCase):
         self.assertIsNone(selected)
         self.assertIn("optional evidence", fail_reason)
 
+    def test_generic_ssa_building_image_alone_cannot_satisfy_required_evidence(self):
+        # A generic image of SSA building without verified evidence text must fail under evidence_required=True
+        cand_building = EvidenceCandidate(
+            id="SRC_SSA_BLDG_img",
+            source_id="SRC_SSA_BLDG",
+            kind=EvidenceSourceKind.image,
+            title="Social Security Administration Headquarters Building",
+            publisher="Stock Photos LLC",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility begins at age 65",
+            matched_text="Social Security Administration Headquarters Building",
+            match_type="query_relevance",
+            highlight_boxes=[],
+            score=40.0,
+        )
+        selected, fail_reason = rank_and_select_candidate([cand_building], evidence_required=True)
+        self.assertIsNone(selected)
+        self.assertIn("lacks verified factual evidence text", fail_reason)
+
+    def test_approved_user_provided_image_with_quote_hint_allowed(self):
+        # User provided image with registered quote_hint has registry_evidence_hint match type and can be selected
+        cand_user = EvidenceCandidate(
+            id="SRC_CHART_img",
+            source_id="SRC_CHART",
+            kind=EvidenceSourceKind.image,
+            title="Official Medicare Age Chart",
+            publisher="SSA",
+            trust=EvidenceSourceTrust.user_provided,
+            query="Medicare eligibility begins at age 65",
+            matched_text="Medicare eligibility begins at age 65",
+            match_type="registry_evidence_hint",
+            highlight_boxes=[EvidenceBBox(x=0.1, y=0.1, width=0.8, height=0.2)],
+            score=55.0,
+        )
+        selected, fail_reason = rank_and_select_candidate([cand_user], evidence_required=True)
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.source_id, "SRC_CHART")
+        self.assertEqual(selected.match_type, "registry_evidence_hint")
+
 
 if __name__ == "__main__":
     unittest.main()
