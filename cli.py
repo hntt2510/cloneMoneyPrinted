@@ -127,6 +127,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="acquire and render clean scene clips for DOCUMENT cues without full assembly",
     )
+    parser.add_argument(
+        "--run-all",
+        action="store_true",
+        help="run end-to-end autonomous research and asset generation pipeline without human checkpoint or video assembly",
+    )
     parser.add_argument("--video-subject", required=False, help="video subject")
     parser.add_argument("--video-script", default="", help="custom script")
     parser.add_argument("--video-terms", default=None, help="comma-separated terms")
@@ -341,6 +346,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "acquire_broll_only",
             "render_motion_only",
             "acquire_evidence_only",
+            "run_all",
             "task_id",
             "stop_at",
         }
@@ -360,18 +366,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error("--validate-only cannot be combined with --render-motion-only")
         if args.validate_only and args.acquire_evidence_only:
             parser.error("--validate-only cannot be combined with --acquire-evidence-only")
+        if args.validate_only and args.run_all:
+            parser.error("--validate-only cannot be combined with --run-all")
         if args.plan_only and args.acquire_broll_only:
             parser.error("--plan-only cannot be combined with --acquire-broll-only")
         if args.plan_only and args.render_motion_only:
             parser.error("--plan-only cannot be combined with --render-motion-only")
         if args.plan_only and args.acquire_evidence_only:
             parser.error("--plan-only cannot be combined with --acquire-evidence-only")
+        if args.plan_only and args.run_all:
+            parser.error("--plan-only cannot be combined with --run-all")
         if args.acquire_broll_only and args.render_motion_only:
             parser.error("--acquire-broll-only cannot be combined with --render-motion-only")
         if args.acquire_broll_only and args.acquire_evidence_only:
             parser.error("--acquire-broll-only cannot be combined with --acquire-evidence-only")
+        if args.acquire_broll_only and args.run_all:
+            parser.error("--acquire-broll-only cannot be combined with --run-all")
         if args.render_motion_only and args.acquire_evidence_only:
             parser.error("--render-motion-only cannot be combined with --acquire-evidence-only")
+        if args.render_motion_only and args.run_all:
+            parser.error("--render-motion-only cannot be combined with --run-all")
+        if args.acquire_evidence_only and args.run_all:
+            parser.error("--acquire-evidence-only cannot be combined with --run-all")
         if args.plan_only and "--stop-at" in provided_options:
             parser.error("--stop-at cannot be used together with --plan-only")
         if args.acquire_broll_only and "--stop-at" in provided_options:
@@ -380,6 +396,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error("--stop-at cannot be used together with --render-motion-only")
         if args.acquire_evidence_only and "--stop-at" in provided_options:
             parser.error("--stop-at cannot be used together with --acquire-evidence-only")
+        if args.run_all and "--stop-at" in provided_options:
+            parser.error("--stop-at cannot be used together with --run-all")
     elif args.validate_only:
         parser.error("--validate-only requires --project")
     elif args.plan_only:
@@ -390,6 +408,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--render-motion-only requires --project")
     elif args.acquire_evidence_only:
         parser.error("--acquire-evidence-only requires --project")
+    elif args.run_all:
+        parser.error("--run-all requires --project")
     elif not args.video_subject:
         parser.error("--video-subject is required unless --project is provided")
 
@@ -529,6 +549,15 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
                 )
                 print(json.dumps(result, ensure_ascii=False))
                 return 0
+            if args.run_all:
+                from app.services.scene_orchestrator import run_all_project
+
+                result = run_all_project(
+                    args.project,
+                    task_id=args.task_id or None,
+                )
+                print(json.dumps(result, ensure_ascii=False))
+                return 0 if result.get("status") == "complete" else 1
             result = run_project(
                 args.project,
                 task_id=args.task_id or None,

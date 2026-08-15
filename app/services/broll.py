@@ -535,10 +535,14 @@ def acquire_broll_scene(
     rendered_path = scene_dir / "rendered.mp4"
     source_path = scene_dir / "source.mp4"
 
-    scene_duration = max(0.1, (cue.end or 0.0) - (cue.start or 0.0))
+    fps = project.project.fps or 30
+    start_frame = round((cue.start or 0.0) * fps)
+    end_frame = round((cue.end or 0.0) * fps)
+    duration_frames = max(1, end_frame - start_frame)
+    scene_duration = duration_frames / fps
+
     aspect = project.project.aspect_ratio
     target_width, target_height = aspect.to_resolution()
-    fps = project.project.fps or 30
 
     if on_progress:
         on_progress({"status": JobStatus.queued})
@@ -611,7 +615,7 @@ def acquire_broll_scene(
             provider_errors_out=errors,
         )
 
-        for candidate in candidates:
+        for cand_idx, candidate in enumerate(candidates):
             attempts += 1
             candidate_ids_attempted.append(candidate.id)
 
@@ -670,6 +674,9 @@ def acquire_broll_scene(
                         "attempts": attempts,
                         "query_stage": query,
                         "candidate_metadata": candidate.metadata,
+                        "start_frame": start_frame,
+                        "end_frame": end_frame,
+                        "duration_frames": duration_frames,
                     },
                 )
 
@@ -691,8 +698,9 @@ def acquire_broll_scene(
                 logger.warning(err_msg)
                 errors.append(err_msg)
 
-                # Signal retrying state when more candidates or queries exist
-                if on_progress:
+                has_more_in_query = (cand_idx < len(candidates) - 1)
+                has_more_queries = (query_index < len(queries) - 1)
+                if on_progress and (has_more_in_query or has_more_queries):
                     on_progress(
                         {
                             "status": JobStatus.retrying,
