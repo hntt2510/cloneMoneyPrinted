@@ -4,39 +4,43 @@ import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
 import { TextProps, Theme } from '../types';
 
-export const TextTemplate: React.FC<TextProps & { theme?: Partial<Theme> }> = ({
+export const TextTemplate: React.FC<TextProps> = ({
   headline,
   subheadline,
   style_variant = 'bold',
   theme: customTheme,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
+  const isContinuous = isGrouped && !isFirstInGroup;
+
   const spr = spring({
-    frame,
+    frame: isContinuous ? 100 : frame,
     fps,
     config: { damping: 13, stiffness: 95, mass: 0.8 },
   });
 
-  const titleOpacity = interpolate(spr, [0, 1], [0, 1]);
-  const titleScale = interpolate(spr, [0, 1], [0.9, 1]);
-  const titleTranslateY = interpolate(spr, [0, 1], [24, 0]);
+  const titleOpacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
+  const titleScale = isContinuous ? 1 : interpolate(spr, [0, 1], [0.9, 1]);
+  const titleTranslateY = isContinuous ? 0 : interpolate(spr, [0, 1], [24, 0]);
 
   const lineSpr = spring({
-    frame: Math.max(0, frame - 6),
+    frame: Math.max(0, (isContinuous ? 100 : frame) - 6),
     fps,
     config: { damping: 14, stiffness: 90, mass: 0.9 },
   });
-  const lineWidthPct = interpolate(lineSpr, [0, 1], [0, 100]);
+  const lineWidthPct = isContinuous ? 100 : interpolate(lineSpr, [0, 1], [0, 100]);
 
   const fontSize = isPortrait ? width * 0.095 : width * 0.058;
   const subFontSize = fontSize * 0.45;
 
   return (
-    <Layout theme={theme}>
+    <Layout theme={theme} isGrouped={isGrouped}>
       <div
         style={{
           display: 'flex',

@@ -32,9 +32,39 @@ def _parse_float(val: Any) -> float | None:
     if isinstance(val, (int, float)):
         return float(val)
     if isinstance(val, str):
-        cleaned = re.sub(r"[\$,% ]", "", val.strip())
+        cleaned = val.strip()
+        if not cleaned:
+            return None
+        # Remove currency symbols ($ and others like €£¥), commas, spaces
+        cleaned = re.sub(r"[\$, €£¥]", "", cleaned).strip()
+        if not cleaned:
+            return None
+
+        # Check percentage
+        if cleaned.endswith("%"):
+            num_part = cleaned[:-1].strip()
+            try:
+                return float(num_part)
+            except ValueError:
+                return None
+
+        # Check scale suffixes K, M, B (case-insensitive)
+        multiplier = 1.0
+        upper = cleaned.upper()
+        if upper.endswith("B"):
+            multiplier = 1_000_000_000.0
+            num_part = cleaned[:-1].strip()
+        elif upper.endswith("M"):
+            multiplier = 1_000_000.0
+            num_part = cleaned[:-1].strip()
+        elif upper.endswith("K"):
+            multiplier = 1_000.0
+            num_part = cleaned[:-1].strip()
+        else:
+            num_part = cleaned
+
         try:
-            return float(cleaned)
+            return float(num_part) * multiplier
         except ValueError:
             return None
     return None
@@ -44,6 +74,13 @@ def _parse_int(val: Any) -> int | None:
     f = _parse_float(val)
     if f is not None:
         return int(round(f))
+    return None
+
+
+def _get_first_present(d: dict[str, Any], keys: list[str]) -> Any:
+    for k in keys:
+        if k in d and d[k] is not None:
+            return d[k]
     return None
 
 
@@ -104,12 +141,12 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
     props_dict: dict[str, Any] = {}
 
     if requested_template == "number":
-        value = data.get("value") or data.get("pct") or data.get("amount") or data.get("num")
-        if value is not None and str(value).strip():
-            num_val = _parse_float(value)
+        val_raw = _get_first_present(data, ["value", "pct", "amount", "num"])
+        if val_raw is not None and str(val_raw).strip() != "":
+            num_val = _parse_float(val_raw)
             props_dict = NumberProps(
                 headline=headline,
-                value=str(value).strip(),
+                value=str(val_raw).strip(),
                 numeric_value=num_val,
                 prefix=data.get("prefix"),
                 suffix=data.get("suffix"),
@@ -121,18 +158,22 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
             fallback_reason = "Missing value for number template"
 
     elif requested_template == "counter":
-        end_val = data.get("end_value") or data.get("value") or data.get("target") or data.get("num")
-        parsed_end = _parse_float(end_val)
+        end_raw = _get_first_present(data, ["end_value", "value", "target", "num"])
+        parsed_end = _parse_float(end_raw)
         if parsed_end is not None:
-            start_val = _parse_float(data.get("start_value")) or 0.0
+            start_raw = _get_first_present(data, ["start_value"])
+            start_val = _parse_float(start_raw) if start_raw is not None else 0.0
+            if start_val is None:
+                start_val = 0.0
+            decimals = int(data.get("decimals") if data.get("decimals") is not None else (1 if "." in str(end_raw) else 0))
             props_dict = CounterProps(
                 headline=headline,
                 start_value=start_val,
                 end_value=parsed_end,
-                display_value=str(end_val).strip() if end_val else None,
+                display_value=str(end_raw).strip() if end_raw is not None else None,
                 prefix=data.get("prefix"),
                 suffix=data.get("suffix"),
-                decimals=int(data.get("decimals") or (1 if "." in str(end_val) else 0)),
+                decimals=decimals,
                 label=data.get("label") or data.get("caption"),
             ).model_dump(mode="json")
         else:
@@ -149,7 +190,7 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
                         ComparisonItem(
                             label=str(it["label"]).strip(),
                             value=str(it["value"]).strip(),
-                            numeric_value=_parse_float(it.get("numeric_value") or it["value"]),
+                            numeric_value=_parse_float(it.get("numeric_value") if it.get("numeric_value") is not None else it["value"]),
                             highlight=bool(it.get("highlight")),
                         )
                     )
@@ -199,16 +240,17 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
                             BarChartItem(
                                 label=str(it["label"]).strip(),
                                 value=val,
-                                display_value=str(it.get("display_value") or it["value"]).strip(),
+                                display_value=str(it.get("display_value") if it.get("display_value") is not None else it["value"]).strip(),
                                 color=it.get("color"),
                             )
                         )
         if len(bar_items) >= 2:
+            baseline_val = _parse_float(data.get("baseline"))
             props_dict = BarChartProps(
                 headline=headline,
                 items=bar_items,
                 unit=data.get("unit"),
-                baseline=float(data.get("baseline") or 0.0),
+                baseline=baseline_val if baseline_val is not None else 0.0,
             ).model_dump(mode="json")
         else:
             rendered_template = "callout"
@@ -220,13 +262,14 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
         if isinstance(raw_points, list) and len(raw_points) >= 2:
             for p in raw_points:
                 if isinstance(p, dict) and (p.get("x_label") or p.get("x")) and (p.get("y_value") is not None or p.get("y") is not None):
-                    y_val = _parse_float(p.get("y_value") if p.get("y_value") is not None else p.get("y"))
+                    y_raw = p.get("y_value") if p.get("y_value") is not None else p.get("y")
+                    y_val = _parse_float(y_raw)
                     if y_val is not None:
                         points.append(
                             LineChartPoint(
                                 x_label=str(p.get("x_label") or p.get("x")).strip(),
                                 y_value=y_val,
-                                display_value=str(p.get("display_value") or y_val).strip(),
+                                display_value=str(p.get("display_value") if p.get("display_value") is not None else y_val).strip(),
                             )
                         )
         if len(points) >= 2:
@@ -241,17 +284,17 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
             fallback_reason = "Line chart requires at least 2 valid numeric points"
 
     elif requested_template == "threshold":
-        curr = data.get("current_value") or data.get("value")
-        thresh = data.get("threshold_value") or data.get("threshold") or data.get("limit")
+        curr = _get_first_present(data, ["current_value", "value", "current"])
+        thresh = _get_first_present(data, ["threshold_value", "threshold", "limit", "target"])
         curr_val = _parse_float(curr)
         thresh_val = _parse_float(thresh)
         if curr_val is not None and thresh_val is not None:
             props_dict = ThresholdProps(
                 headline=headline,
                 current_value=curr_val,
-                current_display=str(data.get("current_display") or curr).strip(),
+                current_display=str(data.get("current_display") if data.get("current_display") is not None else curr).strip(),
                 threshold_value=thresh_val,
-                threshold_display=str(data.get("threshold_display") or thresh).strip(),
+                threshold_display=str(data.get("threshold_display") if data.get("threshold_display") is not None else thresh).strip(),
                 threshold_label=str(data.get("threshold_label") or "Threshold").strip(),
                 subtext=data.get("subtext"),
             ).model_dump(mode="json")
@@ -294,10 +337,10 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
             fallback_reason = "Age marker template requires at least 1 valid age value"
 
     elif requested_template == "callout":
-        emphasis = data.get("emphasis") or data.get("highlight") or data.get("value")
+        emphasis = _get_first_present(data, ["emphasis", "highlight", "value", "amount", "pct"])
         props_dict = CalloutProps(
             headline=headline,
-            emphasis=str(emphasis).strip() if emphasis else None,
+            emphasis=str(emphasis).strip() if emphasis is not None else None,
             subtext=str(data.get("subtext") or data.get("description") or "").strip() or None,
         ).model_dump(mode="json")
 
@@ -306,10 +349,10 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
         fallback_reason = f"Unknown requested template: {requested_template}"
 
     if rendered_template == "callout" and not props_dict:
-        emphasis = data.get("emphasis") or data.get("value") or data.get("amount") or data.get("pct")
+        emphasis = _get_first_present(data, ["emphasis", "highlight", "value", "amount", "pct"])
         props_dict = CalloutProps(
             headline=headline,
-            emphasis=str(emphasis).strip() if emphasis else None,
+            emphasis=str(emphasis).strip() if emphasis is not None else None,
             subtext=str(data.get("subtext") or data.get("description") or "").strip() or None,
         ).model_dump(mode="json")
 

@@ -7,6 +7,92 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const ALLOWED_TEMPLATES = new Set([
+  'number',
+  'counter',
+  'comparison',
+  'timeline',
+  'bar_chart',
+  'line_chart',
+  'threshold',
+  'age_marker',
+  'callout',
+  'text',
+]);
+
+function isPlainObject(obj) {
+  return typeof obj === 'object' && obj !== null && !Array.isArray(obj);
+}
+
+function validateSpec(specData, compositionId) {
+  if (compositionId !== 'Scene' && compositionId !== 'Group') {
+    throw new Error(`Invalid composition ID: "${compositionId}". Must be "Scene" or "Group".`);
+  }
+
+  const fps = Number(specData.fps);
+  if (!Number.isInteger(fps) || fps <= 0 || fps > 240) {
+    throw new Error(`Invalid fps: ${specData.fps}. Must be a positive integer <= 240.`);
+  }
+
+  const width = Number(specData.width);
+  const height = Number(specData.height);
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+    throw new Error(`Invalid dimensions: width=${specData.width}, height=${specData.height}. Must be positive integers.`);
+  }
+
+  const durationInFrames = Number(specData.duration_in_frames);
+  if (!Number.isInteger(durationInFrames) || durationInFrames <= 0) {
+    throw new Error(`Invalid duration_in_frames: ${specData.duration_in_frames}. Must be a positive integer.`);
+  }
+
+  if (compositionId === 'Scene') {
+    const template = (specData.template || '').trim().toLowerCase();
+    if (!ALLOWED_TEMPLATES.has(template)) {
+      throw new Error(
+        `Unknown or disallowed template: "${specData.template}". Allowed templates: ${Array.from(ALLOWED_TEMPLATES).join(', ')}`
+      );
+    }
+    if (!isPlainObject(specData.props)) {
+      throw new Error(`Invalid props for Scene: must be a plain object, got ${typeof specData.props}`);
+    }
+  } else if (compositionId === 'Group') {
+    if (!Array.isArray(specData.scenes) || specData.scenes.length === 0) {
+      throw new Error('Group specification must contain a non-empty "scenes" array.');
+    }
+
+    for (let i = 0; i < specData.scenes.length; i++) {
+      const scene = specData.scenes[i];
+      if (!isPlainObject(scene)) {
+        throw new Error(`Group scene at index ${i} is not a valid object.`);
+      }
+      if (!scene.scene_id || typeof scene.scene_id !== 'string' || !scene.scene_id.trim()) {
+        throw new Error(`Group scene at index ${i} has invalid or empty scene_id.`);
+      }
+      const template = (scene.template || '').trim().toLowerCase();
+      if (!ALLOWED_TEMPLATES.has(template)) {
+        throw new Error(
+          `Group scene "${scene.scene_id}" has unknown template: "${scene.template}". Allowed templates: ${Array.from(ALLOWED_TEMPLATES).join(', ')}`
+        );
+      }
+      if (!isPlainObject(scene.props)) {
+        throw new Error(`Group scene "${scene.scene_id}" props must be a plain object.`);
+      }
+      const startFrame = Number(scene.start_frame);
+      const endFrame = Number(scene.end_frame);
+      const durationFrames = Number(scene.duration_frames);
+      if (!Number.isInteger(startFrame) || startFrame < 0) {
+        throw new Error(`Group scene "${scene.scene_id}" has invalid start_frame: ${scene.start_frame}`);
+      }
+      if (!Number.isInteger(endFrame) || endFrame <= startFrame) {
+        throw new Error(`Group scene "${scene.scene_id}" has invalid end_frame: ${scene.end_frame}`);
+      }
+      if (!Number.isInteger(durationFrames) || durationFrames <= 0 || durationFrames !== (endFrame - startFrame)) {
+        throw new Error(`Group scene "${scene.scene_id}" has invalid duration_frames: ${scene.duration_frames}`);
+      }
+    }
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   let specPath = null;
@@ -50,6 +136,14 @@ async function main() {
 
   if (!compositionId) {
     compositionId = specData.group_id ? 'Group' : 'Scene';
+  }
+
+  // Runtime validation before bundle and render
+  try {
+    validateSpec(specData, compositionId);
+  } catch (valErr) {
+    console.error(`Spec validation error: ${valErr.message}`);
+    process.exit(1);
   }
 
   // Ensure output directory exists

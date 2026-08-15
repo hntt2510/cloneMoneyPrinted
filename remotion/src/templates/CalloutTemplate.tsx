@@ -6,31 +6,37 @@ import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
 import { CalloutProps, Theme } from '../types';
 
-export const CalloutTemplate: React.FC<CalloutProps & { theme?: Partial<Theme> }> = ({
+export const CalloutTemplate: React.FC<CalloutProps> = ({
   headline,
   emphasis,
   subtext,
   theme: customTheme,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
+  const isContinuous = isGrouped && !isFirstInGroup;
+
   const spr = spring({
-    frame: Math.max(0, frame - 5),
+    frame: Math.max(0, frame - (isContinuous ? 0 : 5)),
     fps,
     config: { damping: 13, stiffness: 90, mass: 0.85 },
   });
 
-  const scale = interpolate(spr, [0, 1], [0.9, 1]);
-  const opacity = interpolate(spr, [0, 1], [0, 1]);
+  const scale = isContinuous ? 1 : interpolate(spr, [0, 1], [0.9, 1]);
+  const opacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
 
   return (
-    <Layout theme={theme}>
-      <Header headline={headline} theme={theme} />
+    <Layout theme={theme} isGrouped={isGrouped}>
+      <Header headline={headline} theme={theme} isGrouped={isGrouped} isFirstInGroup={isFirstInGroup} />
       <Card
         theme={theme}
+        isGrouped={isGrouped}
+        isFirstInGroup={isFirstInGroup}
         style={{
           width: isPortrait ? '92%' : '75%',
           padding: `${Math.round(height * 0.04)}px ${Math.round(width * 0.04)}px`,

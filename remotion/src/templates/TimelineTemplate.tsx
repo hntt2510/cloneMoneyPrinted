@@ -5,29 +5,35 @@ import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
 import { Theme, TimelineProps } from '../types';
 
-export const TimelineTemplate: React.FC<TimelineProps & { theme?: Partial<Theme> }> = ({
+export const TimelineTemplate: React.FC<TimelineProps> = ({
   headline,
   milestones = [],
   highlight_index,
   theme: customTheme,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height, durationInFrames } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
+  const isContinuous = isGrouped && !isFirstInGroup;
   const validMilestones = milestones.slice(0, 5);
   const count = validMilestones.length;
 
-  const lineDuration = Math.max(20, Math.round(durationInFrames * 0.5));
-  const lineProgress = interpolate(frame, [8, 8 + lineDuration], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
+  const lineDuration = Math.max(20, Math.round(durationInFrames * (isContinuous ? 0.8 : 0.5)));
+  const lineStartFrame = isContinuous ? 0 : 8;
+  const lineProgress = isContinuous
+    ? 1
+    : interpolate(frame, [lineStartFrame, lineStartFrame + lineDuration], [0, 1], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+      });
 
   return (
-    <Layout theme={theme}>
-      <Header headline={headline} theme={theme} />
+    <Layout theme={theme} isGrouped={isGrouped}>
+      <Header headline={headline} theme={theme} isGrouped={isGrouped} isFirstInGroup={isFirstInGroup} />
       <div
         style={{
           position: 'relative',
@@ -83,15 +89,15 @@ export const TimelineTemplate: React.FC<TimelineProps & { theme?: Partial<Theme>
         )}
 
         {validMilestones.map((m, idx) => {
-          const nodeDelay = 10 + Math.round((idx / Math.max(1, count - 1)) * lineDuration * 0.8);
+          const nodeDelay = isContinuous ? 0 : 10 + Math.round((idx / Math.max(1, count - 1)) * lineDuration * 0.8);
           const spr = spring({
             frame: Math.max(0, frame - nodeDelay),
             fps,
             config: { damping: 12, stiffness: 100, mass: 0.8 },
           });
 
-          const nodeScale = interpolate(spr, [0, 1], [0, 1]);
-          const nodeOpacity = interpolate(spr, [0, 1], [0, 1]);
+          const nodeScale = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
+          const nodeOpacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
           const isHighlighted = highlight_index !== null && highlight_index !== undefined ? highlight_index === idx : !!m.is_active;
 
           return (

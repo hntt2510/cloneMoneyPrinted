@@ -8,6 +8,8 @@ interface HeaderProps {
   subheadline?: string | null;
   theme?: Partial<Theme>;
   delayFrames?: number;
+  isGrouped?: boolean;
+  isFirstInGroup?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -15,11 +17,15 @@ export const Header: React.FC<HeaderProps> = ({
   subheadline,
   theme: customTheme,
   delayFrames = 0,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
+
+  const isContinuous = isGrouped && !isFirstInGroup;
 
   const spr = spring({
     frame: Math.max(0, frame - delayFrames),
@@ -27,8 +33,8 @@ export const Header: React.FC<HeaderProps> = ({
     config: { damping: 15, stiffness: 100, mass: 0.8 },
   });
 
-  const opacity = interpolate(spr, [0, 1], [0, 1]);
-  const translateY = interpolate(spr, [0, 1], [24, 0]);
+  const opacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
+  const translateY = isContinuous ? 0 : interpolate(spr, [0, 1], [24, 0]);
 
   // Responsive font sizes
   const baseFontSize = isPortrait ? width * 0.065 : width * 0.038;

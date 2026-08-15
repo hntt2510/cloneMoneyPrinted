@@ -6,18 +6,21 @@ import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
 import { LineChartProps, Theme } from '../types';
 
-export const LineChartTemplate: React.FC<LineChartProps & { theme?: Partial<Theme> }> = ({
+export const LineChartTemplate: React.FC<LineChartProps> = ({
   headline,
   points = [],
   unit,
   show_area = true,
   theme: customTheme,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height, durationInFrames } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
+  const isContinuous = isGrouped && !isFirstInGroup;
   const validPoints = points.slice(0, 8);
   const count = validPoints.length;
 
@@ -51,15 +54,22 @@ export const LineChartTemplate: React.FC<LineChartProps & { theme?: Partial<Them
     ? `${pathD} L ${coords[coords.length - 1].x} ${svgHeight - paddingBottom} L ${coords[0].x} ${svgHeight - paddingBottom} Z`
     : '';
 
-  const lineProgress = interpolate(frame, [8, Math.round(durationInFrames * 0.65)], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
+  const lineProgress = isContinuous
+    ? 1
+    : interpolate(frame, [8, Math.round(durationInFrames * 0.65)], [0, 1], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+      });
 
   return (
-    <Layout theme={theme}>
-      <Header headline={headline} theme={theme} />
-      <Card theme={theme} style={{ width: '92%', padding: 24 }}>
+    <Layout theme={theme} isGrouped={isGrouped}>
+      <Header headline={headline} theme={theme} isGrouped={isGrouped} isFirstInGroup={isFirstInGroup} />
+      <Card
+        theme={theme}
+        isGrouped={isGrouped}
+        isFirstInGroup={isFirstInGroup}
+        style={{ width: '92%', padding: 24 }}
+      >
         <svg width={svgWidth} height={svgHeight} style={{ overflow: 'visible' }}>
           <defs>
             <linearGradient id="lineAreaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -97,14 +107,14 @@ export const LineChartTemplate: React.FC<LineChartProps & { theme?: Partial<Them
           />
 
           {coords.map((c, idx) => {
-            const pointAppearFrame = 8 + Math.round((idx / Math.max(1, count - 1)) * durationInFrames * 0.55);
+            const pointAppearFrame = isContinuous ? 0 : 8 + Math.round((idx / Math.max(1, count - 1)) * durationInFrames * 0.55);
             const spr = spring({
               frame: Math.max(0, frame - pointAppearFrame),
               fps,
               config: { damping: 12, stiffness: 100, mass: 0.8 },
             });
-            const pointScale = interpolate(spr, [0, 1], [0, 1]);
-            const pointOpacity = interpolate(spr, [0, 1], [0, 1]);
+            const pointScale = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
+            const pointOpacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
 
             const displayVal = c.point.display_value || `${c.point.y_value}${unit ? ` ${unit}` : ''}`;
 

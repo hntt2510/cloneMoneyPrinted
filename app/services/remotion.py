@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import hashlib
 import json
 import os
 import shutil
@@ -22,6 +21,47 @@ from app.utils import utils
 
 class MotionRenderValidationError(ValueError):
     """Raised when rendered motion output fails resolution, fps, duration, or audio checks."""
+
+
+def compute_scene_fingerprint(scene_spec: MotionSceneSpec) -> str:
+    """Compute deterministic SHA-256 fingerprint of a single MotionSceneSpec."""
+    canonical = {
+        "scene_id": scene_spec.scene_id,
+        "visual_type": scene_spec.visual_type,
+        "rendered_template": scene_spec.rendered_template,
+        "props": scene_spec.props,
+        "duration_frames": scene_spec.duration_frames,
+        "fps": scene_spec.fps,
+        "width": scene_spec.width,
+        "height": scene_spec.height,
+    }
+    dumped = json.dumps(canonical, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
+
+
+def compute_group_fingerprint(group_spec: MotionGroupSpec) -> str:
+    """Compute deterministic SHA-256 fingerprint of a MotionGroupSpec."""
+    base_start = group_spec.start_frame
+    canonical = {
+        "group_id": group_spec.group_id,
+        "duration_frames": group_spec.duration_frames,
+        "fps": group_spec.fps,
+        "width": group_spec.width,
+        "height": group_spec.height,
+        "scenes": [
+            {
+                "scene_id": s.scene_id,
+                "rendered_template": s.rendered_template,
+                "props": s.props,
+                "rel_start_frame": s.start_frame - base_start,
+                "rel_end_frame": s.end_frame - base_start,
+                "duration_frames": s.duration_frames,
+            }
+            for s in group_spec.scenes
+        ],
+    }
+    dumped = json.dumps(canonical, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
 
 
 def validate_rendered_motion_clip(
@@ -135,14 +175,15 @@ def render_scene_motion(
     meta_path = meta_dir / f"{scene_spec.scene_id}.json"
     spec_path = meta_dir / f"{scene_spec.scene_id}_spec.json"
 
-    # Resumability check
+    expected_fingerprint = compute_scene_fingerprint(scene_spec)
+
+    # Safe resumability check with deterministic spec fingerprint
     if output_path.exists() and meta_path.exists():
         try:
             saved_data = json.loads(meta_path.read_text(encoding="utf-8"))
             asset = RenderedMotionAsset.model_validate(saved_data)
-            if asset.scene_id == scene_spec.scene_id:
-                if on_progress:
-                    on_progress({"status": JobStatus.processing, "attempt": 0})
+            saved_fp = asset.metadata.get("spec_fingerprint")
+            if asset.scene_id == scene_spec.scene_id and saved_fp == expected_fingerprint:
                 validate_rendered_motion_clip(
                     rendered_path=output_path,
                     expected_duration_frames=scene_spec.duration_frames,
@@ -152,16 +193,27 @@ def render_scene_motion(
                 )
                 logger.info(f"Reusing existing validated motion asset for scene {scene_spec.scene_id}")
                 if on_progress:
-                    on_progress({"status": JobStatus.ready, "attempt": 0, "asset": asset})
+                    on_progress({"status": JobStatus.ready, "attempt": 0, "asset": asset, "is_reuse": True})
                 return asset
+            else:
+                logger.info(
+                    f"Spec fingerprint mismatch for {scene_spec.scene_id} "
+                    f"(saved={saved_fp}, current={expected_fingerprint}); re-rendering."
+                )
         except Exception as resume_exc:
             logger.warning(
                 f"Existing motion artifact for {scene_spec.scene_id} is invalid ({resume_exc}); re-rendering."
             )
             if output_path.exists():
-                output_path.unlink()
+                try:
+                    output_path.unlink()
+                except Exception:
+                    pass
             if meta_path.exists():
-                meta_path.unlink()
+                try:
+                    meta_path.unlink()
+                except Exception:
+                    pass
 
     # Prepare spec JSON for Remotion
     spec_dict = {
@@ -222,6 +274,7 @@ def render_scene_motion(
                 metadata={
                     "attempts": attempts,
                     "headline": scene_spec.props.get("headline"),
+                    "spec_fingerprint": expected_fingerprint,
                 },
             )
 
@@ -261,7 +314,7 @@ def render_group_motion(
     task_directory: Path | str,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[RenderedMotionAsset]:
-    """Render a continuous visual group master MP4 and slice frame-accurate individual scene clips."""
+    """Render a continuous visual group master MP4 with deterministic retry and slice individual scene clips."""
     task_dir = Path(task_directory).resolve()
     motion_dir = task_dir / "motion"
     groups_dir = motion_dir / "groups" / group_spec.group_id
@@ -273,6 +326,9 @@ def render_group_motion(
 
     master_path = groups_dir / "master.mp4"
     group_spec_path = groups_dir / "spec.json"
+    group_meta_path = groups_dir / "metadata.json"
+
+    expected_group_fp = compute_group_fingerprint(group_spec)
 
     # Write group spec JSON for Remotion
     group_dict = {
@@ -296,33 +352,96 @@ def render_group_motion(
     }
     group_spec_path.write_text(json.dumps(group_dict, indent=2), encoding="utf-8")
 
-    # Render group master if not already valid
+    # Safe resumability check for group master
     master_valid = False
-    if master_path.exists():
+    if master_path.exists() and group_meta_path.exists():
         try:
-            validate_rendered_motion_clip(
-                rendered_path=master_path,
-                expected_duration_frames=group_spec.duration_frames,
-                expected_width=group_spec.width,
-                expected_height=group_spec.height,
-                expected_fps=group_spec.fps,
-            )
-            master_valid = True
-            logger.info(f"Reusing existing validated group master for {group_spec.group_id}")
-        except Exception:
+            saved_group_meta = json.loads(group_meta_path.read_text(encoding="utf-8"))
+            saved_fp = saved_group_meta.get("spec_fingerprint")
+            if saved_fp == expected_group_fp:
+                validate_rendered_motion_clip(
+                    rendered_path=master_path,
+                    expected_duration_frames=group_spec.duration_frames,
+                    expected_width=group_spec.width,
+                    expected_height=group_spec.height,
+                    expected_fps=group_spec.fps,
+                )
+                master_valid = True
+                logger.info(f"Reusing existing validated group master for {group_spec.group_id}")
+            else:
+                logger.info(
+                    f"Group spec fingerprint mismatch for {group_spec.group_id} "
+                    f"(saved={saved_fp}, current={expected_group_fp}); re-rendering group master."
+                )
+        except Exception as resume_exc:
+            logger.warning(f"Existing group master for {group_spec.group_id} is invalid ({resume_exc}); re-rendering.")
             master_valid = False
 
+    attempts = 0
+    max_attempts = 2
+    last_error: Exception | None = None
+
     if not master_valid:
-        if on_progress:
-            on_progress({"status": JobStatus.processing, "group_id": group_spec.group_id, "attempt": 1})
-        _invoke_node_renderer(group_spec_path, master_path, composition_id="Group")
-        validate_rendered_motion_clip(
-            rendered_path=master_path,
-            expected_duration_frames=group_spec.duration_frames,
-            expected_width=group_spec.width,
-            expected_height=group_spec.height,
-            expected_fps=group_spec.fps,
-        )
+        for attempt in range(1, max_attempts + 1):
+            attempts = attempt
+            if on_progress:
+                on_progress(
+                    {
+                        "status": JobStatus.processing if attempt == 1 else JobStatus.retrying,
+                        "group_id": group_spec.group_id,
+                        "attempt": attempts,
+                    }
+                )
+
+            try:
+                _invoke_node_renderer(group_spec_path, master_path, composition_id="Group")
+                validate_rendered_motion_clip(
+                    rendered_path=master_path,
+                    expected_duration_frames=group_spec.duration_frames,
+                    expected_width=group_spec.width,
+                    expected_height=group_spec.height,
+                    expected_fps=group_spec.fps,
+                )
+
+                group_meta_data = {
+                    "group_id": group_spec.group_id,
+                    "spec_fingerprint": expected_group_fp,
+                    "attempts": attempts,
+                    "duration_frames": group_spec.duration_frames,
+                    "fps": group_spec.fps,
+                    "width": group_spec.width,
+                    "height": group_spec.height,
+                }
+                group_meta_path.write_text(json.dumps(group_meta_data, indent=2), encoding="utf-8")
+                master_valid = True
+                logger.success(f"Rendered group master for {group_spec.group_id}: {master_path.name}")
+                break
+
+            except Exception as exc:
+                last_error = exc
+                logger.warning(f"Group render attempt {attempt} failed for {group_spec.group_id}: {exc}")
+                if master_path.exists():
+                    try:
+                        master_path.unlink()
+                    except Exception:
+                        pass
+
+        if not master_valid:
+            if on_progress:
+                on_progress(
+                    {
+                        "status": JobStatus.failed,
+                        "group_id": group_spec.group_id,
+                        "attempt": attempts,
+                        "error": str(last_error),
+                    }
+                )
+            raise RuntimeError(
+                f"Group motion rendering failed for {group_spec.group_id} after {attempts} attempts: {last_error}"
+            ) from last_error
+    else:
+        # Reused existing master
+        attempts = 0
 
     # Slice group master into individual scene clips with FFmpeg
     ffmpeg_bin = utils.get_ffmpeg_binary()
@@ -365,6 +484,8 @@ def render_group_motion(
             expected_fps=scene.fps,
         )
 
+        scene_fp = compute_scene_fingerprint(scene)
+
         asset = RenderedMotionAsset(
             scene_id=scene.scene_id,
             visual_type=scene.visual_type,
@@ -386,7 +507,8 @@ def render_group_motion(
             metadata={
                 "group_id": group_spec.group_id,
                 "relative_start_frame": rel_start_frames,
-                "attempts": 1,
+                "attempts": max(1, attempts),
+                "spec_fingerprint": scene_fp,
             },
         )
 
@@ -394,6 +516,6 @@ def render_group_motion(
         rendered_assets.append(asset)
 
         if on_progress:
-            on_progress({"status": JobStatus.ready, "scene_id": scene.scene_id, "asset": asset})
+            on_progress({"status": JobStatus.ready, "scene_id": scene.scene_id, "asset": asset, "attempt": max(1, attempts)})
 
     return rendered_assets

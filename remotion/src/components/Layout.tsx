@@ -6,15 +6,35 @@ import { Theme } from '../types';
 interface LayoutProps {
   children: React.ReactNode;
   theme?: Partial<Theme>;
+  isGrouped?: boolean;
 }
 
-export const Layout: React.FC<LayoutProps> = ({ children, theme: customTheme }) => {
+export const Layout: React.FC<LayoutProps> = ({ children, theme: customTheme, isGrouped = false }) => {
   const { width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
   const paddingX = Math.round(width * 0.08);
   const paddingY = Math.round(height * 0.08);
+
+  if (isGrouped) {
+    return (
+      <div
+        style={{
+          position: 'relative',
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1,
+        }}
+      >
+        {children}
+      </div>
+    );
+  }
 
   return (
     <AbsoluteFill

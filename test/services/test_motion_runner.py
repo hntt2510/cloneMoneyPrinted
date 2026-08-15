@@ -164,6 +164,110 @@ class TestMotionRunner(unittest.TestCase):
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["motion_count"], 0)
 
+    def test_run_motion_render_grouped_cues(self):
+        audio_file = self.task_dir / "audio.mp3"
+        audio_file.write_bytes(b"\x00" * 100)
+
+        spec = ProjectSpec(
+            schema_version="1.0",
+            project=ProjectMetadata(
+                title="Grouped Motion Test Project",
+                aspect_ratio=VideoAspect.landscape,
+                fps=30,
+            ),
+            script=ScriptSpec(
+                subject="Grouped Motion",
+                script="Hook. Core. Resolution.",
+            ),
+            narration=NarrationSpec(mode=NarrationMode.file, file=str(audio_file)),
+            production=ProductionConfig(),
+            timeline_cues=[
+                TimelineCue(id="S001", order=1, start=0.0, end=1.0, narration="Scene 1"),
+                TimelineCue(id="S002", order=2, start=1.0, end=2.0, narration="Scene 2"),
+            ],
+            visual_cues=[
+                VisualCue(
+                    id="S001",
+                    order=1,
+                    visual_type=VisualType.data,
+                    purpose=VisualPurpose.explain,
+                    start=0.0,
+                    end=1.0,
+                    narration="Scene 1",
+                    visual_group_id="grp_runner",
+                    payload={
+                        "template": "number",
+                        "headline": "POINT 1",
+                        "data": {"value": "100"},
+                    },
+                ),
+                VisualCue(
+                    id="S002",
+                    order=2,
+                    visual_type=VisualType.data,
+                    purpose=VisualPurpose.explain,
+                    start=1.0,
+                    end=2.0,
+                    narration="Scene 2",
+                    visual_group_id="grp_runner",
+                    payload={
+                        "template": "number",
+                        "headline": "POINT 2",
+                        "data": {"value": "200"},
+                    },
+                ),
+            ],
+        )
+        project_file = self.task_dir / "project.planned.json"
+        project_file.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+
+        result = run_motion_render(project_file, task_id=self.task_id)
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["motion_count"], 2)
+
+        motion_project_file = self.task_dir / "project.motion.json"
+        motion_project = ProjectSpec.model_validate_json(motion_project_file.read_text(encoding="utf-8"))
+        for job in motion_project.render_jobs:
+            self.assertEqual(job.status, JobStatus.ready)
+            self.assertIn("planned", job.metadata["status_history"])
+            self.assertIn("queued", job.metadata["status_history"])
+            self.assertIn("processing", job.metadata["status_history"])
+            self.assertIn("ready", job.metadata["status_history"])
+
+    def test_run_motion_render_preserves_prior_manifest_failure(self):
+        from datetime import datetime, timezone
+        from app.models.project import ProjectManifest
+
+        # Create a prior failed project_manifest.json
+        manifest_file = self.task_dir / "project_manifest.json"
+        now = datetime.now(timezone.utc)
+        p_man = ProjectManifest(
+            schema_version="1.0",
+            project_title="Failed Project",
+            project_file=str(self.task_dir / "project.json"),
+            task_id=self.task_id,
+            status=ProjectStatus.failed,
+            fps=30,
+            aspect_ratio=VideoAspect.landscape,
+            created_at=now,
+            updated_at=now,
+            error="Broll extraction failed previously",
+            outputs={"broll_failed": True},
+        )
+        manifest_file.write_text(p_man.model_dump_json(indent=2), encoding="utf-8")
+
+        project = _make_mixed_project(self.task_dir)
+        project_file = self.task_dir / "project.planned.json"
+        project_file.write_text(project.model_dump_json(indent=2), encoding="utf-8")
+
+        result = run_motion_render(project_file, task_id=self.task_id)
+        self.assertEqual(result["status"], "complete")
+
+        # Verify project_manifest.json status remains failed and prior error is preserved
+        updated_man = ProjectManifest.model_validate_json(manifest_file.read_text(encoding="utf-8"))
+        self.assertEqual(updated_man.status, ProjectStatus.failed)
+        self.assertIn("Broll extraction failed previously", updated_man.error)
+
 
 if __name__ == "__main__":
     unittest.main()

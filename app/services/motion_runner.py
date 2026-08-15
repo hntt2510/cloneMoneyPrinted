@@ -88,6 +88,8 @@ def run_motion_render(
                 p_man.outputs["motion_manifest_file"] = str(manifest_path.resolve())
                 p_man.outputs["motion_project_file"] = str(project_motion_path.resolve())
                 p_man.updated_at = datetime.now(timezone.utc)
+                if p_man.status != ProjectStatus.failed:
+                    p_man.status = ProjectStatus.complete
                 project_manifest_path.write_text(json.dumps(p_man.model_dump(mode="json"), indent=2), encoding="utf-8")
             except Exception as exc:
                 logger.warning(f"Could not update project_manifest.json: {exc}")
@@ -127,17 +129,28 @@ def run_motion_render(
             for s in item.scenes:
                 job = render_jobs[s.scene_id]
                 _transition_job(job, JobStatus.queued)
-                _transition_job(job, JobStatus.processing)
-                job.attempts += 1
 
             def _on_group_progress(data: dict[str, Any]) -> None:
-                pass
+                st = data.get("status")
+                att = data.get("attempt", 1)
+                if st == JobStatus.processing:
+                    for s in item.scenes:
+                        j = render_jobs[s.scene_id]
+                        _transition_job(j, JobStatus.processing)
+                        j.attempts = att
+                elif st == JobStatus.retrying:
+                    for s in item.scenes:
+                        j = render_jobs[s.scene_id]
+                        _transition_job(j, JobStatus.retrying)
+                        _transition_job(j, JobStatus.processing)
+                        j.attempts = att
 
             try:
                 assets = render_group_motion(item, task_dir, on_progress=_on_group_progress)
                 rendered_assets.extend(assets)
                 for asset in assets:
                     job = render_jobs[asset.scene_id]
+                    job.attempts = asset.metadata.get("attempts", job.attempts)
                     _transition_job(
                         job,
                         JobStatus.ready,
@@ -159,17 +172,19 @@ def run_motion_render(
 
             def _on_scene_progress(data: dict[str, Any]) -> None:
                 st = data.get("status")
+                att = data.get("attempt", 1)
                 if st == JobStatus.processing:
                     _transition_job(job, JobStatus.processing)
-                    job.attempts += 1
+                    job.attempts = att
                 elif st == JobStatus.retrying:
                     _transition_job(job, JobStatus.retrying)
                     _transition_job(job, JobStatus.processing)
-                    job.attempts += 1
+                    job.attempts = att
 
             try:
                 asset = render_scene_motion(scene_spec, task_dir, on_progress=_on_scene_progress)
                 rendered_assets.append(asset)
+                job.attempts = asset.metadata.get("attempts", job.attempts)
                 _transition_job(
                     job,
                     JobStatus.ready,
@@ -197,7 +212,7 @@ def run_motion_render(
     manifest_path.write_text(json.dumps(motion_manifest.model_dump(mode="json"), indent=2), encoding="utf-8")
     project_motion_path.write_text(json.dumps(project.model_dump(mode="json"), indent=2), encoding="utf-8")
 
-    # Synchronize project_manifest.json
+    # Synchronize project_manifest.json (preserving prior stage failures)
     if project_manifest_path.exists():
         try:
             p_man = ProjectManifest.model_validate_json(project_manifest_path.read_text(encoding="utf-8"))
@@ -206,7 +221,14 @@ def run_motion_render(
             p_man.updated_at = datetime.now(timezone.utc)
             if failed_scenes:
                 p_man.status = ProjectStatus.failed
-                p_man.error = f"Motion rendering failed for {len(failed_scenes)} scenes"
+                motion_err = f"Motion rendering failed for {len(failed_scenes)} scenes"
+                if p_man.error:
+                    if motion_err not in p_man.error:
+                        p_man.error = f"{p_man.error}; {motion_err}"
+                else:
+                    p_man.error = motion_err
+                stage_errors = p_man.outputs.setdefault("stage_errors", {})
+                stage_errors["motion"] = motion_err
             elif p_man.status != ProjectStatus.failed:
                 p_man.status = ProjectStatus.complete
             project_manifest_path.write_text(json.dumps(p_man.model_dump(mode="json"), indent=2), encoding="utf-8")

@@ -6,7 +6,7 @@ import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
 import { CounterProps, Theme } from '../types';
 
-export const CounterTemplate: React.FC<CounterProps & { theme?: Partial<Theme> }> = ({
+export const CounterTemplate: React.FC<CounterProps> = ({
   headline,
   start_value = 0,
   end_value,
@@ -16,14 +16,19 @@ export const CounterTemplate: React.FC<CounterProps & { theme?: Partial<Theme> }
   decimals = 0,
   label,
   theme: customTheme,
+  isGrouped = false,
+  isFirstInGroup = true,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height, durationInFrames } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
-  const countDuration = Math.max(15, Math.round(durationInFrames * 0.6));
-  const progress = interpolate(frame, [5, 5 + countDuration], [0, 1], {
+  const isContinuous = isGrouped && !isFirstInGroup;
+  const startFrame = isContinuous ? 0 : 5;
+  const countDuration = Math.max(15, Math.round(durationInFrames * (isContinuous ? 0.8 : 0.6)));
+
+  const progress = interpolate(frame, [startFrame, startFrame + countDuration], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
@@ -42,9 +47,15 @@ export const CounterTemplate: React.FC<CounterProps & { theme?: Partial<Theme> }
   const labelFontSize = isPortrait ? width * 0.045 : width * 0.024;
 
   return (
-    <Layout theme={theme}>
-      <Header headline={headline} theme={theme} />
-      <Card theme={theme} delayFrames={3} style={{ width: isPortrait ? '90%' : '65%' }}>
+    <Layout theme={theme} isGrouped={isGrouped}>
+      <Header headline={headline} theme={theme} isGrouped={isGrouped} isFirstInGroup={isFirstInGroup} />
+      <Card
+        theme={theme}
+        delayFrames={3}
+        isGrouped={isGrouped}
+        isFirstInGroup={isFirstInGroup}
+        style={{ width: isPortrait ? '90%' : '65%' }}
+      >
         <div
           style={{
             display: 'flex',
