@@ -284,7 +284,50 @@ class TestCli(unittest.TestCase):
         mock_runner.assert_called_once_with("project.json", task_id="broll-task-1")
         mock_print.assert_called_once()
 
+    def test_acquire_evidence_only_requires_project(self):
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--acquire-evidence-only"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_acquire_evidence_only_conflicts(self):
+        # Conflicts with validate-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--validate-only", "--acquire-evidence-only"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with plan-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--plan-only", "--acquire-evidence-only"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with acquire-broll-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--acquire-broll-only", "--acquire-evidence-only"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with render-motion-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--render-motion-only", "--acquire-evidence-only"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflicts with stop-at
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--acquire-evidence-only", "--stop-at", "video"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_run_cli_dispatches_acquire_evidence_only(self):
+        with patch("cli.load_project_spec") as mock_load, \
+             patch("cli.preflight_project"), \
+             patch("app.services.evidence_runner.run_evidence_acquisition", return_value={"evidence_count": 2}) as mock_runner, \
+             patch("builtins.print") as mock_print:
+            code = cli.run_cli(["--project", "project.json", "--acquire-evidence-only", "--task-id", "ev-task-1"])
+
+        self.assertEqual(code, 0)
+        mock_runner.assert_called_once_with("project.json", task_id="ev-task-1")
+        mock_print.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

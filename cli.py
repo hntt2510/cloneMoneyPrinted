@@ -122,6 +122,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="render motion graphics scene assets for DATA and TEXT cues without full assembly",
     )
+    parser.add_argument(
+        "--acquire-evidence-only",
+        action="store_true",
+        help="acquire and render clean scene clips for DOCUMENT cues without full assembly",
+    )
     parser.add_argument("--video-subject", required=False, help="video subject")
     parser.add_argument("--video-script", default="", help="custom script")
     parser.add_argument("--video-terms", default=None, help="comma-separated terms")
@@ -335,6 +340,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "plan_only",
             "acquire_broll_only",
             "render_motion_only",
+            "acquire_evidence_only",
             "task_id",
             "stop_at",
         }
@@ -352,18 +358,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error("--validate-only cannot be combined with --acquire-broll-only")
         if args.validate_only and args.render_motion_only:
             parser.error("--validate-only cannot be combined with --render-motion-only")
+        if args.validate_only and args.acquire_evidence_only:
+            parser.error("--validate-only cannot be combined with --acquire-evidence-only")
         if args.plan_only and args.acquire_broll_only:
             parser.error("--plan-only cannot be combined with --acquire-broll-only")
         if args.plan_only and args.render_motion_only:
             parser.error("--plan-only cannot be combined with --render-motion-only")
+        if args.plan_only and args.acquire_evidence_only:
+            parser.error("--plan-only cannot be combined with --acquire-evidence-only")
         if args.acquire_broll_only and args.render_motion_only:
             parser.error("--acquire-broll-only cannot be combined with --render-motion-only")
+        if args.acquire_broll_only and args.acquire_evidence_only:
+            parser.error("--acquire-broll-only cannot be combined with --acquire-evidence-only")
+        if args.render_motion_only and args.acquire_evidence_only:
+            parser.error("--render-motion-only cannot be combined with --acquire-evidence-only")
         if args.plan_only and "--stop-at" in provided_options:
             parser.error("--stop-at cannot be used together with --plan-only")
         if args.acquire_broll_only and "--stop-at" in provided_options:
             parser.error("--stop-at cannot be used together with --acquire-broll-only")
         if args.render_motion_only and "--stop-at" in provided_options:
             parser.error("--stop-at cannot be used together with --render-motion-only")
+        if args.acquire_evidence_only and "--stop-at" in provided_options:
+            parser.error("--stop-at cannot be used together with --acquire-evidence-only")
     elif args.validate_only:
         parser.error("--validate-only requires --project")
     elif args.plan_only:
@@ -372,6 +388,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--acquire-broll-only requires --project")
     elif args.render_motion_only:
         parser.error("--render-motion-only requires --project")
+    elif args.acquire_evidence_only:
+        parser.error("--acquire-evidence-only requires --project")
     elif not args.video_subject:
         parser.error("--video-subject is required unless --project is provided")
 
@@ -497,6 +515,15 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
                 from app.services.motion_runner import run_motion_render
 
                 result = run_motion_render(
+                    args.project,
+                    task_id=args.task_id or None,
+                )
+                print(json.dumps(result, ensure_ascii=False))
+                return 0
+            if args.acquire_evidence_only:
+                from app.services.evidence_runner import run_evidence_acquisition
+
+                result = run_evidence_acquisition(
                     args.project,
                     task_id=args.task_id or None,
                 )
