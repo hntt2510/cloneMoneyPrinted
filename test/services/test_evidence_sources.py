@@ -144,6 +144,16 @@ class TestEvidenceSources(unittest.TestCase):
         with self.assertRaises(SSRFValidationError):
             session.rebuild_auth(req, MagicMock())
 
+    def test_conditional_request_timeout_raises_cleanly_without_unbound_local_error(self):
+        import requests
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td) / "cached_source.pdf"
+            dest.write_bytes(b"%PDF-1.5 test")
+            with patch("app.services.evidence_sources.is_safe_remote_url", return_value=(True, None)):
+                with patch("requests.Session.get", side_effect=requests.Timeout("network timeout")):
+                    with self.assertRaises(requests.Timeout):
+                        download_evidence_file("https://example.com/doc.pdf", dest_path=dest, etag='"12345"')
+
 
 if __name__ == "__main__":
     unittest.main()

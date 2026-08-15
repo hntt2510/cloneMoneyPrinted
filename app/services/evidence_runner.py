@@ -406,13 +406,14 @@ def run_evidence_acquisition(
             # Content Extraction and Matching
             try:
                 if source.kind == EvidenceSourceKind.pdf:
-                    p_num, p_count, matched_txt, m_type, bboxes = inspect_and_extract_pdf_evidence(
+                    p_num, p_count, matched_txt, m_type, bboxes, body_meta = inspect_and_extract_pdf_evidence(
                         pdf_path=local_source_file,
                         highlight_target=payload.highlight_target,
                         quote_hint=source.quote_hint,
                         page_hint=source.page_hint,
                         search_query=payload.search_query,
                     )
+                    body_ratio = body_meta.get("ratio", 0.0)
                     score, breakdown = score_evidence_candidate(
                         cue=cue,
                         payload=payload,
@@ -421,6 +422,7 @@ def run_evidence_acquisition(
                         matched_text=matched_txt,
                         page_number=p_num,
                         is_pinned_source=is_pinned,
+                        body_relevance_ratio=body_ratio,
                     )
                     return EvidenceCandidate(
                         id=f"{source.id}_p{p_num}",
@@ -441,18 +443,24 @@ def run_evidence_acquisition(
                         highlight_boxes=bboxes,
                         score=score,
                         score_breakdown=breakdown,
-                        metadata={"source_sha256": source_sha256},
+                        metadata={
+                            "source_sha256": source_sha256,
+                            "body_relevance_ratio": body_ratio,
+                            "body_relevance_tokens_matched": body_meta.get("matched", 0),
+                            "body_relevance_tokens_total": body_meta.get("total", 0),
+                        },
                     )
 
                 elif source.kind == EvidenceSourceKind.webpage:
                     html_content = local_source_file.read_text(encoding="utf-8", errors="replace")
-                    w_title, w_pub, full_txt, snippet, m_type = extract_webpage_evidence_passage(
+                    w_title, w_pub, full_txt, snippet, m_type, body_meta = extract_webpage_evidence_passage(
                         html_text=html_content,
                         source_url=source.url,
                         highlight_target=payload.highlight_target,
                         quote_hint=source.quote_hint,
                         search_query=payload.search_query,
                     )
+                    body_ratio = body_meta.get("ratio", 0.0)
                     score, breakdown = score_evidence_candidate(
                         cue=cue,
                         payload=payload,
@@ -460,6 +468,7 @@ def run_evidence_acquisition(
                         match_type=m_type,
                         matched_text=snippet,
                         is_pinned_source=is_pinned,
+                        body_relevance_ratio=body_ratio,
                     )
                     return EvidenceCandidate(
                         id=f"{source.id}_web",
@@ -478,7 +487,13 @@ def run_evidence_acquisition(
                         highlight_boxes=[],
                         score=score,
                         score_breakdown=breakdown,
-                        metadata={"source_sha256": source_sha256, "full_text": full_txt},
+                        metadata={
+                            "source_sha256": source_sha256,
+                            "full_text": full_txt,
+                            "body_relevance_ratio": body_ratio,
+                            "body_relevance_tokens_matched": body_meta.get("matched", 0),
+                            "body_relevance_tokens_total": body_meta.get("total", 0),
+                        },
                     )
 
                 elif source.kind in (EvidenceSourceKind.image, EvidenceSourceKind.wikimedia):

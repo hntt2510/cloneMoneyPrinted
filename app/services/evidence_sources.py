@@ -301,6 +301,7 @@ def download_evidence_file(
     if last_modified:
         headers["If-Modified-Since"] = last_modified
 
+    response = None
     try:
         with session.get(
             url,
@@ -310,7 +311,8 @@ def download_evidence_file(
             timeout=timeout,
             stream=True,
             allow_redirects=True,
-        ) as response:
+        ) as resp:
+            response = resp
             if response.status_code == 304 and dest.exists() and dest.stat().st_size > 0:
                 # Not modified, reuse existing
                 existing_sha = compute_file_sha256(dest)
@@ -369,7 +371,13 @@ def download_evidence_file(
             return sha256_hex, mime_type, resp_etag, resp_last_modified, False
 
     except Exception as exc:
-        if dest.exists() and not (etag and response.status_code == 304):
+        is_304 = False
+        if response is not None:
+            try:
+                is_304 = (response.status_code == 304)
+            except Exception:
+                is_304 = False
+        if dest.exists() and not is_304:
             try:
                 dest.unlink()
             except Exception:
