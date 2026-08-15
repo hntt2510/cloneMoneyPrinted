@@ -58,7 +58,7 @@ class TestEvidenceSelector(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_pdf_exact_target_match_and_bounding_rect(self):
-        p_num, p_count, matched_txt, m_type, bboxes = inspect_and_extract_pdf_evidence(
+        p_num, p_count, matched_txt, m_type, bboxes, body_meta = inspect_and_extract_pdf_evidence(
             pdf_path=self.pdf_path,
             highlight_target="age 65",
             search_query="medicare eligibility age",
@@ -76,7 +76,7 @@ class TestEvidenceSelector(unittest.TestCase):
 
     def test_pdf_query_relevance_fallback(self):
         # Query matching page 1 without exact highlight target
-        p_num, p_count, matched_txt, m_type, bboxes = inspect_and_extract_pdf_evidence(
+        p_num, p_count, matched_txt, m_type, bboxes, body_meta = inspect_and_extract_pdf_evidence(
             pdf_path=self.pdf_path,
             highlight_target=None,
             search_query="overview of federal benefits report considerations",
@@ -93,7 +93,7 @@ class TestEvidenceSelector(unittest.TestCase):
             <p>Catch-up contributions allow an additional $1,000 for individuals aged 50 and older.</p>
         </body></html>
         """
-        title, pub, full_txt, snippet, m_type = extract_webpage_evidence_passage(
+        title, pub, full_txt, snippet, m_type, body_meta = extract_webpage_evidence_passage(
             html_text=html_doc,
             source_url="https://www.irs.gov/retirement/limits",
             highlight_target="$7,000",
@@ -210,7 +210,7 @@ class TestEvidenceSelector(unittest.TestCase):
         )
         selected, fail_reason = rank_and_select_candidate([cand_building], evidence_required=True)
         self.assertIsNone(selected)
-        self.assertIn("lacks verified factual evidence text", fail_reason)
+        self.assertIn("not factually defensible", fail_reason)
 
     def test_approved_user_provided_image_with_quote_hint_allowed(self):
         # User provided image with registered quote_hint has registry_evidence_hint match type and can be selected
@@ -231,6 +231,152 @@ class TestEvidenceSelector(unittest.TestCase):
         self.assertIsNotNone(selected)
         self.assertEqual(selected.source_id, "SRC_CHART")
         self.assertEqual(selected.match_type, "registry_evidence_hint")
+
+    def test_pdf_metadata_trap_rejected_when_body_is_unrelated(self):
+        # Create PDF whose body is purely unrelated administrative text
+        trap_pdf = Path(self.temp_dir) / "trap_policy.pdf"
+        doc = pymupdf.open()
+        p = doc.new_page(width=612, height=792)
+        p.insert_text((50, 100), "This document discusses internal office equipment procurement.", fontsize=14)
+        doc.save(str(trap_pdf))
+        doc.close()
+
+        p_num, p_count, matched_txt, m_type, bboxes, body_meta = inspect_and_extract_pdf_evidence(
+            pdf_path=trap_pdf,
+            search_query="Medicare eligibility begins at age 65",
+        )
+        self.assertEqual(m_type, "none")
+
+        # Candidate with official metadata but match_type="none"
+        cand_trap = EvidenceCandidate(
+            id="SRC_TRAP_p1",
+            source_id="SRC_TRAP",
+            kind=EvidenceSourceKind.pdf,
+            title="Official Medicare Eligibility Age 65 Report",
+            publisher="Social Security Administration",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility begins at age 65",
+            matched_text=matched_txt,
+            match_type=m_type,
+            highlight_boxes=[],
+            score=45.0,  # Score is high from metadata alone
+            metadata=dict(body_relevance_ratio=body_meta.get("ratio", 0.0)),
+        )
+
+        selected, fail_reason = rank_and_select_candidate([cand_trap], evidence_required=True)
+        self.assertIsNone(selected)
+        self.assertIn("not factually defensible", fail_reason)
+
+    def test_webpage_metadata_trap_rejected_when_body_is_unrelated(self):
+        trap_html = """
+        <html>
+        <head><title>Official Medicare Eligibility Age 65 Report</title></head>
+        <body>
+            <p>Office supply order forms and printer maintenance guidelines.</p>
+        </body>
+        </html>
+        """
+        title, pub, full_txt, snippet, m_type, body_meta = extract_webpage_evidence_passage(
+            html_text=trap_html,
+            search_query="Medicare eligibility begins at age 65",
+        )
+        self.assertEqual(m_type, "none")
+
+        cand_trap_web = EvidenceCandidate(
+            id="SRC_TRAP_WEB",
+            source_id="SRC_TRAP_WEB",
+            kind=EvidenceSourceKind.webpage,
+            title=title,
+            publisher="Social Security Administration",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility begins at age 65",
+            matched_text=snippet,
+            match_type=m_type,
+            highlight_boxes=[],
+            score=45.0,
+            metadata=dict(body_relevance_ratio=body_meta.get("ratio", 0.0)),
+        )
+
+        selected, fail_reason = rank_and_select_candidate([cand_trap_web], evidence_required=True)
+        self.assertIsNone(selected)
+        self.assertIn("not factually defensible", fail_reason)
+
+    def test_pdf_query_relevance_true_positive(self):
+        p_num, p_count, matched_txt, m_type, bboxes, body_meta = inspect_and_extract_pdf_evidence(
+            pdf_path=self.pdf_path,
+            highlight_target=None,
+            search_query="Medicare eligibility age 65",
+        )
+        self.assertEqual(m_type, "query_relevance")
+        self.assertEqual(p_num, 2)
+        self.assertGreaterEqual(body_meta.get("ratio", 0.0), 0.25)
+
+        cand = EvidenceCandidate(
+            id="SRC_PDF_p2",
+            source_id="SRC_PDF",
+            kind=EvidenceSourceKind.pdf,
+            title="Medicare Report",
+            publisher="SSA",
+            trust=EvidenceSourceTrust.official,
+            query="Medicare eligibility age 65",
+            page_number=p_num,
+            matched_text=matched_txt,
+            match_type=m_type,
+            highlight_boxes=bboxes,
+            score=50.0,
+            metadata=dict(body_relevance_ratio=body_meta.get("ratio", 0.0)),
+        )
+        selected, fail_reason = rank_and_select_candidate([cand], evidence_required=True)
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.source_id, "SRC_PDF")
+
+    def test_webpage_query_relevance_true_positive(self):
+        html = """
+        <html><body>
+            <p>Full retirement age is 67 for individuals born in 1960 or later.</p>
+        </body></html>
+        """
+        title, pub, full_txt, snippet, m_type, body_meta = extract_webpage_evidence_passage(
+            html_text=html,
+            search_query="full retirement age 67 born 1960",
+        )
+        self.assertEqual(m_type, "query_relevance")
+        self.assertGreaterEqual(body_meta.get("ratio", 0.0), 0.25)
+
+        cand = EvidenceCandidate(
+            id="SRC_WEB_1",
+            source_id="SRC_WEB_1",
+            kind=EvidenceSourceKind.webpage,
+            title="Retirement Rules",
+            trust=EvidenceSourceTrust.official,
+            query="full retirement age 67 born 1960",
+            matched_text=snippet,
+            match_type=m_type,
+            score=50.0,
+            metadata=dict(body_relevance_ratio=body_meta.get("ratio", 0.0)),
+        )
+        selected, fail_reason = rank_and_select_candidate([cand], evidence_required=True)
+        self.assertIsNotNone(selected)
+
+    def test_page_hint_false_positive_continues_searching_and_selects_relevant_page(self):
+        # page_hint is 1 (which has no medicare info), but page 2 has actual medicare info
+        p_num, p_count, matched_txt, m_type, bboxes, body_meta = inspect_and_extract_pdf_evidence(
+            pdf_path=self.pdf_path,
+            page_hint=1,
+            search_query="Medicare eligibility age 65",
+        )
+        self.assertEqual(p_num, 2)  # Found and selected page 2
+        self.assertEqual(m_type, "query_relevance")
+
+    def test_page_hint_true_positive_accepted_on_body_content(self):
+        p_num, p_count, matched_txt, m_type, bboxes, body_meta = inspect_and_extract_pdf_evidence(
+            pdf_path=self.pdf_path,
+            page_hint=2,
+            search_query="Medicare eligibility age 65",
+        )
+        self.assertEqual(p_num, 2)
+        self.assertEqual(m_type, "query_relevance")
+        self.assertGreaterEqual(body_meta.get("ratio", 0.0), 0.25)
 
 
 if __name__ == "__main__":

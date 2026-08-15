@@ -20,25 +20,46 @@ from app.models.project import DocumentPayload, VisualCue
 from app.services.evidence_sources import extract_webpage_content
 
 
+MIN_BODY_RELEVANCE_RATIO = 0.25
+
+STOP_WORDS = {
+    "the", "a", "an", "and", "or", "in", "on", "at", "to", "for", "of", "with",
+    "by", "is", "are", "was", "were", "be", "been", "this", "that", "it", "from",
+    "as", "into", "about", "official", "evidence", "source", "document", "report",
+    "website", "information", "page", "section", "chapter", "guide", "video",
+}
+
+
 def _tokenize(text: str) -> set[str]:
-    """Tokenize text into lowercase alphanumeric keywords of length >= 2."""
+    """Tokenize text into lowercase alphanumeric keywords of length >= 2, excluding stop words."""
     if not text:
         return set()
     cleaned = re.sub(r"[^\w\s]", " ", text.lower())
-    stop_words = {
-        "the", "a", "an", "and", "or", "in", "on", "at", "to", "for", "of", "with",
-        "by", "is", "are", "was", "were", "be", "been", "this", "that", "it", "from",
-        "as", "into", "about", "official", "evidence", "source", "document",
-    }
-    return {w for w in cleaned.split() if len(w) >= 2 and w not in stop_words}
+    return {w for w in cleaned.split() if len(w) >= 2 and w not in STOP_WORDS}
 
 
 def _compute_token_overlap(query_tokens: set[str], doc_tokens: set[str]) -> float:
-    """Compute Jaccard-like overlap ratio between query tokens and document tokens."""
+    """Compute overlap ratio between query tokens and document tokens."""
     if not query_tokens or not doc_tokens:
         return 0.0
     common = query_tokens.intersection(doc_tokens)
     return len(common) / float(len(query_tokens))
+
+
+def compute_body_relevance(query_tokens: set[str], body_text: str | None) -> tuple[float, int, int]:
+    """Compute pure content body token overlap (excluding title, publisher, tags).
+
+    Returns:
+        (overlap_ratio, matched_tokens_count, total_query_tokens)
+    """
+    if not query_tokens or not body_text:
+        return 0.0, 0, len(query_tokens) if query_tokens else 0
+    body_tokens = _tokenize(body_text)
+    if not body_tokens:
+        return 0.0, 0, len(query_tokens)
+    common = query_tokens.intersection(body_tokens)
+    ratio = len(common) / float(len(query_tokens))
+    return round(ratio, 4), len(common), len(query_tokens)
 
 
 # --- PDF Inspection and Text Bounding Box Search ---
@@ -50,11 +71,11 @@ def inspect_and_extract_pdf_evidence(
     page_hint: int | None = None,
     search_query: str = "",
     max_pages_to_scan: int = 300,
-) -> tuple[int, int, str | None, str, list[EvidenceBBox]]:
-    """Open PDF with PyMuPDF, search for target/quote text bounding boxes or select best page.
+) -> tuple[int, int, str | None, str, list[EvidenceBBox], dict[str, Any]]:
+    """Open PDF with PyMuPDF, search for target/quote text bounding boxes or select best page by body content.
 
     Returns:
-        (selected_page_number [1-indexed], total_page_count, matched_text, match_type, list_of_bboxes)
+        (selected_page_number [1-indexed], total_page_count, matched_text, match_type, list_of_bboxes, body_relevance_meta)
     """
     doc = None
     try:
@@ -69,10 +90,14 @@ def inspect_and_extract_pdf_evidence(
         scan_limit = min(total_pages, max_pages_to_scan)
         query_tokens = _tokenize(search_query)
 
-        # 1. Search for exact highlight_target
+        # Helper to format body relevance metadata
+        def _make_body_meta(p_text: str | None) -> dict[str, Any]:
+            r, m, t = compute_body_relevance(query_tokens, p_text)
+            return {"ratio": r, "matched": m, "total": t}
+
+        # 1. Search for exact highlight_target (page_hint page first if valid)
         if highlight_target and highlight_target.strip():
             clean_target = highlight_target.strip()
-            # If page_hint is provided, check that page first
             pages_to_check = []
             if page_hint and 1 <= page_hint <= total_pages:
                 pages_to_check.append(page_hint - 1)
@@ -89,19 +114,17 @@ def inspect_and_extract_pdf_evidence(
                 if rects:
                     boxes: list[EvidenceBBox] = []
                     for r in rects:
-                        # Normalize coordinates to 0..1
                         bx = max(0.0, min(1.0, float(r.x0) / pw))
                         by = max(0.0, min(1.0, float(r.y0) / ph))
                         bw = max(0.001, min(1.0 - bx, float(r.x1 - r.x0) / pw))
                         bh = max(0.001, min(1.0 - by, float(r.y1 - r.y0) / ph))
                         boxes.append(EvidenceBBox(x=round(bx, 4), y=round(by, 4), width=round(bw, 4), height=round(bh, 4)))
 
-                    # Extract context snippet around target
                     page_text = page.get_text("text")
                     snippet = _extract_snippet_around(page_text, clean_target)
-                    return p_idx + 1, total_pages, snippet, "exact_target", boxes
+                    return p_idx + 1, total_pages, snippet, "exact_target", boxes, _make_body_meta(page_text)
 
-        # 2. Search for exact quote_hint
+        # 2. Search for exact quote_hint (page_hint page first if valid)
         if quote_hint and quote_hint.strip():
             clean_quote = quote_hint.strip()
             pages_to_check = []
@@ -128,18 +151,21 @@ def inspect_and_extract_pdf_evidence(
 
                     page_text = page.get_text("text")
                     snippet = _extract_snippet_around(page_text, clean_quote)
-                    return p_idx + 1, total_pages, snippet, "exact_quote_hint", boxes
+                    return p_idx + 1, total_pages, snippet, "exact_quote_hint", boxes, _make_body_meta(page_text)
 
-        # 3. Explicit valid page_hint fallback
+        # 3. Check page_hint page body relevance first
         if page_hint and 1 <= page_hint <= total_pages:
             page = doc[page_hint - 1]
             page_text = page.get_text("text").strip()
-            snippet = page_text[:300] if page_text else None
-            return page_hint, total_pages, snippet, "page_hint", []
+            p_ratio, p_matched, p_total = compute_body_relevance(query_tokens, page_text)
+            if p_ratio >= MIN_BODY_RELEVANCE_RATIO:
+                snippet = page_text[:300] if page_text else None
+                return page_hint, total_pages, snippet, "query_relevance", [], {"ratio": p_ratio, "matched": p_matched, "total": p_total}
 
-        # 4. Token overlap query relevance across pages
+        # 4. Token overlap query relevance across all pages
         best_page = 1
-        best_score = -1.0
+        best_ratio = -1.0
+        best_matched = 0
         best_text = ""
 
         for p_idx in range(scan_limit):
@@ -147,16 +173,20 @@ def inspect_and_extract_pdf_evidence(
             p_text = page.get_text("text").strip()
             if not p_text:
                 continue
-            p_tokens = _tokenize(p_text)
-            overlap = _compute_token_overlap(query_tokens, p_tokens)
-            if overlap > best_score:
-                best_score = overlap
+            ratio, matched, total = compute_body_relevance(query_tokens, p_text)
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_matched = matched
                 best_page = p_idx + 1
                 best_text = p_text
 
+        if best_ratio >= MIN_BODY_RELEVANCE_RATIO:
+            snippet = best_text[:300] if best_text else None
+            return best_page, total_pages, snippet, "query_relevance", [], {"ratio": best_ratio, "matched": best_matched, "total": len(query_tokens)}
+
+        # No page body satisfied relevance floor -> match_type is "none"
         snippet = best_text[:300] if best_text else None
-        match_type = "query_relevance" if best_score > 0.1 else "none"
-        return best_page, total_pages, snippet, match_type, []
+        return 1, total_pages, snippet, "none", [], {"ratio": max(0.0, best_ratio), "matched": best_matched, "total": len(query_tokens)}
 
     finally:
         if doc is not None:
@@ -174,11 +204,9 @@ def _extract_snippet_around(full_text: str, target: str, window: int = 150) -> s
     lower_tgt = target.lower()
     pos = lower_full.find(lower_tgt)
     if pos == -1:
-        # Return first non-empty lines
         lines = [l.strip() for l in full_text.splitlines() if l.strip()]
         return " ".join(lines[:3])[:300]
 
-    # Check for containing sentence
     for line in full_text.splitlines():
         if lower_tgt in line.lower():
             clean_line = line.strip()
@@ -191,7 +219,6 @@ def _extract_snippet_around(full_text: str, target: str, window: int = 150) -> s
     start = max(0, pos - window)
     end = min(len(full_text), pos + len(target) + window)
     snippet = full_text[start:end].strip()
-    # Normalize whitespace
     return " ".join(snippet.split())
 
 
@@ -203,8 +230,8 @@ def extract_webpage_evidence_passage(
     highlight_target: str | None = None,
     quote_hint: str | None = None,
     search_query: str = "",
-) -> tuple[str, str | None, str | None, str, str]:
-    """Extract clean title, publisher, matched excerpt text, and match type from static HTML."""
+) -> tuple[str, str | None, str | None, str, str, dict[str, Any]]:
+    """Extract clean title, publisher, matched excerpt text, match type, and body relevance from static HTML."""
     parsed = extract_webpage_content(html_text, source_url=source_url)
     title = parsed["title"] or "Web Document"
     publisher = parsed["publisher"]
@@ -217,32 +244,36 @@ def extract_webpage_evidence_passage(
         clean_target = highlight_target.strip()
         if clean_target.lower() in full_text.lower():
             snippet = _extract_snippet_around(full_text, clean_target, window=160)
-            return title, publisher, full_text, snippet, "exact_target"
+            r, m, t = compute_body_relevance(query_tokens, snippet)
+            return title, publisher, full_text, snippet, "exact_target", {"ratio": r, "matched": m, "total": t}
 
     # 2. Exact quote_hint search
     if quote_hint and quote_hint.strip():
         clean_quote = quote_hint.strip()
         if clean_quote.lower() in full_text.lower():
             snippet = _extract_snippet_around(full_text, clean_quote, window=160)
-            return title, publisher, full_text, snippet, "exact_quote_hint"
+            r, m, t = compute_body_relevance(query_tokens, snippet)
+            return title, publisher, full_text, snippet, "exact_quote_hint", {"ratio": r, "matched": m, "total": t}
 
-    # 3. Query relevance passage search
+    # 3. Query relevance passage search across paragraphs
     paragraphs = [p.strip() for p in full_text.splitlines() if len(p.strip()) > 30]
     best_para = ""
-    best_score = -1.0
+    best_ratio = -1.0
+    best_matched = 0
+
     for para in paragraphs:
-        p_tokens = _tokenize(para)
-        overlap = _compute_token_overlap(query_tokens, p_tokens)
-        if overlap > best_score:
-            best_score = overlap
+        ratio, matched, total = compute_body_relevance(query_tokens, para)
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_matched = matched
             best_para = para
 
-    if best_para and best_score > 0.1:
-        return title, publisher, full_text, best_para[:350], "query_relevance"
+    if best_para and best_ratio >= MIN_BODY_RELEVANCE_RATIO:
+        return title, publisher, full_text, best_para[:350], "query_relevance", {"ratio": best_ratio, "matched": best_matched, "total": len(query_tokens)}
 
-    # Fallback to initial paragraphs
+    # Fallback paragraph (marked as match_type="none" to prevent metadata-only acceptance)
     fallback = " ".join(paragraphs[:2])[:350] if paragraphs else full_text[:350]
-    return title, publisher, full_text, fallback, "none"
+    return title, publisher, full_text, fallback, "none", {"ratio": max(0.0, best_ratio), "matched": best_matched, "total": len(query_tokens)}
 
 
 # --- Deterministic Candidate Scoring ---
@@ -255,6 +286,7 @@ def score_evidence_candidate(
     matched_text: str | None,
     page_number: int | None = None,
     is_pinned_source: bool = False,
+    body_relevance_ratio: float = 0.0,
 ) -> tuple[float, dict[str, float]]:
     """Compute deterministic 100-point evidence score.
 
@@ -286,8 +318,9 @@ def score_evidence_candidate(
     elif match_type == "approved_region":
         target_match_score = 10.0
     elif match_type == "query_relevance":
-        # Scale between 4.0 and 12.0 based on relevance
-        target_match_score = round(4.0 + min(1.0, relevance_ratio) * 8.0, 2)
+        # Scale between 6.0 and 16.0 based on body relevance ratio
+        eff_ratio = max(relevance_ratio, body_relevance_ratio)
+        target_match_score = round(6.0 + min(1.0, eff_ratio) * 10.0, 2)
     elif match_type == "page_hint":
         target_match_score = 8.0
     else:
@@ -316,7 +349,6 @@ def score_evidence_candidate(
     specificity_score = 0.0
     if is_pinned_source:
         specificity_score += 3.0
-    # Check if source_hint matches publisher/title
     if payload.source_hint and (
         payload.source_hint.lower() in source.title.lower()
         or (source.publisher and payload.source_hint.lower() in source.publisher.lower())
@@ -329,20 +361,41 @@ def score_evidence_candidate(
     return total_score, breakdown
 
 
+def is_candidate_factually_defensible(candidate: EvidenceCandidate) -> tuple[bool, str]:
+    """Determine whether candidate is factually grounded in verified source content."""
+    if candidate.match_type in ("exact_target", "exact_quote_hint"):
+        return True, f"Verified {candidate.match_type} in source content"
+
+    if candidate.kind == EvidenceSourceKind.pdf:
+        if candidate.match_type == "query_relevance":
+            body_ratio = float(candidate.metadata.get("body_relevance_ratio", 0.0))
+            if body_ratio >= MIN_BODY_RELEVANCE_RATIO:
+                return True, f"PDF page body has verified query relevance ({body_ratio:.2f} >= {MIN_BODY_RELEVANCE_RATIO})"
+            return False, f"PDF page body relevance ({body_ratio:.2f}) is below factual threshold ({MIN_BODY_RELEVANCE_RATIO})"
+        return False, f"PDF candidate match_type '{candidate.match_type}' does not provide verified factual evidence"
+
+    elif candidate.kind == EvidenceSourceKind.webpage:
+        if candidate.match_type == "query_relevance":
+            body_ratio = float(candidate.metadata.get("body_relevance_ratio", 0.0))
+            if body_ratio >= MIN_BODY_RELEVANCE_RATIO:
+                return True, f"Webpage passage has verified query relevance ({body_ratio:.2f} >= {MIN_BODY_RELEVANCE_RATIO})"
+            return False, f"Webpage passage relevance ({body_ratio:.2f}) is below factual threshold ({MIN_BODY_RELEVANCE_RATIO})"
+        return False, f"Webpage candidate match_type '{candidate.match_type}' does not provide verified factual evidence"
+
+    elif candidate.kind in (EvidenceSourceKind.image, EvidenceSourceKind.wikimedia):
+        if candidate.match_type == "registry_evidence_hint":
+            return True, "Image has registered explicit evidence quote hint"
+        return False, f"Image/Wikimedia candidate '{candidate.source_id}' lacks registered factual evidence quote"
+
+    return False, f"Unsupported or non-defensible source kind: {candidate.kind}"
+
+
 def rank_and_select_candidate(
     candidates: list[EvidenceCandidate],
     evidence_required: bool = True,
     min_score_threshold: float = 35.0,
 ) -> tuple[EvidenceCandidate | None, str | None]:
     """Rank candidates deterministically and select the best candidate.
-
-    Tie-breaker order:
-    1. Highest total score
-    2. Highest target_match score
-    3. Highest content_relevance score
-    4. Highest source_trust score
-    5. Source ID (ascending)
-    6. Page number (ascending)
 
     Returns:
         (selected_candidate, failure_reason)
@@ -367,16 +420,15 @@ def rank_and_select_candidate(
 
     top = sorted_candidates[0]
 
-    # Check factual defensibility for image sources under evidence_required
-    has_defensible_match = top.match_type in ("exact_target", "exact_quote_hint", "registry_evidence_hint")
-    if top.kind in (EvidenceSourceKind.image, EvidenceSourceKind.wikimedia) and not has_defensible_match:
-        if evidence_required:
-            return None, f"Image candidate '{top.source_id}' lacks verified factual evidence text or registry quote hint"
+    # Check factual defensibility
+    is_defensible, def_reason = is_candidate_factually_defensible(top)
+    if evidence_required and not is_defensible:
+        return None, f"Top evidence candidate '{top.source_id}' is not factually defensible: {def_reason}"
 
-    # Check minimum score threshold
-    if top.score < min_score_threshold and not has_defensible_match:
-        if evidence_required:
-            return None, f"Top evidence candidate '{top.source_id}' scored {top.score:.1f} < threshold {min_score_threshold}"
+    if not is_defensible and top.score < min_score_threshold:
         return None, f"Top candidate scored {top.score:.1f} (below threshold; optional fallback recommended)"
+
+    if evidence_required and top.score < min_score_threshold and top.match_type not in ("exact_target", "exact_quote_hint"):
+        return None, f"Top evidence candidate '{top.source_id}' scored {top.score:.1f} < threshold {min_score_threshold}"
 
     return top, None
