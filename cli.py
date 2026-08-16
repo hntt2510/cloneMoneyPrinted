@@ -138,6 +138,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="export deterministic editor-ready package for NLE manual editing",
     )
     parser.add_argument(
+        "--assemble-final",
+        action="store_true",
+        help="assemble final MP4 video from editor package with QC validation",
+    )
+    parser.add_argument(
         "--output-dir",
         default=None,
         help="custom destination directory for editor package export",
@@ -358,6 +363,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "acquire_evidence_only",
             "run_all",
             "export_editor_package",
+            "assemble_final",
             "output_dir",
             "task_id",
             "stop_at",
@@ -382,6 +388,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error("--validate-only cannot be combined with --run-all")
         if args.validate_only and args.export_editor_package:
             parser.error("--validate-only cannot be combined with --export-editor-package")
+        if args.validate_only and args.assemble_final:
+            parser.error("--validate-only cannot be combined with --assemble-final")
         if args.plan_only and args.acquire_broll_only:
             parser.error("--plan-only cannot be combined with --acquire-broll-only")
         if args.plan_only and args.render_motion_only:
@@ -392,6 +400,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error("--plan-only cannot be combined with --run-all")
         if args.plan_only and args.export_editor_package:
             parser.error("--plan-only cannot be combined with --export-editor-package")
+        if args.plan_only and args.assemble_final:
+            parser.error("--plan-only cannot be combined with --assemble-final")
         if args.acquire_broll_only and args.render_motion_only:
             parser.error("--acquire-broll-only cannot be combined with --render-motion-only")
         if args.acquire_broll_only and args.acquire_evidence_only:
@@ -400,18 +410,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error("--acquire-broll-only cannot be combined with --run-all")
         if args.acquire_broll_only and args.export_editor_package:
             parser.error("--acquire-broll-only cannot be combined with --export-editor-package")
+        if args.acquire_broll_only and args.assemble_final:
+            parser.error("--acquire-broll-only cannot be combined with --assemble-final")
         if args.render_motion_only and args.acquire_evidence_only:
             parser.error("--render-motion-only cannot be combined with --acquire-evidence-only")
         if args.render_motion_only and args.run_all:
             parser.error("--render-motion-only cannot be combined with --run-all")
         if args.render_motion_only and args.export_editor_package:
             parser.error("--render-motion-only cannot be combined with --export-editor-package")
+        if args.render_motion_only and args.assemble_final:
+            parser.error("--render-motion-only cannot be combined with --assemble-final")
         if args.acquire_evidence_only and args.run_all:
             parser.error("--acquire-evidence-only cannot be combined with --run-all")
         if args.acquire_evidence_only and args.export_editor_package:
             parser.error("--acquire-evidence-only cannot be combined with --export-editor-package")
-        if args.output_dir and not args.export_editor_package:
-            parser.error("--output-dir requires --export-editor-package")
+        if args.acquire_evidence_only and args.assemble_final:
+            parser.error("--acquire-evidence-only cannot be combined with --assemble-final")
+        if args.output_dir and not (args.export_editor_package or args.assemble_final):
+            parser.error("--output-dir requires --export-editor-package or --assemble-final")
         if args.plan_only and "--stop-at" in provided_options:
             parser.error("--stop-at cannot be used together with --plan-only")
         if args.acquire_broll_only and "--stop-at" in provided_options:
@@ -424,6 +440,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error("--stop-at cannot be used together with --run-all")
         if args.export_editor_package and not args.run_all and "--stop-at" in provided_options:
             parser.error("--stop-at cannot be used together with --export-editor-package")
+        if args.assemble_final and not args.run_all and "--stop-at" in provided_options:
+            parser.error("--stop-at cannot be used together with --assemble-final")
     elif args.validate_only:
         parser.error("--validate-only requires --project")
     elif args.plan_only:
@@ -438,6 +456,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--run-all requires --project")
     elif args.export_editor_package:
         parser.error("--export-editor-package requires --project")
+    elif args.assemble_final:
+        parser.error("--assemble-final requires --project")
     elif args.output_dir:
         parser.error("--output-dir requires --project and --export-editor-package")
     elif not args.video_subject:
@@ -579,6 +599,84 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
                 )
                 print(json.dumps(result, ensure_ascii=False))
                 return 0
+            if args.run_all and args.export_editor_package and args.assemble_final:
+                from app.services.scene_orchestrator import run_all_project
+                from app.services.export_runner import export_editor_package
+                from app.services.assembly_runner import assemble_final_video
+
+                run_res = run_all_project(
+                    args.project,
+                    task_id=args.task_id or None,
+                )
+                if run_res.get("status") != "complete":
+                    print(json.dumps(run_res, ensure_ascii=False))
+                    return 1
+                export_res = export_editor_package(
+                    args.project,
+                    task_id=run_res.get("task_id") or args.task_id or None,
+                    output_dir=args.output_dir or None,
+                )
+                if export_res.status not in ("complete", "partial"):
+                    print(json.dumps(export_res.model_dump(mode="json"), ensure_ascii=False))
+                    return 1
+                asm_res = assemble_final_video(
+                    args.project,
+                    task_id=run_res.get("task_id") or args.task_id or None,
+                    output_dir=args.output_dir or None,
+                )
+                print(json.dumps(asm_res.model_dump(mode="json"), ensure_ascii=False))
+                return 0 if asm_res.status == "complete" else 1
+
+            if args.run_all and args.assemble_final:
+                from app.services.scene_orchestrator import run_all_project
+                from app.services.assembly_runner import assemble_final_video
+
+                run_res = run_all_project(
+                    args.project,
+                    task_id=args.task_id or None,
+                )
+                if run_res.get("status") != "complete":
+                    print(json.dumps(run_res, ensure_ascii=False))
+                    return 1
+                asm_res = assemble_final_video(
+                    args.project,
+                    task_id=run_res.get("task_id") or args.task_id or None,
+                    output_dir=args.output_dir or None,
+                )
+                print(json.dumps(asm_res.model_dump(mode="json"), ensure_ascii=False))
+                return 0 if asm_res.status == "complete" else 1
+
+            if args.export_editor_package and args.assemble_final:
+                from app.services.export_runner import export_editor_package
+                from app.services.assembly_runner import assemble_final_video
+
+                export_res = export_editor_package(
+                    args.project,
+                    task_id=args.task_id or None,
+                    output_dir=args.output_dir or None,
+                )
+                if export_res.status not in ("complete", "partial"):
+                    print(json.dumps(export_res.model_dump(mode="json"), ensure_ascii=False))
+                    return 1
+                asm_res = assemble_final_video(
+                    args.project,
+                    task_id=args.task_id or None,
+                    output_dir=args.output_dir or None,
+                )
+                print(json.dumps(asm_res.model_dump(mode="json"), ensure_ascii=False))
+                return 0 if asm_res.status == "complete" else 1
+
+            if args.assemble_final:
+                from app.services.assembly_runner import assemble_final_video
+
+                asm_res = assemble_final_video(
+                    args.project,
+                    task_id=args.task_id or None,
+                    output_dir=args.output_dir or None,
+                )
+                print(json.dumps(asm_res.model_dump(mode="json"), ensure_ascii=False))
+                return 0 if asm_res.status == "complete" else 1
+
             if args.run_all and args.export_editor_package:
                 from app.services.scene_orchestrator import run_all_project
                 from app.services.export_runner import export_editor_package
