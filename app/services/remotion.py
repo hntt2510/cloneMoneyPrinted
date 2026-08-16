@@ -132,6 +132,9 @@ def _invoke_node_renderer(
     if not render_script.exists():
         raise RuntimeError(f"Remotion render script not found at {render_script}")
 
+    if shutil.which("node") is None:
+        raise RuntimeError("Node.js binary 'node' not found in PATH. Please install Node.js (v18+) to enable Remotion motion rendering.")
+
     cmd = [
         "node",
         str(render_script),

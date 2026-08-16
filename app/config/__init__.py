@@ -14,6 +14,13 @@ def __init_logger():
         os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     )
 
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
     def format_record(record):
         # 获取日志记录中的文件全路径
         file_path = record["file"].path
