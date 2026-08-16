@@ -384,8 +384,76 @@ class TestCli(unittest.TestCase):
         mock_orchestrator.assert_called_once_with("project.json", task_id=None)
         mock_print.assert_called_once()
 
+    def test_export_editor_package_cli_validation(self):
+        # Requires --project
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--video-subject", "test", "--export-editor-package"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Output-dir requires export-editor-package
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--output-dir", "/tmp/out"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflict with validate-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--validate-only", "--export-editor-package"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflict with plan-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--plan-only", "--export-editor-package"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_run_cli_dispatches_standalone_export_package(self):
+        from app.models.export import ExportResult
+        mock_export_res = ExportResult(
+            status="complete",
+            task_id="task-export-1",
+            export_dir="/exports/project",
+            edit_manifest_file="/exports/project/edit_manifest.json",
+            readme_file="/exports/project/README_EDIT.md",
+            ready_scene_count=3,
+            missing_scene_count=0,
+        )
+        with patch("cli.load_project_spec"), \
+             patch("cli.preflight_project"), \
+             patch("app.services.export_runner.export_editor_package", return_value=mock_export_res) as mock_export, \
+             patch("builtins.print") as mock_print:
+            code = cli.run_cli(["--project", "project.json", "--task-id", "task-export-1", "--export-editor-package"])
+
+        self.assertEqual(code, 0)
+        mock_export.assert_called_once_with("project.json", task_id="task-export-1", output_dir=None)
+        mock_print.assert_called_once()
+
+    def test_run_cli_dispatches_run_all_and_export_package_chain(self):
+        from app.models.export import ExportResult
+        mock_export_res = ExportResult(
+            status="complete",
+            task_id="task-chain-1",
+            export_dir="/exports/chain",
+            edit_manifest_file="/exports/chain/edit_manifest.json",
+            readme_file="/exports/chain/README_EDIT.md",
+            ready_scene_count=3,
+            missing_scene_count=0,
+        )
+        with patch("cli.load_project_spec"), \
+             patch("cli.preflight_project"), \
+             patch("app.services.scene_orchestrator.run_all_project", return_value={"status": "complete", "task_id": "task-chain-1", "ready_scenes": 3}) as mock_orchestrator, \
+             patch("app.services.export_runner.export_editor_package", return_value=mock_export_res) as mock_export, \
+             patch("builtins.print") as mock_print:
+            code = cli.run_cli([
+                "--project", "project.json",
+                "--run-all",
+                "--export-editor-package",
+                "--output-dir", "/custom/export/dir",
+            ])
+
+        self.assertEqual(code, 0)
+        mock_orchestrator.assert_called_once_with("project.json", task_id=None)
+        mock_export.assert_called_once_with("project.json", task_id="task-chain-1", output_dir="/custom/export/dir")
+        mock_print.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
-
-
