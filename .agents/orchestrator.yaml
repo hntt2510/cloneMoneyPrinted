@@ -1,0 +1,20 @@
+allowed_repo: "hntt2510/cloneMoneyPrinted"
+allowed_base_branch: "main"
+allow_push_main: true
+allow_force_push: false
+max_parallel_jobs: 1
+polling_interval_s: 30
+required_labels:
+  - "agent:queued"
+stop_labels:
+  - "agent:cancelled"
+qa_commands:
+  - "python -m compileall app test"
+  - "python -m unittest discover -s test"
+  - "uv lock --check"
+  - "git diff --check"
+working_directory: "D:\\HOCTAP\\latvat\\REUP-ANTROM\\MoneyPrinterTurbo"
+state_directory: ".agents/state"
+log_directory: ".agents/logs"
+trusted_github_actors:
+  - "hntt2510"
