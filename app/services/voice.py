@@ -1114,6 +1114,8 @@ def gemini_tts(
                 return None
         
         # 导出为MP3格式
+        if voice_file and os.path.dirname(voice_file):
+            os.makedirs(os.path.dirname(voice_file), exist_ok=True)
         audio_segment.export(voice_file, format="mp3")
         
         logger.info(f"completed, output file: {voice_file}")

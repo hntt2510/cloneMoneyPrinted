@@ -392,39 +392,40 @@ class TestVoiceService(unittest.TestCase):
             def export(self, output_file, format):
                 Path(output_file).write_bytes(b"fake-mp3")
 
-        voice_file = f"{temp_dir}/tts-gemini-Zephyr.mp3"
-        subtitle_file = f"{temp_dir}/tts-gemini-Zephyr.srt"
-        text = "Gemini subtitle generation should work now. Testing multiple lines."
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            voice_file = f"{tmp_dir}/tts-gemini-Zephyr.mp3"
+            subtitle_file = f"{tmp_dir}/tts-gemini-Zephyr.srt"
+            text = "Gemini subtitle generation should work now. Testing multiple lines."
 
-        with patch("google.generativeai.configure"), patch(
-            "google.generativeai.GenerativeModel", _FakeModel
-        ), patch(
-            "pydub.AudioSegment.from_raw",
-            return_value=_FakeAudioSegment(),
-        ), patch(
-            "pydub.AudioSegment.from_file",
-            return_value=_FakeAudioSegment(),
-        ), patch.object(vs.config, "app", dict(vs.config.app, gemini_api_key="test-key")):
-            sub_maker = vs.gemini_tts(
-                text=text,
-                voice_name="Zephyr",
-                voice_rate=1.0,
-                voice_file=voice_file,
+            with patch("google.generativeai.configure"), patch(
+                "google.generativeai.GenerativeModel", _FakeModel
+            ), patch(
+                "pydub.AudioSegment.from_raw",
+                return_value=_FakeAudioSegment(),
+            ), patch(
+                "pydub.AudioSegment.from_file",
+                return_value=_FakeAudioSegment(),
+            ), patch.object(vs.config, "app", dict(vs.config.app, gemini_api_key="test-key")):
+                sub_maker = vs.gemini_tts(
+                    text=text,
+                    voice_name="Zephyr",
+                    voice_rate=1.0,
+                    voice_file=voice_file,
+                )
+
+            self.assertIsNotNone(sub_maker)
+            self.assertEqual(
+                getattr(sub_maker, "subs", []),
+                ["Gemini subtitle generation should work now", "Testing multiple lines"],
             )
+            self.assertEqual(len(getattr(sub_maker, "offset", [])), 2)
+            self.assertEqual(sub_maker.offset[0][0], 0)
+            self.assertLess(sub_maker.offset[0][1], sub_maker.offset[1][1])
 
-        self.assertIsNotNone(sub_maker)
-        self.assertEqual(
-            getattr(sub_maker, "subs", []),
-            ["Gemini subtitle generation should work now", "Testing multiple lines"],
-        )
-        self.assertEqual(len(getattr(sub_maker, "offset", [])), 2)
-        self.assertEqual(sub_maker.offset[0][0], 0)
-        self.assertLess(sub_maker.offset[0][1], sub_maker.offset[1][1])
-
-        vs.create_subtitle(sub_maker=sub_maker, text=text, subtitle_file=subtitle_file)
-        subtitle_content = Path(subtitle_file).read_text(encoding="utf-8")
-        self.assertIn("Gemini subtitle generation should work now", subtitle_content)
-        self.assertIn("Testing multiple lines", subtitle_content)
+            vs.create_subtitle(sub_maker=sub_maker, text=text, subtitle_file=subtitle_file)
+            subtitle_content = Path(subtitle_file).read_text(encoding="utf-8")
+            self.assertIn("Gemini subtitle generation should work now", subtitle_content)
+            self.assertIn("Testing multiple lines", subtitle_content)
 
     def test_mimo_tts_uses_openai_compatible_audio_response(self):
         """
