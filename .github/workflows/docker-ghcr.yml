@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: ghcr.io/harry0703/moneyprinterturbo
+  REGISTRY: ghcr.io
 
 jobs:
   publish:
@@ -46,7 +46,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          flavor: |
+            lower=true
           tags: |
             type=ref,event=branch
             type=ref,event=tag
