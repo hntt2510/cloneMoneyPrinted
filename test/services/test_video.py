@@ -580,7 +580,6 @@ class TestVideoService(unittest.TestCase):
                 font=font_path,
                 fontsize=30
             )
-            print(wrapped_text_en, text_height_en)
             # verify text is wrapped
             self.assertIn("\n", wrapped_text_en)
             
@@ -592,7 +591,6 @@ class TestVideoService(unittest.TestCase):
                 font=font_path,
                 fontsize=30
             )   
-            print(wrapped_text_zh, text_height_zh)
             # verify chinese text is wrapped
             self.assertIn("\n", wrapped_text_zh)
         except Exception as e:

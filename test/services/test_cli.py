@@ -454,6 +454,82 @@ class TestCli(unittest.TestCase):
         mock_export.assert_called_once_with("project.json", task_id="task-chain-1", output_dir="/custom/export/dir")
         mock_print.assert_called_once()
 
+    def test_assemble_final_cli_validation(self):
+        # Requires --project
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--video-subject", "test", "--assemble-final"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflict with validate-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--validate-only", "--assemble-final"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+        # Conflict with plan-only
+        with self.assertRaises(SystemExit) as cm:
+            cli.parse_args(["--project", "project.json", "--plan-only", "--assemble-final"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_run_cli_dispatches_standalone_assemble_final(self):
+        from app.models.assembly import AssemblyResult
+        mock_asm_res = AssemblyResult(
+            status="complete",
+            task_id="task-asm-1",
+            final_dir="/exports/project/final",
+            final_video_file="/exports/project/final/final.mp4",
+            assembly_manifest_file="/exports/project/final/assembly_manifest.json",
+            qc_report_file="/exports/project/final/qc_report.json",
+        )
+        with patch("cli.load_project_spec"), \
+             patch("cli.preflight_project"), \
+             patch("app.services.assembly_runner.assemble_final_video", return_value=mock_asm_res) as mock_asm, \
+             patch("builtins.print") as mock_print:
+            code = cli.run_cli(["--project", "project.json", "--task-id", "task-asm-1", "--assemble-final"])
+
+        self.assertEqual(code, 0)
+        mock_asm.assert_called_once_with("project.json", task_id="task-asm-1", output_dir=None)
+        mock_print.assert_called_once()
+
+    def test_run_cli_dispatches_full_chain_run_all_export_and_assemble(self):
+        from app.models.export import ExportResult
+        from app.models.assembly import AssemblyResult
+
+        mock_export_res = ExportResult(
+            status="complete",
+            task_id="task-chain-all",
+            export_dir="/exports/chain",
+            edit_manifest_file="/exports/chain/edit_manifest.json",
+            readme_file="/exports/chain/README_EDIT.md",
+            ready_scene_count=3,
+            missing_scene_count=0,
+        )
+        mock_asm_res = AssemblyResult(
+            status="complete",
+            task_id="task-chain-all",
+            final_dir="/exports/chain/final",
+            final_video_file="/exports/chain/final/final.mp4",
+            assembly_manifest_file="/exports/chain/final/assembly_manifest.json",
+            qc_report_file="/exports/chain/final/qc_report.json",
+        )
+        with patch("cli.load_project_spec"), \
+             patch("cli.preflight_project"), \
+             patch("app.services.scene_orchestrator.run_all_project", return_value={"status": "complete", "task_id": "task-chain-all"}) as mock_orch, \
+             patch("app.services.export_runner.export_editor_package", return_value=mock_export_res) as mock_export, \
+             patch("app.services.assembly_runner.assemble_final_video", return_value=mock_asm_res) as mock_asm, \
+             patch("builtins.print") as mock_print:
+            code = cli.run_cli([
+                "--project", "project.json",
+                "--run-all",
+                "--export-editor-package",
+                "--assemble-final",
+            ])
+
+        self.assertEqual(code, 0)
+        mock_orch.assert_called_once_with("project.json", task_id=None)
+        mock_export.assert_called_once_with("project.json", task_id="task-chain-all", output_dir=None)
+        mock_asm.assert_called_once_with("project.json", task_id="task-chain-all", output_dir=None)
+        mock_print.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
