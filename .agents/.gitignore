@@ -1,0 +1,5 @@
+state/*.json
+state/*.tmp
+logs/*
+!state/.gitkeep
+!logs/.gitkeep
