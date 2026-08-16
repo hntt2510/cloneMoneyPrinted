@@ -391,6 +391,8 @@ class TestVoiceService(unittest.TestCase):
 
         with patch("google.generativeai.configure"), patch(
             "google.generativeai.GenerativeModel", _FakeModel
+        ), patch.object(
+            AudioSegment, "export", lambda self, out, format="mp3": Path(out).write_bytes(b"fake-mp3")
         ), patch.object(vs.config, "app", dict(vs.config.app, gemini_api_key="test-key")):
             sub_maker = vs.gemini_tts(
                 text=text,
