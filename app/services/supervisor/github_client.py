@@ -66,7 +66,13 @@ class GitHubClient:
         self.token = token
         self.base_url = base_url.rstrip("/")
         self._external_client = client
-        self._client = client or httpx.Client(timeout=30.0)
+        if client:
+            self._client = client
+        else:
+            try:
+                self._client = httpx.Client(timeout=30.0)
+            except Exception:
+                self._client = httpx.Client(timeout=30.0, trust_env=False)
 
     def _get_headers(self) -> dict[str, str]:
         headers = {

@@ -154,8 +154,9 @@ def create_editor_package_zip(export_dir: Path | str, destination_zip: Path | st
 def save_uploaded_file(uploaded_file: Any, target_dir: Path | str, allowed_extensions: set[str] | None = None) -> Path:
     """Safely save a Streamlit uploaded file into the target directory with strict filename sanitization."""
     raw_name = getattr(uploaded_file, "name", "uploaded_file")
-    safe_name = Path(raw_name).name
-    # Strip any directory path components
+    # Normalize backslashes (Windows) to forward slashes so basename works consistently across platforms
+    clean_name = str(raw_name).replace("\\", "/")
+    safe_name = Path(clean_name).name
     safe_name = os.path.basename(safe_name)
 
     if not safe_name or safe_name in (".", ".."):
