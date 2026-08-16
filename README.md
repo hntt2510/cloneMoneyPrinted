@@ -305,6 +305,21 @@ uv run python cli.py \
   --stop-at video
 ```
 
+### 快速开始（全自动流水线）🚀
+
+本项目支持通过 `project.json` 执行声明式多场景自动化视频生产：
+
+```bash
+# 1. 资产生成模式（规划、B-roll检索、Remotion动态图表与证据渲染）
+python cli.py --project project.json --run-all
+
+# 2. 剪辑包导出模式（生成 NLE 剪辑就绪包与 edit_manifest.json）
+python cli.py --project project.json --run-all --export-editor-package
+
+# 3. 最终视频合成模式（全自动合成 final.mp4 并输出 QC 质量报告）
+python cli.py --project project.json --run-all --export-editor-package --assemble-final
+```
+
 ## 语音合成 🗣
 
 所有支持的声音列表，可以查看：[声音列表](./docs/voice-list.txt)

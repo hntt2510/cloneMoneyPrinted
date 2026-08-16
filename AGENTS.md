@@ -1,29 +1,4 @@
-# Autonomous Development & QA/QC Loop
-
-Bạn là Master Orchestrator chịu trách nhiệm hoàn thiện toàn bộ project theo từng Milestone.
-
-## Chu trình làm việc bắt buộc (Closed Loop):
-1. **Phân tích & Lập Task (Plan)**:
-   - Đọc danh sách việc cần làm (Roadmap/Milestone tiếp theo, ví dụ G09, G10...).
-   - Tạo danh sách công việc nhỏ (sub-tasks).
-
-2. **Code (Execution)**:
-   - Viết hoặc sửa đổi code theo đúng kiến trúc của project.
-
-3. **Tự động QA/QC (Quality Assurance)**:
-   - Tự chạy typecheck: `python -m compileall app`
-   - Tự chạy test tương ứng: `python -m unittest discover -s test/services` (hoặc test cụ thể như `test_cli_motion.py`).
-   - Kiểm tra linter / code formatting.
-
-4. **Đánh giá & Phản hồi (Feedback Loop)**:
-   - **Nếu QA FAIL**: Phân tích log lỗi, quay lại bước 2 để sửa code và test lại cho đến khi PASS 100%.
-   - **Nếu QA PASS**: Tạo commit git, cập nhật tài liệu/walkthrough, rồi tự động chuyển sang Task/Milestone tiếp theo.
-
-5. **Điều kiện dừng (Stop Condition)**:
-   - Tiếp tục lặp lại các bước 1 -> 4 cho đến khi hoàn thành toàn bộ Roadmap/Project, không dừng lại hỏi trừ khi gặp blocker hệ thống không thể tự giải quyết.
-
-
-   AUTONOMOUS DEVELOPMENT & QA/QC MASTER ROADMAP
+AUTONOMOUS DEVELOPMENT & QA/QC MASTER ROADMAP
 
 Project: hntt2510/cloneMoneyPrinted — Video Research & Asset Builder
 Operating mode: Closed-loop autonomous development
@@ -36,6 +11,8 @@ You are the Master Orchestrator responsible for completing the entire project mi
 You are responsible for: reading the approved baseline; selecting the next unfinished milestone; breaking it into sub-tasks; inspecting architecture before writing code; implementing the smallest compatible change; preserving unrelated behavior; running QA/QC automatically; fixing failures until green; self-reviewing the diff; committing; merging locally into main with --no-ff; rerunning QA on merged main; pushing origin/main; verifying main == origin/main; reporting exact SHAs and QA; and automatically advancing when allowed.
 
 Never claim PASS merely because code compiles or one targeted test passes.
+
+Do not ask the user to approve milestones. The agent owns milestone review. If its review finds a defect, it must repair it autonomously. If review passes, it must immediately start the next incomplete goal. Continue until the complete roadmap is exhausted.
 
 1. CLOSED-LOOP DEVELOPMENT CYCLE
 
@@ -203,7 +180,7 @@ If unittest says Ran 400 tests and OK (skipped=7), report total=400, failed=0, s
 
 2. GLOBAL STOP CONDITIONS
 
-Continue automatically unless: a required local tool has no compatible fallback; an external credential is truly required; upstream access blocks verification; conflicting human changes need a human decision; a destructive irreversible step requires explicit authorization; or the roadmap says STOP FOR INDEPENDENT REVIEW.
+Continue automatically unless: a required local tool has no compatible fallback; an external credential is truly required; upstream access blocks verification; conflicting human changes need a human decision; a destructive irreversible step requires explicit authorization; or there is a genuine external/system blocker the agent cannot safely solve autonomously.
 
 When blocked: preserve work, never fabricate PASS, report the exact blocker and safest next action.
 
@@ -280,20 +257,37 @@ manifests remain deterministic and auditable.
 
 5. ROADMAP STATUS
 
-G01 Foundation / Source policy                  ✅ APPROVED
-G02 Project Spec / Project Runner               ✅ APPROVED
-G03 Timeline Engine                             ✅ APPROVED
-G04 Autonomous Visual Planner                   ✅ APPROVED
-G05 Autonomous B-roll                           ✅ APPROVED
-G06 Deterministic Remotion Engine               ✅ APPROVED
-G07 Document / Evidence Pipeline                ✅ APPROVED
-G08 Scene Orchestrator / Run All                🟡 IMPLEMENTED, HARDENING REQUIRED
-G09 Editor-ready Export Package                 ⏳ TODO
-G10 Final Assembly Engine                       ⏳ TODO
-G11 Autonomous GitHub → Antigravity Supervisor  ⏳ TODO
-G12 Production Release / Reliability Gate       ⏳ TODO
+Current GitHub Baseline
 
-G08 must be fully hardened before G09 starts.
+Verified main:
+
+095170f594b433be5467f4aed1797b4b3d9d79b8
+merge: add github antigravity supervision workflow
+
+Observed completed merge lineage:
+
+1873b8c  merge: harden autonomous scene orchestrator        (G08-H)
+a2ab1a1  merge: add editor-ready export workflow            (G09)
+0c391a3  merge: add final video assembly pipeline           (G10)
+095170f  merge: add github antigravity supervision workflow (G11)
+
+Therefore the next active milestone is G12 — Production Reliability / Release Gate.
+
+G01 Foundation / Source policy                  ✅ COMPLETE
+G02 Project Spec / Project Runner               ✅ COMPLETE
+G03 Timeline Engine                             ✅ COMPLETE
+G04 Autonomous Visual Planner                   ✅ COMPLETE
+G05 Autonomous B-roll                           ✅ COMPLETE
+G06 Deterministic Remotion Engine               ✅ COMPLETE
+G07 Document / Evidence Pipeline                ✅ COMPLETE
+G08 Scene Orchestrator / Run All                ✅ COMPLETE
+G08-H Scene Orchestrator Hardening              ✅ COMPLETE
+G09 Editor-ready Export Package                 ✅ COMPLETE
+G10 Final Assembly Engine                       ✅ COMPLETE
+G11 Autonomous GitHub → Antigravity Supervisor  ✅ COMPLETE
+G12 Production Release / Reliability Gate       🟡 CURRENT / NEXT
+
+Current GitHub baseline has completed G01–G11. Continue autonomously from G12.
 
 G08-H — SCENE ORCHESTRATOR HARDENING
 
@@ -490,7 +484,7 @@ cd remotion && npm ci && npm run typecheck && cd ..
 Feature commit: fix: harden scene orchestrator resume and provenance
 Merge commit: merge: harden autonomous scene orchestrator
 
-STOP FOR INDEPENDENT REVIEW after G08-H.
+SELF-REVIEW GATE: run the complete autonomous review loop; if PASS, immediately continue to G09. Do not wait for human approval.
 
 G09 — EDITOR-READY EXPORT PACKAGE
 
@@ -689,7 +683,7 @@ Run Remotion regression if integration is touched.
 Feature commit: feat: add editor-ready asset export package
 Merge commit: merge: add editor-ready export workflow
 
-STOP FOR INDEPENDENT REVIEW after G09.
+SELF-REVIEW GATE: if implementation + QA + merged-main QA pass, immediately continue to G10. Do not wait for human approval.
 
 G10 — FINAL ASSEMBLY ENGINE
 
@@ -836,7 +830,7 @@ Full targeted assembly/CLI tests, complete Python regression, compileall, lock c
 Feature commit: feat: add deterministic final assembly engine
 Merge commit: merge: add final video assembly pipeline
 
-STOP FOR INDEPENDENT REVIEW after G10.
+SELF-REVIEW GATE: if implementation + QA + merged-main QA pass, immediately continue to G11. Do not wait for human approval.
 
 G11 — AUTONOMOUS GITHUB → ANTIGRAVITY SUPERVISOR
 
@@ -882,7 +876,7 @@ agent:claimed
 agent:running
 agent:qa
 agent:blocked
-agent:review
+agent:self-review
 agent:done
 agent:cancelled
 
@@ -1115,7 +1109,7 @@ Create SUPERVISOR.md covering install, Antigravity capability detection, GitHub 
 Feature commit: feat: add autonomous github development supervisor
 Merge commit: merge: add github antigravity supervision workflow
 
-STOP FOR INDEPENDENT REVIEW after G11.
+SELF-REVIEW GATE: if implementation + QA + merged-main QA pass, immediately continue to G12. Do not wait for human approval.
 
 G12 — PRODUCTION RELIABILITY / RELEASE GATE
 
@@ -1281,23 +1275,102 @@ Do not tag before all gates pass. If no repository version policy exists, propos
 Feature commit: chore: harden production release workflow
 Merge commit: merge: finalize production release readiness
 
-STOP FOR FINAL INDEPENDENT REVIEW.
+FINAL SELF-REVIEW GATE: perform exhaustive autonomous release review. Fix every discovered defect and repeat QA until the entire project satisfies Definition of Done. Then stop because the roadmap is finished.
 
 6. AUTONOMOUS MILESTONE ADVANCEMENT RULE
 
-After a milestone is merged, QA'd on main, pushed, and verified:
+There is NO HUMAN APPROVAL GATE between milestones.
 
-update roadmap state;
+After a milestone is implemented, the agent performs its own adversarial review and decides whether it is safe to advance.
 
-write the completion report;
+6.1 — Mandatory Agent Self-Review Gate
 
-if milestone says STOP FOR INDEPENDENT REVIEW, stop;
+After merged-main QA, run a separate Reviewer Pass that does not trust the Builder Pass. Inspect acceptance criteria, actual git diff, real runner/API contracts, persistence/resume/error invariants, regression risk, runtime smoke outputs, generated manifests, failure-path coverage, secrets/security issues, and future-goal scope creep.
 
-reviewer APPROVED → begin next goal;
+6.2 — Autonomous Verdict
 
-reviewer CHANGES REQUESTED → create a hardening branch from current main, implement only requested fixes, run the complete closed loop again;
+Only two internal verdicts exist:
 
-never skip an unapproved milestone to start a later goal.
+SELF_REVIEW_PASS
+SELF_REVIEW_CHANGES_REQUIRED
+
+If SELF_REVIEW_CHANGES_REQUIRED, do not ask the user. Automatically create/continue hardening work, implement the smallest correct fix, run targeted QA, regression QA, merged-main QA, and self-review again. Repeat until PASS.
+
+If SELF_REVIEW_PASS, mark the milestone complete, write the report/log, find the next incomplete milestone, and start it immediately.
+
+6.3 — Builder / QA / Reviewer Separation
+
+Even if one agent performs all roles, treat them as separate phases:
+
+BUILDER MODE
+→ implement against spec
+
+QA MODE
+→ deterministic tests / typecheck / runtime smoke
+
+REVIEWER MODE
+→ assume implementation may be wrong
+→ inspect diff/contracts/invariants
+→ search for counterexamples
+
+FIX MODE
+→ correct all findings
+
+REVIEWER MODE again
+
+A builder's textual PASS, DONE, READY, or all tests passed is never enough by itself.
+
+6.4 — No Goal Skipping
+
+Advance only after the current goal reaches SELF_REVIEW_PASS. If a later goal exposes an earlier invariant bug, fix the earlier invariant immediately, rerun affected regressions, then continue.
+
+6.5 — Only Valid Stop Conditions
+
+Stop only when:
+
+all goals are complete, including G12 Definition of Done; or
+
+a genuine external/system blocker cannot be safely solved autonomously.
+
+Valid blockers include unavailable required credentials with no mock/local path, inaccessible proprietary tool/API, conflicting human work requiring a product decision, platform permission preventing required write/push, or an irreversible destructive operation requiring explicit authorization.
+
+Normal code bugs, failed tests, agent-created merge conflicts, formatting failures, type errors, bad mocks, flaky local fixtures, or incorrect assumptions are not stop conditions. Fix them.
+
+6.6 — Entire Project Loop
+
+while roadmap has incomplete goals:
+    goal = next_incomplete_goal()
+    PLAN(goal)
+    IMPLEMENT(goal)
+
+    while True:
+        RUN_TARGETED_QA()
+        RUN_REGRESSION_QA()
+        RUN_RUNTIME_SMOKE_IF_APPLICABLE()
+
+        if QA_FAIL:
+            FIX_ROOT_CAUSE()
+            continue
+
+        MERGE_TO_MAIN()
+        RUN_MAIN_QA()
+
+        if MAIN_QA_FAIL:
+            FIX_ROOT_CAUSE()
+            continue
+
+        SELF_REVIEW_ADVERSARIALLY()
+
+        if REVIEW_FINDINGS:
+            FIX_ALL_FINDINGS()
+            continue
+
+        PUSH_MAIN()
+        VERIFY_MAIN_EQUALS_ORIGIN()
+        MARK_GOAL_COMPLETE()
+        break
+
+STOP only when roadmap is exhausted.
 
 7. GITHUB-DRIVEN AUTONOMOUS DEVELOPMENT MODE
 
@@ -1329,28 +1402,28 @@ Push origin/main
       ↓
 GitHub report
       ↓
-agent:review
+agent:self-review
       ↓
-Independent review
+Autonomous self-review
       ↓
-APPROVED → next issue
-CHANGES_REQUESTED → hardening issue
+PASS → next issue automatically
+CHANGES_REQUIRED → self-create hardening work → fix → QA → review again
 
-The supervisor treats reviewer approval as a mandatory gate wherever the milestone says STOP FOR INDEPENDENT REVIEW.
+The supervisor never waits for human milestone approval. Its adversarial self-review is the mandatory gate; PASS advances automatically and findings trigger an autonomous fix loop.
 
 8. FINAL DEFINITION OF DONE
 
 The project is complete only when:
 
-G08 hardening approved;
+G08 hardening completed with SELF_REVIEW_PASS;
 
-G09 approved;
+G09 completed with SELF_REVIEW_PASS;
 
-G10 approved;
+G10 completed with SELF_REVIEW_PASS;
 
-G11 approved if autonomous GitHub-driven development is desired;
+G11 completed with SELF_REVIEW_PASS;
 
-G12 final release gate approved;
+G12 final release gate completed with SELF_REVIEW_PASS;
 
 project.json can autonomously produce ordered scene assets;
 

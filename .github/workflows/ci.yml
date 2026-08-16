@@ -1,35 +1,65 @@
 name: CI
-
 on:
-  pull_request:
   push:
-    branches:
-      - main
+    branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
 
 jobs:
-  tests:
-    name: Python tests
-    runs-on: ubuntu-latest
-
+  test-windows:
+    runs-on: windows-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-
+        run: pip install uv
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync
+      - name: Python compile check
+        run: .venv\Scripts\python.exe -m compileall app test
+      - name: Run full test suite
+        run: .venv\Scripts\python.exe -m unittest discover -s test
+        env:
+          PYTHONIOENCODING: "utf-8"
+      - name: Dependency lock check
+        run: uv lock --check
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Remotion install
+        run: npm --prefix remotion ci
+      - name: Remotion typecheck
+        run: npm --prefix remotion run typecheck
 
-      - name: Compile Python sources
-        run: uv run python -m compileall app cli.py main.py webui test
-
-      - name: Run deterministic unit tests
-        run: uv run python -X utf8 -m unittest test.services.test_state test.services.test_task test.services.test_schema test.services.test_webui_i18n
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        run: pip install uv
+      - name: Install dependencies
+        run: uv sync
+      - name: Python compile check
+        run: .venv/bin/python -m compileall app test
+      - name: Run full test suite
+        run: .venv/bin/python -m unittest discover -s test
+        env:
+          PYTHONIOENCODING: "utf-8"
+      - name: Dependency lock check
+        run: uv lock --check
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Remotion install
+        run: npm --prefix remotion ci
+      - name: Remotion typecheck
+        run: npm --prefix remotion run typecheck

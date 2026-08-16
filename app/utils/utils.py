@@ -158,6 +158,24 @@ def get_ffmpeg_binary() -> str:
     return "ffmpeg"
 
 
+def check_ffmpeg_available() -> tuple[bool, str]:
+    """Check if FFmpeg binary is available, returning (is_available, path_or_actionable_error)."""
+    binary = get_ffmpeg_binary()
+    if binary != "ffmpeg" and (os.path.isabs(binary) and os.path.exists(binary)):
+        return True, binary
+    if shutil.which(binary) or shutil.which("ffmpeg"):
+        return True, binary
+    return False, "FFmpeg executable not found. Please install FFmpeg (https://ffmpeg.org) or set IMAGEIO_FFMPEG_EXE environment variable."
+
+
+def check_node_available() -> tuple[bool, str]:
+    """Check if Node.js binary is available, returning (is_available, path_or_actionable_error)."""
+    node_path = shutil.which("node")
+    if node_path:
+        return True, node_path
+    return False, "Node.js executable 'node' not found in PATH. Please install Node.js 18+ (https://nodejs.org) to enable Remotion motion rendering."
+
+
 def run_in_background(func, *args, **kwargs):
     def run():
         try:

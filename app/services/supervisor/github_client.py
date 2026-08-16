@@ -13,12 +13,36 @@ def sanitize_sensitive_text(text: str, token: str | None = None) -> str:
     sanitized = text
     if token and len(token) > 3:
         sanitized = sanitized.replace(token, "***REDACTED***")
+    # Redact query parameters with secrets (e.g. ?token=..., &api_key=..., &secret=...)
+    sanitized = re.sub(
+        r"([?&](?:token|api_key|apikey|secret|password|sig)=)[^&\s]+",
+        r"\1***REDACTED***",
+        sanitized,
+        flags=re.IGNORECASE,
+    )
+    # Redact key-value secrets (e.g. api_key=..., password="...", secret: '...')
+    sanitized = re.sub(
+        r"((?:api_key|apikey|secret|password)\s*[:=]\s*['\"]?)[^\s,'\"]+(['\"]?)",
+        r"\1***REDACTED***\2",
+        sanitized,
+        flags=re.IGNORECASE,
+    )
     # Redact common token patterns (GitHub PAT, Bearer tokens, etc.)
     sanitized = re.sub(r"(Bearer\s+)[A-Za-z0-9_\-\.]+", r"\1***REDACTED***", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"(token\s+)[A-Za-z0-9_\-\.]+", r"\1***REDACTED***", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"(ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{30,})", r"***REDACTED***", sanitized)
     sanitized = re.sub(r"([A-Za-z0-9_\-]{35,})", r"***REDACTED***", sanitized)
     return sanitized
+
+
+def sanitize_exception(exc: BaseException, token: str | None = None) -> str:
+    """Sanitize full nested exception chain representation."""
+    parts = [str(exc)]
+    curr = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    while curr:
+        parts.append(str(curr))
+        curr = getattr(curr, "__cause__", None) or getattr(curr, "__context__", None)
+    return sanitize_sensitive_text(" | Cause: ".join(parts), token)
 
 
 class GitHubClientError(Exception):

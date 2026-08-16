@@ -305,6 +305,21 @@ uv run python cli.py \
   --stop-at video
 ```
 
+### Quick Start (Autonomous Pipeline) 🚀
+
+Execute end-to-end declarative video production from a single `project.json`:
+
+```bash
+# 1. Asset-only (Planning, B-roll, Remotion motion graphics & PyMuPDF document evidence)
+python cli.py --project project.json --run-all
+
+# 2. Editor package (Clean visual tracks, continuous narration, subtitle.srt & edit_manifest.json)
+python cli.py --project project.json --run-all --export-editor-package
+
+# 3. Full assembly (Deterministic final assembly into final.mp4 + automated QC report)
+python cli.py --project project.json --run-all --export-editor-package --assemble-final
+```
+
 ## Voice Synthesis 🗣
 
 A list of all supported voices can be viewed here: [Voice List](./docs/voice-list.txt)
