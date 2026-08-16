@@ -137,7 +137,7 @@ def discover_source_registry(
 
     for p in candidate_paths:
         try:
-            raw_text = p.read_text(encoding="utf-8")
+            raw_text = p.read_text(encoding="utf-8-sig")
             data = json.loads(raw_text)
             registry = EvidenceSourceRegistry.model_validate(data)
             logger.info(f"Loaded source registry with {len(registry.sources)} sources from {p.name}")

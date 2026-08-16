@@ -27,7 +27,7 @@ def _project_path(project_path: str | os.PathLike[str]) -> Path:
 def load_project_spec(project_path: str | os.PathLike[str]) -> ProjectSpec:
     source = _project_path(project_path)
     try:
-        with source.open("r", encoding="utf-8") as handle:
+        with source.open("r", encoding="utf-8-sig") as handle:
             raw = json.load(handle)
     except FileNotFoundError as exc:
         raise ProjectSpecError(f"Project file not found: {source}") from exc

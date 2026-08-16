@@ -53,6 +53,19 @@ h1 {
 """
 st.markdown(streamlit_style, unsafe_allow_html=True)
 
+workspace_mode = st.sidebar.radio(
+    "Workspace Mode",
+    ["Production Workspace", "Legacy Generator (Classic)"],
+    index=0,
+    help="Production Workspace runs the modern G08-G10 autonomous video pipeline.",
+)
+
+if workspace_mode == "Production Workspace":
+    from webui.production import render_production_workspace
+
+    render_production_workspace()
+    st.stop()
+
 # 定义资源目录
 font_dir = os.path.join(root_dir, "resource", "fonts")
 song_dir = os.path.join(root_dir, "resource", "songs")
