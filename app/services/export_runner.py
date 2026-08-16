@@ -30,6 +30,10 @@ from app.services.evidence_sources import compute_file_sha256, sanitize_secret_u
 from app.services.project_runner import ProjectRunError
 from app.services.project_spec import load_project_spec
 from app.services.scene_orchestrator import compute_project_input_fingerprint, resolve_final_render_job
+from app.services.visual_planner import (
+    normalize_visual_cue_boundaries,
+    validate_scene_timeline_coverage,
+)
 from app.utils import utils
 
 
@@ -403,6 +407,12 @@ def export_editor_package(
 
     # 7. Export Scenes
     sorted_cues = sorted(working_project.visual_cues or [], key=lambda c: c.order)
+    if sorted_cues:
+        sorted_cues = normalize_visual_cue_boundaries(
+            sorted_cues,
+            fps=fps,
+            total_duration_seconds=timeline_plan.duration if timeline_plan else None,
+        )
     exported_scenes: list[EditorSceneEntry] = []
     missing_scene_ids: list[str] = []
     scene_shas: list[str | None] = []
@@ -566,6 +576,17 @@ def export_editor_package(
         pkg_status = EditorPackageStatus.complete
     else:
         pkg_status = EditorPackageStatus.partial
+
+    # Invariant: A COMPLETE editor package must not contain hidden timeline holes.
+    if pkg_status == EditorPackageStatus.complete:
+        is_cov_valid, cov_errors = validate_scene_timeline_coverage(
+            exported_scenes,
+            expected_duration_frames=total_duration_frames,
+            fps=fps,
+        )
+        if not is_cov_valid:
+            logger.error(f"Editor package timeline coverage validation failed: {cov_errors}")
+            pkg_status = EditorPackageStatus.failed
 
     duration_seconds = total_duration_frames / float(fps) if fps else 0.0
 

@@ -39,6 +39,7 @@ from app.services.export_runner import (
 from app.services.project_runner import ProjectRunError
 from app.services.project_spec import load_project_spec
 from app.services.scene_orchestrator import compute_project_input_fingerprint
+from app.services.visual_planner import validate_scene_timeline_coverage
 
 
 def _utc_now() -> str:
@@ -287,6 +288,17 @@ def assemble_final_video(
         if not scene_path.exists():
             raise ProjectRunError(f"Scene video file does not exist: {scene_path}")
 
+    # Defense-in-depth: Validate complete timeline coverage before rendering
+    is_valid_coverage, coverage_errors = validate_scene_timeline_coverage(
+        edit_manifest.scenes,
+        expected_duration_frames=edit_manifest.duration_frames,
+        fps=edit_manifest.fps,
+    )
+    if not is_valid_coverage:
+        err_msg = f"Timeline coverage validation failed: {'; '.join(coverage_errors)}"
+        logger.error(err_msg)
+        raise ProjectRunError(err_msg)
+
     # Prepare final output directory
     final_dir = export_dir / "final"
     final_dir.mkdir(parents=True, exist_ok=True)
@@ -407,6 +419,13 @@ def assemble_final_video(
             if narr_path.exists():
                 narration_audio = AudioFileClip(str(narr_path))
                 opened_clips.append(narration_audio)
+                narr_dur = float(narration_audio.duration or 0.0)
+                if narr_dur > total_video_duration:
+                    if hasattr(narration_audio, "subclipped"):
+                        narration_audio = narration_audio.subclipped(0, total_video_duration)
+                    elif hasattr(narration_audio, "subclip"):
+                        narration_audio = narration_audio.subclip(0, total_video_duration)
+                    opened_clips.append(narration_audio)
                 if config.audio_mix.narration_volume != 1.0:
                     if hasattr(narration_audio, "with_volume_scaled"):
                         narration_audio = narration_audio.with_volume_scaled(config.audio_mix.narration_volume)

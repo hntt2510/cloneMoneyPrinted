@@ -16,7 +16,9 @@ from app.models.project import (
 from app.services.visual_planner import (
     classify_narration,
     fallback_visual,
+    normalize_visual_cue_boundaries,
     plan_visuals,
+    validate_scene_timeline_coverage,
     _build_local_context,
     _validate_grounded_data,
     _validate_grounded_text,
@@ -610,6 +612,174 @@ class TestVisualPlanner(unittest.TestCase):
 
         planned = plan_visuals(project, timeline, response_fn=response)
         self.assertEqual([cue.visual_group_id for cue in planned], ["VG001", "VG001", "VG001"])
+
+    def test_real_uat_gap_shape_normalized(self):
+        """UAT gap shape with leading, trailing, and inter-scene pauses must become frame-contiguous."""
+        # 30 fps, timeline_end_frame=468 (15.6s)
+        # raw cues: 3..117, 123..204, 230..336, 344..468
+        raw_cues = [
+            VisualCue(
+                id="S001",
+                order=1,
+                visual_type=VisualType.data,
+                purpose=VisualPurpose.compare,
+                start=0.1,  # 3 frames
+                end=3.9,    # 117 frames
+                narration="Electric vehicles deliver peak torque instantly from zero RPM,",
+                payload={"template": "timeline", "headline": "Instant torque", "data": {}},
+            ),
+            VisualCue(
+                id="S002",
+                order=2,
+                visual_type=VisualType.broll,
+                purpose=VisualPurpose.context,
+                start=4.088,  # 123 frames
+                end=6.8,      # 204 frames
+                narration="creating an immediate sensation of acceleration.",
+                payload={"search_query": "electric car acceleration"},
+            ),
+            VisualCue(
+                id="S003",
+                order=3,
+                visual_type=VisualType.broll,
+                purpose=VisualPurpose.context,
+                start=7.662,  # 230 frames
+                end=11.2,     # 336 frames
+                narration="Unlike internal combustion engines that require revving through gears,",
+                payload={"search_query": "combustion engine revving"},
+            ),
+            VisualCue(
+                id="S004",
+                order=4,
+                visual_type=VisualType.broll,
+                purpose=VisualPurpose.context,
+                start=11.45,  # 344 frames
+                end=15.6,     # 468 frames
+                narration="direct-drive electric motors achieve maximum power without shifting delays.",
+                payload={"search_query": "electric motors power"},
+            ),
+        ]
+
+        normalized = normalize_visual_cue_boundaries(
+            raw_cues, fps=30, total_duration_frames=468
+        )
+
+        self.assertEqual(len(normalized), 4)
+        # S001 starts at 0
+        self.assertEqual(round(normalized[0].start * 30), 0)
+        self.assertEqual(round(normalized[0].end * 30), 123)
+        # S002 contiguous
+        self.assertEqual(round(normalized[1].start * 30), 123)
+        self.assertEqual(round(normalized[1].end * 30), 230)
+        # S003 contiguous
+        self.assertEqual(round(normalized[2].start * 30), 230)
+        self.assertEqual(round(normalized[2].end * 30), 344)
+        # S004 ends at 468
+        self.assertEqual(round(normalized[3].start * 30), 344)
+        self.assertEqual(round(normalized[3].end * 30), 468)
+
+        # Sum of duration frames is exactly 468
+        durations = [round((c.end - c.start) * 30) for c in normalized]
+        self.assertEqual(durations, [123, 107, 114, 124])
+        self.assertEqual(sum(durations), 468)
+
+        # Validate coverage helper passes
+        is_valid, errors = validate_scene_timeline_coverage(normalized, expected_duration_frames=468, fps=30)
+        self.assertTrue(is_valid, f"Validation failed: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_pause_between_cues_extended(self):
+        """Inter-scene pause must extend previous visual through the pause."""
+        raw_cues = [
+            VisualCue(
+                id="S001",
+                order=1,
+                visual_type=VisualType.text,
+                purpose=VisualPurpose.emphasis,
+                start=0.0,
+                end=2.0,  # 60 frames
+                narration="Opening topic statement.",
+                payload={"headline": "Opening"},
+            ),
+            VisualCue(
+                id="S002",
+                order=2,
+                visual_type=VisualType.broll,
+                purpose=VisualPurpose.context,
+                start=4.0,  # 120 frames (pause from frame 60 to 120)
+                end=6.0,    # 180 frames
+                narration="Follow-up visual point.",
+                payload={"search_query": "visual point"},
+            ),
+        ]
+
+        normalized = normalize_visual_cue_boundaries(raw_cues, fps=30, total_duration_seconds=6.0)
+        self.assertEqual(round(normalized[0].start * 30), 0)
+        self.assertEqual(round(normalized[0].end * 30), 120)  # Extended to next start
+        self.assertEqual(round(normalized[1].start * 30), 120)
+        self.assertEqual(round(normalized[1].end * 30), 180)
+
+        is_valid, errors = validate_scene_timeline_coverage(normalized, expected_duration_frames=180, fps=30)
+        self.assertTrue(is_valid)
+
+    def test_overlap_between_cues_resolved(self):
+        """Overlapping cues are resolved deterministically without duplicate frames."""
+        raw_cues = [
+            VisualCue(
+                id="S001",
+                order=1,
+                visual_type=VisualType.broll,
+                purpose=VisualPurpose.context,
+                start=0.0,
+                end=5.0,  # 150 frames
+                narration="First overlapping cue.",
+                payload={"search_query": "query one"},
+            ),
+            VisualCue(
+                id="S002",
+                order=2,
+                visual_type=VisualType.broll,
+                purpose=VisualPurpose.context,
+                start=3.333,  # 100 frames (overlap with S001)
+                end=6.667,    # 200 frames
+                narration="Second overlapping cue.",
+                payload={"search_query": "query two"},
+            ),
+        ]
+
+        normalized = normalize_visual_cue_boundaries(raw_cues, fps=30, total_duration_frames=200)
+        self.assertEqual(round(normalized[0].start * 30), 0)
+        self.assertEqual(round(normalized[0].end * 30), 100)
+        self.assertEqual(round(normalized[1].start * 30), 100)
+        self.assertEqual(round(normalized[1].end * 30), 200)
+
+        is_valid, errors = validate_scene_timeline_coverage(normalized, expected_duration_frames=200, fps=30)
+        self.assertTrue(is_valid)
+
+    def test_single_scene_normalized_to_canonical_end(self):
+        """Single scene with non-zero start and short end is normalized to 0..canonical_end."""
+        raw_cues = [
+            VisualCue(
+                id="S001",
+                order=1,
+                visual_type=VisualType.text,
+                purpose=VisualPurpose.emphasis,
+                start=0.1,   # 3 frames
+                end=15.2,   # 456 frames
+                narration="Single long statement.",
+                payload={"headline": "Headline"},
+            )
+        ]
+
+        normalized = normalize_visual_cue_boundaries(raw_cues, fps=30, total_duration_frames=468)
+        self.assertEqual(len(normalized), 1)
+        self.assertEqual(round(normalized[0].start * 30), 0)
+        self.assertEqual(round(normalized[0].end * 30), 468)
+        self.assertEqual(normalized[0].start, 0.0)
+        self.assertEqual(normalized[0].end, 15.6)
+
+        is_valid, errors = validate_scene_timeline_coverage(normalized, expected_duration_frames=468, fps=30)
+        self.assertTrue(is_valid)
 
 
 if __name__ == "__main__":

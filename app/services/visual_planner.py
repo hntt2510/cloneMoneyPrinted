@@ -433,12 +433,190 @@ def _apply_diversity(
     return _normalize_groups(result)
 
 
+def normalize_visual_cue_boundaries(
+    cues: list[VisualCue],
+    fps: int = 30,
+    total_duration_seconds: float | None = None,
+    total_duration_frames: int | None = None,
+) -> list[VisualCue]:
+    """Normalize visual cue boundaries to guarantee full, contiguous frame coverage.
+
+    Invariants enforced:
+    1. First cue starts at frame 0 (cue[0].start_frame == 0, cue[0].start == 0.0).
+    2. Adjacent cues are contiguous without gaps or overlaps (cue[i].end_frame == cue[i+1].start_frame).
+    3. Last cue extends through canonical timeline end (cue[-1].end_frame == timeline_end_frame).
+    4. Every cue has duration_frames >= 1.
+    5. Float start/end times are derived directly from canonical frames (start = start_frame / fps, end = end_frame / fps).
+    6. Narration text, payload, purpose, visual_type, and cue order are strictly preserved.
+    """
+    if not cues:
+        return []
+
+    fps = max(1, fps)
+    n = len(cues)
+
+    # 1. Determine target end frame
+    if total_duration_frames is not None and total_duration_frames > 0:
+        target_end_frame = total_duration_frames
+    elif total_duration_seconds is not None and total_duration_seconds > 0:
+        target_end_frame = max(n, round(total_duration_seconds * fps))
+    else:
+        raw_last_end = cues[-1].end if cues[-1].end is not None else 0.0
+        target_end_frame = max(n, round(raw_last_end * fps))
+
+    target_end_frame = max(n, target_end_frame)
+
+    # 2. Extract raw start frames
+    raw_starts = [round((c.start or 0.0) * fps) for c in cues]
+
+    # 3. Deterministically assign contiguous frame boundaries
+    start_frames: list[int] = [0] * n
+    end_frames: list[int] = [0] * n
+
+    start_frames[0] = 0
+    for i in range(1, n):
+        # min allowed to guarantee cue[i-1] has duration >= 1
+        min_allowed = start_frames[i - 1] + 1
+        # max allowed to guarantee remaining cues i..n-1 have duration >= 1
+        max_allowed = max(min_allowed, target_end_frame - (n - i))
+        desired = raw_starts[i]
+        start_frames[i] = max(min_allowed, min(desired, max_allowed))
+        end_frames[i - 1] = start_frames[i]
+
+    end_frames[n - 1] = max(start_frames[n - 1] + 1, target_end_frame)
+
+    # 4. Construct normalized visual cues
+    normalized: list[VisualCue] = []
+    for i, cue in enumerate(cues):
+        s_frame = start_frames[i]
+        e_frame = end_frames[i]
+        s_time = round(s_frame / fps, 4)
+        e_time = round(e_frame / fps, 4)
+
+        normalized.append(
+            cue.model_copy(
+                update={
+                    "start": s_time,
+                    "end": e_time,
+                }
+            )
+        )
+
+    return normalized
+
+
+def validate_scene_timeline_coverage(
+    scenes: list[Any],
+    expected_duration_frames: int | None = None,
+    fps: int = 30,
+) -> tuple[bool, list[str]]:
+    """Validate that scenes form an unbroken, contiguous timeline covering all frames.
+
+    Returns:
+        (is_valid: bool, errors: list[str])
+    """
+    errors: list[str] = []
+    if not scenes:
+        return False, ["No scenes provided in timeline"]
+
+    fps = max(1, fps)
+
+    # Check ordering and duplicate orders
+    seen_orders: set[int] = set()
+    for sc in scenes:
+        order = getattr(sc, "order", None)
+        if order is not None:
+            if order in seen_orders:
+                errors.append(f"Duplicate scene order {order} found in timeline")
+            seen_orders.add(order)
+
+    # First scene must start at frame 0
+    first_sc = scenes[0]
+    first_start = getattr(first_sc, "start_frame", None)
+    if first_start is None:
+        first_start = round((getattr(first_sc, "start", 0.0) or 0.0) * fps)
+
+    if first_start != 0:
+        s_id = getattr(first_sc, "scene_id", getattr(first_sc, "id", "first"))
+        errors.append(f"First scene {s_id} does not start at frame 0 (starts at frame {first_start})")
+
+    # Contiguity check across adjacent scenes
+    total_frames = 0
+    for i in range(len(scenes)):
+        curr_sc = scenes[i]
+        curr_id = getattr(curr_sc, "scene_id", getattr(curr_sc, "id", f"S{i+1:03d}"))
+        curr_start = getattr(curr_sc, "start_frame", None)
+        if curr_start is None:
+            curr_start = round((getattr(curr_sc, "start", 0.0) or 0.0) * fps)
+        curr_end = getattr(curr_sc, "end_frame", None)
+        if curr_end is None:
+            curr_end = round((getattr(curr_sc, "end", 0.0) or 0.0) * fps)
+        curr_dur = getattr(curr_sc, "duration_frames", None)
+        if curr_dur is None:
+            curr_dur = curr_end - curr_start
+
+        if curr_dur < 1:
+            errors.append(f"Scene {curr_id} has invalid duration of {curr_dur} frames (must be >= 1)")
+
+        if curr_end - curr_start != curr_dur:
+            errors.append(f"Scene {curr_id} duration_frames ({curr_dur}) does not match end_frame - start_frame ({curr_end - curr_start})")
+
+        total_frames += curr_dur
+
+        if i < len(scenes) - 1:
+            next_sc = scenes[i + 1]
+            next_id = getattr(next_sc, "scene_id", getattr(next_sc, "id", f"S{i+2:03d}"))
+            next_start = getattr(next_sc, "start_frame", None)
+            if next_start is None:
+                next_start = round((getattr(next_sc, "start", 0.0) or 0.0) * fps)
+
+            if curr_end != next_start:
+                if next_start > curr_end:
+                    gap = next_start - curr_end
+                    errors.append(
+                        f"Timeline gap of {gap} frames between scene {curr_id} (ends at frame {curr_end}) and scene {next_id} (starts at frame {next_start})"
+                    )
+                else:
+                    overlap = curr_end - next_start
+                    errors.append(
+                        f"Timeline overlap of {overlap} frames between scene {curr_id} (ends at frame {curr_end}) and scene {next_id} (starts at frame {next_start})"
+                    )
+
+    # Check last scene end frame and total duration match
+    if expected_duration_frames is not None and expected_duration_frames > 0:
+        last_sc = scenes[-1]
+        last_id = getattr(last_sc, "scene_id", getattr(last_sc, "id", "last"))
+        last_end = getattr(last_sc, "end_frame", None)
+        if last_end is None:
+            last_end = round((getattr(last_sc, "end", 0.0) or 0.0) * fps)
+
+        if last_end != expected_duration_frames:
+            errors.append(
+                f"Last scene {last_id} ends at frame {last_end}, expected timeline end frame {expected_duration_frames}"
+            )
+
+        if total_frames != expected_duration_frames:
+            missing = expected_duration_frames - total_frames
+            if missing > 0:
+                errors.append(
+                    f"Editor scene timeline contains {missing} uncovered frames (scene frames sum to {total_frames}, expected {expected_duration_frames})"
+                )
+            else:
+                errors.append(
+                    f"Editor scene timeline contains {-missing} excess frames (scene frames sum to {total_frames}, expected {expected_duration_frames})"
+                )
+
+    return (len(errors) == 0, errors)
+
+
 def plan_visuals(
     project: ProjectSpec,
     timeline_cues: list[TimelineCue],
     *,
     response_fn: Callable[[str], str] | None = None,
     batch_size: int = BATCH_SIZE,
+    total_duration_seconds: float | None = None,
+    total_duration_frames: int | None = None,
 ) -> list[VisualCue]:
     response_fn = response_fn or llm.generate_response
     planned: list[VisualCue] = []
@@ -482,7 +660,14 @@ def plan_visuals(
         if decisions is None:
             decisions = [fallback_visual(project, cue) for cue in batch]
         planned.extend(decisions)
-    return _apply_diversity(project, timeline_cues, planned)
+    diverse = _apply_diversity(project, timeline_cues, planned)
+    fps = project.project.fps or 30
+    return normalize_visual_cue_boundaries(
+        diverse,
+        fps=fps,
+        total_duration_seconds=total_duration_seconds,
+        total_duration_frames=total_duration_frames,
+    )
 
 
 def save_visual_plan(

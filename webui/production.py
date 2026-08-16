@@ -564,6 +564,14 @@ def render_production_workspace() -> None:
         st.write("---")
         st.header("📊 Task Results & Review")
 
+        wf_res = st.session_state.get("production_run_result")
+        if wf_res and getattr(wf_res, "task_id", None) == active_task_id and not getattr(wf_res, "is_success", True):
+            st.error(
+                f"Production Workflow Incomplete ({wf_res.failed_stage or 'stage error'})\n\n"
+                f"Reason: {sanitize_error_message(wf_res.error or 'Stage execution incomplete')}\n\n"
+                f"Task: `{active_task_id}`"
+            )
+
         try:
             manifest_data = json.loads(exec_manifest_path.read_text(encoding="utf-8-sig"))
         except Exception:
@@ -660,12 +668,29 @@ def render_production_workspace() -> None:
             if ass_btn:
                 try:
                     res_ass = assemble_final_video(spec_save_target, task_id=active_task_id)
-                    if res_ass.qc_report and not res_ass.qc_report.is_valid:
-                        st.error(f"Final Assembly QC Failed: {res_ass.qc_report.errors}")
+                    qc_data = None
+                    if res_ass.qc_report_file and Path(res_ass.qc_report_file).exists():
+                        try:
+                            qc_data = json.loads(Path(res_ass.qc_report_file).read_text(encoding="utf-8-sig"))
+                        except Exception:
+                            pass
+                    if res_ass.status != "complete" or (qc_data and not qc_data.get("is_valid", True)):
+                        err_msg = res_ass.error or ("; ".join(qc_data.get("errors", [])) if qc_data else "Final assembly failed")
+                        st.error(
+                            f"Final Assembly Failed\n\n"
+                            f"Reason: {sanitize_error_message(err_msg)}\n\n"
+                            f"Task: `{active_task_id}`"
+                        )
+                        if res_ass.qc_report_file:
+                            st.caption(f"QC Report: `{res_ass.qc_report_file}`")
                     else:
                         st.success(f"Final video assembled: {res_ass.final_video_file}")
                 except Exception as ea:
-                    st.error(f"Assembly failed: ea")
+                    st.error(
+                        f"Final Assembly Failed\n\n"
+                        f"Reason: {sanitize_error_message(str(ea))}\n\n"
+                        f"Task: `{active_task_id}`"
+                    )
 
             # Final video player
             final_mp4_candidates = [

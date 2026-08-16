@@ -280,6 +280,148 @@ class TestAssemblyRunner(unittest.TestCase):
         self.assertEqual(res.final_video_file, str(final_mp4.resolve()))
         mock_validate.assert_not_called()
 
+    def test_assembly_rejects_timeline_gaps_before_rendering(self) -> None:
+        """Edit manifest with timeline gaps (e.g., 425 scene frames vs 468 duration frames) is rejected pre-render."""
+        # Create 4 scenes with gaps matching UAT: 3..117, 123..204, 230..336, 344..468 (total scene frames = 425)
+        raw_scene_spans = [(3, 117), (123, 204), (230, 336), (344, 468)]
+        scenes: list[EditorSceneEntry] = []
+        for i, (s_frame, e_frame) in enumerate(raw_scene_spans, 1):
+            sc_id = f"S{i:03d}"
+            sc_rel = f"scenes/{sc_id}_DATA.mp4"
+            sc_file = self.export_dir / sc_rel
+            sc_file.write_bytes(b"dummy video data for " + sc_id.encode())
+            sha = compute_file_sha256(sc_file)
+
+            scenes.append(
+                EditorSceneEntry(
+                    scene_id=sc_id,
+                    order=i,
+                    planned_visual_type=VisualType.data,
+                    resolved_visual_type=VisualType.data,
+                    start_frame=s_frame,
+                    end_frame=e_frame,
+                    duration_frames=e_frame - s_frame,
+                    exported_file=sc_rel,
+                    sha256=sha,
+                )
+            )
+
+        manifest = EditManifest(
+            schema_version="1.0",
+            project_title="Gap Test Project",
+            project_slug="test-project",
+            task_id=self.task_id,
+            source_project_fingerprint="src-fp-12345",
+            export_fingerprint="exp-fp-67890",
+            package_status=EditorPackageStatus.complete,
+            fps=30,
+            resolution=[1920, 1080],
+            aspect_ratio="16:9",
+            duration_frames=468,
+            duration_seconds=468 / 30.0,
+            narration_file=None,
+            scenes=scenes,
+            created_at="2026-08-16T12:00:00Z",
+            updated_at="2026-08-16T12:00:00Z",
+        )
+        manifest_path = self.export_dir / "edit_manifest.json"
+        manifest_path.write_text(json.dumps(manifest.model_dump(mode="json")), encoding="utf-8")
+
+        with self.assertRaises(ProjectRunError) as ctx:
+            assemble_final_video(manifest_path, task_id=self.task_id)
+
+        err_text = str(ctx.exception)
+        self.assertIn("Timeline coverage validation failed", err_text)
+        self.assertIn("uncovered frames", err_text)
+        self.assertIn("43", err_text)
+
+    @patch("app.services.assembly_runner.validate_and_inspect_final_video")
+    @patch("app.services.assembly_runner.VideoFileClip")
+    @patch("app.services.assembly_runner.concatenate_videoclips")
+    def test_assembly_accepts_contiguous_normalized_scenes(
+        self,
+        mock_concat: MagicMock,
+        mock_vfc: MagicMock,
+        mock_validate: MagicMock,
+    ) -> None:
+        """Normalized 468-frame contiguous scene set passes pre-render coverage check."""
+        normalized_spans = [(0, 123), (123, 230), (230, 344), (344, 468)]
+        scenes: list[EditorSceneEntry] = []
+        for i, (s_frame, e_frame) in enumerate(normalized_spans, 1):
+            sc_id = f"S{i:03d}"
+            sc_rel = f"scenes/{sc_id}_DATA.mp4"
+            sc_file = self.export_dir / sc_rel
+            sc_file.write_bytes(b"dummy video data for " + sc_id.encode())
+            sha = compute_file_sha256(sc_file)
+
+            scenes.append(
+                EditorSceneEntry(
+                    scene_id=sc_id,
+                    order=i,
+                    planned_visual_type=VisualType.data,
+                    resolved_visual_type=VisualType.data,
+                    start_frame=s_frame,
+                    end_frame=e_frame,
+                    duration_frames=e_frame - s_frame,
+                    exported_file=sc_rel,
+                    sha256=sha,
+                )
+            )
+
+        manifest = EditManifest(
+            schema_version="1.0",
+            project_title="Normalized Assembly Project",
+            project_slug="test-project",
+            task_id=self.task_id,
+            source_project_fingerprint="src-fp-12345",
+            export_fingerprint="exp-fp-67890",
+            package_status=EditorPackageStatus.complete,
+            fps=30,
+            resolution=[1920, 1080],
+            aspect_ratio="16:9",
+            duration_frames=468,
+            duration_seconds=15.6,
+            narration_file=None,
+            scenes=scenes,
+            created_at="2026-08-16T12:00:00Z",
+            updated_at="2026-08-16T12:00:00Z",
+        )
+        manifest_path = self.export_dir / "edit_manifest.json"
+        manifest_path.write_text(json.dumps(manifest.model_dump(mode="json")), encoding="utf-8")
+
+        mock_clip = MagicMock()
+        mock_clip.w = 1920
+        mock_clip.h = 1080
+        mock_clip.duration = 15.6
+        mock_vfc.return_value = mock_clip
+
+        mock_concat_clip = MagicMock()
+        mock_concat_clip.duration = 15.6
+        mock_concat.return_value = mock_concat_clip
+
+        def fake_write(path, **kwargs):
+            Path(path).write_bytes(b"rendered final video content")
+
+        mock_concat_clip.write_videofile.side_effect = fake_write
+
+        mock_validate.return_value = FinalQCReport(
+            is_valid=True,
+            final_video_file=str(self.export_dir / "final" / "final.mp4"),
+            file_size_bytes=len(b"rendered final video content"),
+            sha256="final-sha",
+            duration_seconds=15.6,
+            fps=30.0,
+            resolution=[1920, 1080],
+            has_video_stream=True,
+            has_audio_stream=False,
+            checks_passed=["all_ok"],
+            errors=[],
+        )
+
+        res = assemble_final_video(manifest_path, task_id=self.task_id)
+        self.assertEqual(res.status, "complete")
+        self.assertIsNotNone(res.final_video_file)
+
 
 if __name__ == "__main__":
     unittest.main()

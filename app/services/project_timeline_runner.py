@@ -113,7 +113,11 @@ def run_timeline_plan(
         )
         visual_path = None
         if _include_visuals:
-            visual_cues = plan_visuals(planned_project, timeline_cues)
+            visual_cues = plan_visuals(
+                planned_project,
+                timeline_cues,
+                total_duration_seconds=duration,
+            )
             visual_path = save_visual_plan(
                 project.project.title, visual_cues, task_directory / "visual_plan.json"
             )

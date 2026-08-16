@@ -42,6 +42,7 @@ from app.services.project_runner import ProjectRunError
 from app.services.project_spec import load_project_spec, preflight_project, save_project_spec
 from app.services.project_timeline_runner import run_project_plan
 from app.services.remotion import render_scene_motion, validate_rendered_motion_clip
+from app.services.visual_planner import normalize_visual_cue_boundaries
 from app.utils import utils
 
 
@@ -590,6 +591,21 @@ def run_all_project(
         if can_reuse_plan:
             logger.info(f"Reusing existing planning artifacts for task {run_task_id}: {reuse_reason}")
             planned_project = load_project_spec(task_dir / "project.planned.json")
+            t_plan_dur = None
+            timeline_file = task_dir / "timeline.json"
+            if timeline_file.exists():
+                try:
+                    t_data = json.loads(timeline_file.read_text(encoding="utf-8"))
+                    t_plan_dur = t_data.get("duration")
+                except Exception:
+                    pass
+            if planned_project.visual_cues:
+                planned_project.visual_cues = normalize_visual_cue_boundaries(
+                    planned_project.visual_cues,
+                    fps=planned_project.project.fps or 30,
+                    total_duration_seconds=t_plan_dur,
+                )
+                save_project_spec(planned_project, task_dir / "project.planned.json")
             stages_records.append(
                 StageExecutionRecord(
                     name="planning",
@@ -607,6 +623,21 @@ def run_all_project(
             logger.info(f"Running planning stage for task {run_task_id}")
             plan_res = run_project_plan(str(source_path), task_id=run_task_id)
             planned_project = load_project_spec(task_dir / "project.planned.json")
+            t_plan_dur = None
+            timeline_file = task_dir / "timeline.json"
+            if timeline_file.exists():
+                try:
+                    t_data = json.loads(timeline_file.read_text(encoding="utf-8"))
+                    t_plan_dur = t_data.get("duration")
+                except Exception:
+                    pass
+            if planned_project.visual_cues:
+                planned_project.visual_cues = normalize_visual_cue_boundaries(
+                    planned_project.visual_cues,
+                    fps=planned_project.project.fps or 30,
+                    total_duration_seconds=t_plan_dur,
+                )
+                save_project_spec(planned_project, task_dir / "project.planned.json")
             stages_records.append(
                 StageExecutionRecord(
                     name="planning",
