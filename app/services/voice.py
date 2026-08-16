@@ -1094,16 +1094,24 @@ def gemini_tts(
         
         # Gemini返回Linear PCM格式，按照文档参数解析
         try:
-            audio_segment = AudioSegment.from_file(
-                io.BytesIO(audio_bytes), 
-                format="raw",
+            audio_segment = AudioSegment.from_raw(
+                io.BytesIO(audio_bytes),
+                sample_width=2,     # 16-bit
                 frame_rate=24000,  # Gemini TTS默认采样率
-                channels=1,        # 单声道
-                sample_width=2     # 16-bit
+                channels=1         # 单声道
             )
-        except Exception as e:
-            logger.error(f"Failed to load PCM audio: {e}")
-            return None
+        except Exception:
+            try:
+                audio_segment = AudioSegment.from_file(
+                    io.BytesIO(audio_bytes),
+                    format="raw",
+                    frame_rate=24000,
+                    channels=1,
+                    sample_width=2
+                )
+            except Exception as e:
+                logger.error(f"Failed to load PCM audio: {e}")
+                return None
         
         # 导出为MP3格式
         audio_segment.export(voice_file, format="mp3")

@@ -385,14 +385,25 @@ class TestVoiceService(unittest.TestCase):
                 )
                 return _Response(tone.raw_data)
 
+        class _FakeAudioSegment:
+            def __len__(self):
+                return 1800
+
+            def export(self, output_file, format):
+                Path(output_file).write_bytes(b"fake-mp3")
+
         voice_file = f"{temp_dir}/tts-gemini-Zephyr.mp3"
         subtitle_file = f"{temp_dir}/tts-gemini-Zephyr.srt"
         text = "Gemini subtitle generation should work now. Testing multiple lines."
 
         with patch("google.generativeai.configure"), patch(
             "google.generativeai.GenerativeModel", _FakeModel
-        ), patch.object(
-            AudioSegment, "export", lambda self, out, format="mp3": Path(out).write_bytes(b"fake-mp3")
+        ), patch(
+            "pydub.AudioSegment.from_raw",
+            return_value=_FakeAudioSegment(),
+        ), patch(
+            "pydub.AudioSegment.from_file",
+            return_value=_FakeAudioSegment(),
         ), patch.object(vs.config, "app", dict(vs.config.app, gemini_api_key="test-key")):
             sub_maker = vs.gemini_tts(
                 text=text,
