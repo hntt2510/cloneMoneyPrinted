@@ -159,6 +159,24 @@ def preflight_project(
         if not os.path.isfile(resolved):
             raise ProjectSpecError(f"Resolved {label} is not a file: {resolved}")
 
+    # Canonical preflight for external narration audio + timing SRT
+    if (
+        project.narration.mode == NarrationMode.file
+        and project.narration.timing_file
+        and str(project.narration.timing_file).lower().endswith(".srt")
+        and project.narration.file
+    ):
+        audio_resolved = resolve_project_path(project_dir, project.narration.file)
+        timing_resolved = resolve_project_path(project_dir, project.narration.timing_file)
+        from app.services.external_narration_preflight import preflight_external_narration
+        preflight = preflight_external_narration(
+            audio_path=audio_resolved,
+            srt_path=timing_resolved,
+            script=project.script.script,
+        )
+        if not preflight.is_valid:
+            raise ProjectSpecError(f"External narration preflight failed: {'; '.join(preflight.errors)}")
+
 
 def json_safe(value: Any) -> Any:
     if isinstance(value, Enum):

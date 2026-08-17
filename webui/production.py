@@ -508,15 +508,40 @@ def render_production_workspace() -> None:
                     st.session_state["narration_srt_path"] = str(ext_srt_p)
                 if st.session_state.get("narration_srt_path"):
                     custom_timing_path = st.session_state["narration_srt_path"]
-                    try:
-                        from app.services.timeline import parse_srt_file
-                        cues_preview = parse_srt_file(custom_timing_path)
-                        st.success(f"SRT loaded: {Path(custom_timing_path).name} ({len(cues_preview)} cues, {cues_preview[-1].end:.1f}s)")
-                        if not script_input.strip():
-                            st.info("ℹ️ Script derived from uploaded SRT")
-                    except Exception as srt_err:
-                        st.error(f"Invalid SRT timing file: {srt_err}")
-                else:
+
+                if custom_audio_path and custom_timing_path:
+                    from app.services.external_narration_preflight import preflight_external_narration, TimingQuality
+                    preflight = preflight_external_narration(
+                        audio_path=custom_audio_path,
+                        srt_path=custom_timing_path,
+                        script=script_input,
+                    )
+                    st.session_state["external_narration_preflight"] = preflight
+
+                    st.markdown("##### ⏱️ External Narration Preflight")
+                    d_col1, d_col2, d_col3, d_col4 = st.columns(4)
+                    with d_col1:
+                        st.metric("Audio Duration", f"{preflight.audio_duration_seconds:.2f}s")
+                    with d_col2:
+                        st.metric("SRT Final", f"{preflight.srt_end_seconds:.2f}s ({preflight.cue_count} cues)")
+                    with d_col3:
+                        delta_sign = "+" if preflight.duration_delta_seconds >= 0 else ""
+                        st.metric("Difference", f"{delta_sign}{preflight.duration_delta_seconds:.2f}s")
+                    with d_col4:
+                        st.metric("Timing Quality", preflight.timing_quality.value)
+
+                    if not script_input.strip() and preflight.cue_count > 0:
+                        st.info("ℹ️ Canonical script will be derived from uploaded SRT cues.")
+                    elif preflight.text_alignment_confidence is not None:
+                        align_score = int(preflight.text_alignment_confidence * 100)
+                        st.caption(f"📝 Text Alignment Confidence: {align_score}%")
+
+                    for warn_msg in preflight.warnings:
+                        st.warning(f"⚠️ {warn_msg}")
+
+                    for err_msg in preflight.errors:
+                        st.error(f"❌ {err_msg}")
+                elif not custom_timing_path:
                     st.warning("⚠️ Timing SRT file is required for External Audio + SRT mode.")
 
             subtitle_enabled = st.checkbox("Burn Subtitles", value=True)
@@ -643,6 +668,20 @@ def render_production_workspace() -> None:
                     f"{timing_info}\n\n"
                     f"**Spec:** `{Path(loaded_path_str).name}`"
                 )
+                if configured_spec.narration.mode.value == "file" and configured_spec.narration.timing_file and configured_spec.narration.file:
+                    from app.services.external_narration_preflight import preflight_external_narration
+                    from app.services.project_spec import resolve_project_path
+                    audio_r = resolve_project_path(loaded_path.parent, configured_spec.narration.file)
+                    timing_r = resolve_project_path(loaded_path.parent, configured_spec.narration.timing_file)
+                    preflight = preflight_external_narration(
+                        audio_path=audio_r,
+                        srt_path=timing_r,
+                        script=configured_spec.script.script,
+                    )
+                    st.session_state["external_narration_preflight"] = preflight
+                    if not preflight.is_valid:
+                        for err in preflight.errors:
+                            st.error(f"❌ {err}")
             except Exception as exc:
                 st.error(f"Failed to reload workspace spec: {sanitize_error_message(str(exc))}")
                 st.session_state["production_workspace_loaded"] = False
@@ -713,6 +752,15 @@ def render_production_workspace() -> None:
             and not custom_audio_path
         ):
             st.error("External narration requires a WAV/MP3 file.")
+        elif (
+            "Mode A" in input_mode
+            and narration_source == "External Audio + SRT"
+            and st.session_state.get("external_narration_preflight")
+            and not st.session_state["external_narration_preflight"].is_valid
+        ):
+            pref = st.session_state["external_narration_preflight"]
+            first_err = pref.errors[0] if pref.errors else "External narration timing is invalid."
+            st.error(f"Cannot start production: {first_err}")
         else:
             # For Mode A and Mode B: persist spec to inputs dir and task dir
             # For Mode C: active_project_path already points to the task's original project.json
