@@ -472,6 +472,7 @@ class TestSceneOrchestrator(unittest.TestCase):
              patch("app.services.scene_orchestrator.run_broll_acquisition", side_effect=mock_broll), \
              patch("app.services.scene_orchestrator.run_motion_render", side_effect=mock_motion), \
              patch("app.services.scene_orchestrator.run_evidence_acquisition", side_effect=mock_evidence), \
+             patch("app.services.scene_orchestrator.render_scene_motion", side_effect=RuntimeError("Remotion fallback failed")), \
              patch("app.services.scene_orchestrator.validate_rendered_motion_clip"), \
              patch("app.services.scene_orchestrator.validate_rendered_evidence_clip"):
 
