@@ -128,7 +128,10 @@ def build_project_spec_from_ui(
     resolved_transition_mode = _resolve_transition_mode(video_transition_mode)
 
     # Normalize lists
-    resolved_search_terms = [t.strip() for t in (search_terms or []) if t and t.strip()]
+    if isinstance(search_terms, str):
+        resolved_search_terms = [t.strip() for t in search_terms.split(",") if t.strip()]
+    else:
+        resolved_search_terms = [t.strip() for t in (search_terms or []) if t and t.strip()]
     resolved_local_materials = [m.strip() for m in (local_materials or []) if m and m.strip()]
     resolved_ref_sources = [s.strip().lower() for s in (reference_image_sources or ["pexels", "pixabay", "wikimedia"]) if s and s.strip()]
 

@@ -108,61 +108,204 @@ def _extract_meaningful_tokens(text: str) -> list[str]:
     return [w for w in words if w not in STOPWORDS and len(w) > 1]
 
 
+# Concept synonym clusters for semantic intent matching
+CONCEPT_CLUSTERS: dict[str, set[str]] = {
+    "car": {"car", "vehicle", "automobile", "suv", "sedan", "auto", "truck", "motor", "van", "coupe"},
+    "tree": {"tree", "branch", "branches", "limb", "limbs", "trunk", "foliage", "bough", "timber", "wood"},
+    "damage": {"damage", "damaged", "falling", "falls", "fell", "crushed", "smashed", "struck", "hit", "destruction", "ruined", "wrecked", "dent", "broken", "crush"},
+    "storm": {"storm", "stormy", "severe", "weather", "thunderstorm", "hurricane", "tempest", "windstorm", "blizzard", "tornado", "downpour", "rain", "rainy", "lightning"},
+    "collision": {"collision", "crash", "accident", "impact", "tbone", "t-bone", "hit", "struck", "wreck", "smash", "side impact"},
+    "document": {"paperwork", "document", "documents", "policy", "contract", "paper", "form", "bill", "invoice", "statement", "reading", "reviewing", "insurance policy", "fine print", "file"},
+    "repair": {"repair", "mechanic", "body shop", "workshop", "technician", "fixing", "garage", "service center", "auto repair", "bodyshop"},
+    "person": {"driver", "person", "man", "woman", "owner", "customer", "agent", "worker", "people", "client"},
+}
+
+DEFAULT_REJECT_KEYWORDS: set[str] = {
+    "windshield", "wipers", "interior", "bokeh", "blurry", "dashboard",
+    "highway driving", "traffic jam", "commute", "sunny highway",
+}
+
+
+def _expand_concept_tokens(concept: str) -> set[str]:
+    """Expand a concept string to its token set plus synonyms from clusters."""
+    tokens = set(_extract_meaningful_tokens(concept))
+    expanded = set(tokens)
+    for t in tokens:
+        for cluster_name, cluster_words in CONCEPT_CLUSTERS.items():
+            if t in cluster_words or cluster_name == t:
+                expanded.update(cluster_words)
+    return expanded
+
+
+def evaluate_semantic_match(
+    candidate: BrollCandidate,
+    semantic_intent: Any | None = None,
+    query_tier: str = "tier1",
+    avoid_terms: list[str] | None = None,
+) -> tuple[float, str, list[str], list[str], list[str]]:
+    """Evaluate semantic intent coverage and return (semantic_score, confidence, matched, missing, rejected).
+
+    Returns:
+    - semantic_score: 0.0 to 55.0 points
+    - confidence: "HIGH", "MEDIUM", or "LOW"
+    - matched_concepts: list of matched concept descriptions
+    - missing_critical_concepts: list of must-show concepts not found
+    - rejected_concepts_found: list of reject terms found in metadata
+    """
+    meta_text = f"{candidate.title or ''} {candidate.description or ''} {' '.join(candidate.tags or [])}".lower()
+    meta_tokens = set(_extract_meaningful_tokens(meta_text))
+
+    # 1. Check Reject Visuals / Avoid Terms
+    reject_terms: set[str] = set()
+    if semantic_intent:
+        if isinstance(semantic_intent, dict):
+            reject_terms.update(semantic_intent.get("reject_visuals") or [])
+        elif hasattr(semantic_intent, "reject_visuals"):
+            reject_terms.update(getattr(semantic_intent, "reject_visuals", []) or [])
+    if avoid_terms:
+        reject_terms.update(avoid_terms)
+
+    rejected_found: list[str] = []
+    for rej in reject_terms:
+        rej_tokens = _extract_meaningful_tokens(rej)
+        if rej_tokens and any(rt in meta_tokens for rt in rej_tokens):
+            rejected_found.append(rej)
+
+    # 2. Must-Show Concepts Matching
+    must_show: list[str] = []
+    if semantic_intent:
+        if isinstance(semantic_intent, dict):
+            must_show = semantic_intent.get("must_show_concepts") or []
+        elif hasattr(semantic_intent, "must_show_concepts"):
+            must_show = getattr(semantic_intent, "must_show_concepts", []) or []
+
+    matched_concepts: list[str] = []
+    missing_concepts: list[str] = []
+
+    if must_show:
+        for concept in must_show:
+            expanded = _expand_concept_tokens(concept)
+            if any(t in meta_tokens for t in expanded):
+                matched_concepts.append(concept)
+            else:
+                missing_concepts.append(concept)
+        coverage_ratio = len(matched_concepts) / max(1, len(must_show))
+    else:
+        # Fallback to query token overlap if no structured must_show_concepts
+        query_tokens = _extract_meaningful_tokens(candidate.query)
+        if query_tokens and meta_tokens:
+            overlap_count = sum(1 for qt in query_tokens if qt in meta_tokens or any(qt in cluster for cluster in CONCEPT_CLUSTERS.values() if any(mt in cluster for mt in meta_tokens)))
+            coverage_ratio = overlap_count / max(1, len(query_tokens))
+            if overlap_count > 0:
+                matched_concepts.append(f"query_overlap:{overlap_count}")
+        else:
+            coverage_ratio = 0.0
+
+    # 3. Query Tier Multiplier
+    tier_multipliers = {
+        "tier1": 1.0,
+        "tier2": 0.92,
+        "tier3": 0.82,
+        "tier4": 0.60,
+        "fallback": 0.50,
+    }
+    tier_mult = tier_multipliers.get(query_tier.lower(), 0.85)
+
+    # 4. Preferred Visuals Bonus
+    preferred_bonus = 0.0
+    if semantic_intent:
+        pref = []
+        if isinstance(semantic_intent, dict):
+            pref = semantic_intent.get("preferred_visuals") or []
+        elif hasattr(semantic_intent, "preferred_visuals"):
+            pref = getattr(semantic_intent, "preferred_visuals", []) or []
+        for p in pref:
+            p_tokens = _extract_meaningful_tokens(p)
+            if p_tokens and sum(1 for pt in p_tokens if pt in meta_tokens) >= max(1, len(p_tokens) - 1):
+                preferred_bonus = 5.0
+                break
+
+    # Calculate raw semantic score (0 to 55 max)
+    if coverage_ratio <= 0.0:
+        base_semantic = 0.0
+    else:
+        base_semantic = (coverage_ratio * 45.0 + preferred_bonus) * tier_mult
+
+    # Penalty for rejected concepts
+    if rejected_found:
+        base_semantic = max(0.0, base_semantic - (25.0 * len(rejected_found)))
+
+    semantic_score = round(max(0.0, min(55.0, base_semantic)), 2)
+
+    # 5. Confidence determination
+    if rejected_found:
+        confidence = "LOW"
+    elif semantic_score >= 38.0 and (not must_show or len(missing_concepts) == 0) and query_tier in ("tier1", "tier2"):
+        confidence = "HIGH"
+    elif semantic_score >= 22.0 and coverage_ratio >= 0.5:
+        confidence = "MEDIUM"
+    else:
+        confidence = "LOW"
+
+    return semantic_score, confidence, matched_concepts, missing_concepts, rejected_found
+
+
 def score_candidate(
     candidate: BrollCandidate,
     scene_duration: float,
     target_aspect: VideoAspect = VideoAspect.landscape,
     avoid_terms: list[str] | None = None,
     context: BrollSelectionContext | None = None,
+    semantic_intent: Any | None = None,
+    query_tier: str = "tier1",
 ) -> tuple[float, dict[str, float]]:
     """Score a BrollCandidate deterministically on a 0–100 scale.
 
     Weights:
-    - Semantic relevance: 40
-    - Visual quality: 20
-    - Scene compatibility: 15
-    - Duration suitability: 10
-    - Aspect ratio: 10
+    - Semantic relevance & intent coverage: 55 max (dominant gate)
+    - Visual quality (resolution): 15 max
+    - Scene compatibility (avoid terms): 15 max
+    - Duration suitability: 10 max
+    - Aspect ratio: 5 max
     - Repetition penalty: 5 (deduction)
     """
     avoid_terms = avoid_terms or []
 
-    # 1. Semantic Relevance (40 max)
-    query_tokens = _extract_meaningful_tokens(candidate.query)
-    meta_text = f"{candidate.title or ''} {candidate.description or ''} {' '.join(candidate.tags)}"
-    meta_tokens = _extract_meaningful_tokens(meta_text)
+    # 1. Semantic Relevance (55 max)
+    semantic_score, confidence, matched, missing, rejected = evaluate_semantic_match(
+        candidate=candidate,
+        semantic_intent=semantic_intent,
+        query_tier=query_tier,
+        avoid_terms=avoid_terms,
+    )
 
-    if meta_tokens and query_tokens:
-        overlap_count = sum(1 for qt in query_tokens if qt in meta_tokens)
-        overlap_ratio = overlap_count / max(1, len(query_tokens))
-        semantic_score = round(15.0 + 25.0 * overlap_ratio, 2)
-    elif query_tokens:
-        semantic_score = 20.0
-    else:
-        semantic_score = 20.0
+    # Store semantic analysis on candidate metadata
+    if candidate.metadata is None:
+        candidate.metadata = {}
+    candidate.metadata["semantic_confidence"] = confidence
+    candidate.metadata["matched_concepts"] = matched
+    candidate.metadata["missing_concepts"] = missing
+    candidate.metadata["rejected_concepts"] = rejected
+    candidate.metadata["query_tier"] = query_tier
 
-    # 2. Visual Quality (20 max)
+    # 2. Visual Quality (15 max)
     w, h = candidate.width, candidate.height
     min_dim = min(w, h)
     if min_dim >= 2160:
-        quality_score = 20.0
+        quality_score = 15.0
     elif min_dim >= 1080:
-        quality_score = 18.0
+        quality_score = 13.0
     elif min_dim >= 720:
-        quality_score = 14.0
-    elif min_dim > 0:
-        quality_score = 7.0
-    else:
         quality_score = 10.0
+    elif min_dim > 0:
+        quality_score = 5.0
+    else:
+        quality_score = 8.0
 
     # 3. Scene Compatibility & Avoid Terms (15 max)
     compatibility_score = 15.0
-    if avoid_terms and meta_tokens:
-        for avoid in avoid_terms:
-            avoid_tokens = _extract_meaningful_tokens(avoid)
-            if any(at in meta_tokens for at in avoid_tokens):
-                compatibility_score = 0.0
-                break
+    if rejected:
+        compatibility_score = 0.0
 
     # 4. Duration Suitability (10 max)
     if candidate.duration < scene_duration:
@@ -191,21 +334,21 @@ def score_candidate(
             repetition_penalty += 2.0
     repetition_penalty = min(5.0, repetition_penalty)
 
-    total_score = max(
-        0.0,
-        min(
-            100.0,
-            round(
-                semantic_score
-                + quality_score
-                + compatibility_score
-                + duration_score
-                + aspect_score
-                - repetition_penalty,
-                2,
-            ),
-        ),
+    # Total score calculation
+    raw_total = (
+        semantic_score
+        + quality_score
+        + compatibility_score
+        + duration_score
+        + aspect_score
+        - repetition_penalty
     )
+
+    # If semantic match is 0, cap total score so irrelevant 4K video cannot win
+    if semantic_score <= 0.0:
+        raw_total = min(25.0, raw_total * 0.4)
+
+    total_score = max(0.0, min(100.0, round(raw_total, 2)))
 
     breakdown = {
         "semantic": semantic_score,
@@ -222,13 +365,44 @@ def score_candidate(
 
 def _rank_candidate_sort_key(c: BrollCandidate) -> tuple:
     """Deterministic tie-breaker sort key for candidate ranking."""
+    confidence_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    conf = (c.metadata or {}).get("semantic_confidence", "LOW")
     return (
+        confidence_order.get(conf, 2),
         -c.score,
         -c.score_breakdown.get("semantic", 0.0),
         -c.score_breakdown.get("quality", 0.0),
         c.provider,
         c.id,
     )
+
+
+def _build_tiered_queries(payload: BrollPayload) -> list[tuple[str, str]]:
+    """Build list of (query, tier_name) pairs from BrollPayload."""
+    tiered: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    # If explicit query_tiers provided:
+    if payload.query_tiers:
+        for tier_key in ("tier1", "tier2", "tier3", "tier4"):
+            q = payload.query_tiers.get(tier_key)
+            if q and q.strip() and q.strip().lower() not in seen:
+                tiered.append((q.strip(), tier_key))
+                seen.add(q.strip().lower())
+
+    # Ensure search_query is included (as tier1 if not already added)
+    if payload.search_query.lower() not in seen:
+        tiered.insert(0, (payload.search_query, "tier1"))
+        seen.add(payload.search_query.lower())
+
+    # Add fallback_queries mapped to tier2, tier3, tier4
+    for idx, fq in enumerate(payload.fallback_queries):
+        if fq.strip() and fq.strip().lower() not in seen:
+            tier_name = f"tier{min(4, idx + 2)}"
+            tiered.append((fq.strip(), tier_name))
+            seen.add(fq.strip().lower())
+
+    return tiered
 
 
 def collect_and_rank_candidates_for_query(
@@ -241,6 +415,8 @@ def collect_and_rank_candidates_for_query(
     limit_per_provider: int = 15,
     providers_searched_out: list[str] | None = None,
     provider_errors_out: list[str] | None = None,
+    semantic_intent: Any | None = None,
+    query_tier: str = "tier1",
 ) -> list[BrollCandidate]:
     """Collect and score candidates for a single query across providers."""
     all_candidates: list[BrollCandidate] = []
@@ -271,6 +447,8 @@ def collect_and_rank_candidates_for_query(
                 target_aspect=target_aspect,
                 avoid_terms=avoid_terms,
                 context=context,
+                semantic_intent=semantic_intent,
+                query_tier=query_tier,
             )
             c.score = score
             c.score_breakdown = breakdown
@@ -290,13 +468,13 @@ def collect_and_rank_candidates(
     """Collect candidates across primary and fallback queries and rank deterministically."""
     scene_duration = max(0.1, (cue.end or 0.0) - (cue.start or 0.0))
     payload = BrollPayload.model_validate(cue.payload)
-    queries = [payload.search_query] + [q for q in payload.fallback_queries if q != payload.search_query]
+    tiered_queries = _build_tiered_queries(payload)
     providers = payload.source_priority or ["pexels", "pixabay", "coverr"]
 
     all_candidates: list[BrollCandidate] = []
     seen_ids: set[str] = set()
 
-    for query in queries:
+    for query, tier in tiered_queries:
         candidates = collect_and_rank_candidates_for_query(
             query=query,
             providers=providers,
@@ -304,6 +482,8 @@ def collect_and_rank_candidates(
             target_aspect=project.project.aspect_ratio,
             avoid_terms=payload.avoid,
             context=context,
+            semantic_intent=payload.semantic_intent,
+            query_tier=tier,
         )
         for c in candidates:
             if c.id not in seen_ids:
@@ -635,7 +815,7 @@ def acquire_broll_scene(
                 pass
 
     payload = BrollPayload.model_validate(cue.payload)
-    queries = [payload.search_query] + [q for q in payload.fallback_queries if q != payload.search_query]
+    tiered_queries = _build_tiered_queries(payload)
     providers = payload.source_priority or ["pexels", "pixabay", "coverr"]
 
     attempts = 0
@@ -644,7 +824,7 @@ def acquire_broll_scene(
     candidate_ids_attempted: list[str] = []
     errors: list[str] = []
 
-    for query_index, query in enumerate(queries):
+    for query_index, (query, tier) in enumerate(tiered_queries):
         queries_searched.append(query)
         candidates = collect_and_rank_candidates_for_query(
             query=query,
@@ -655,6 +835,8 @@ def acquire_broll_scene(
             context=context,
             providers_searched_out=providers_searched,
             provider_errors_out=errors,
+            semantic_intent=payload.semantic_intent,
+            query_tier=tier,
         )
 
         for cand_idx, candidate in enumerate(candidates):
@@ -674,7 +856,7 @@ def acquire_broll_scene(
 
             try:
                 logger.info(
-                    f"Attempting candidate {candidate.id} for {cue.id} (query='{query}', "
+                    f"Attempting candidate {candidate.id} for {cue.id} (query='{query}', tier={tier}, "
                     f"provider={candidate.provider}, score={candidate.score:.1f})"
                 )
                 download_candidate(candidate, source_path)
@@ -691,6 +873,7 @@ def acquire_broll_scene(
                 safe_download_url = sanitize_url_for_persistence(candidate.download_url) or candidate.download_url
                 safe_source_url = sanitize_url_for_persistence(candidate.source_url)
 
+                cand_meta = candidate.metadata or {}
                 selected_asset = SelectedBrollAsset(
                     scene_id=cue.id,
                     provider=candidate.provider,
@@ -715,7 +898,15 @@ def acquire_broll_scene(
                     metadata={
                         "attempts": attempts,
                         "query_stage": query,
-                        "candidate_metadata": candidate.metadata,
+                        "primary_query": payload.search_query,
+                        "query_tier": cand_meta.get("query_tier", tier),
+                        "semantic_confidence": cand_meta.get("semantic_confidence", "MEDIUM"),
+                        "matched_concepts": cand_meta.get("matched_concepts", []),
+                        "missing_concepts": cand_meta.get("missing_concepts", []),
+                        "rejected_concepts": cand_meta.get("rejected_concepts", []),
+                        "semantic_score": candidate.score_breakdown.get("semantic", 0.0),
+                        "semantic_intent": payload.semantic_intent.model_dump(mode="json") if payload.semantic_intent else None,
+                        "candidate_metadata": cand_meta,
                         "start_frame": start_frame,
                         "end_frame": end_frame,
                         "duration_frames": duration_frames,
@@ -741,7 +932,7 @@ def acquire_broll_scene(
                 errors.append(err_msg)
 
                 has_more_in_query = (cand_idx < len(candidates) - 1)
-                has_more_queries = (query_index < len(queries) - 1)
+                has_more_queries = (query_index < len(tiered_queries) - 1)
                 if on_progress and (has_more_in_query or has_more_queries):
                     on_progress(
                         {

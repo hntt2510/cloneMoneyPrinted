@@ -346,9 +346,22 @@ def check_providers_readiness() -> dict[str, dict[str, Any]]:
 def format_fallback_badge(scene: dict[str, Any]) -> str | None:
     """Format visual fallback badge if the scene was fallen back during generation."""
     fb = scene.get("fallback_from")
+    planned = scene.get("planned_visual_type")
+    resolved = scene.get("resolved_visual_type") or scene.get("visual_type")
+
     if fb:
-        resolved = scene.get("resolved_visual_type") or scene.get("visual_type", "TEXT")
-        return f"{str(fb).upper()} → {str(resolved).upper()} FALLBACK"
+        return f"{str(fb).upper()} → {str(resolved or 'TEXT').upper()} FALLBACK"
+    elif planned and resolved and str(planned).upper() != str(resolved).upper():
+        return f"{str(planned).upper()} → {str(resolved).upper()} FALLBACK"
+
+    req_tpl = scene.get("requested_template")
+    rend_tpl = scene.get("rendered_template")
+    if req_tpl and rend_tpl and str(req_tpl).upper() != str(rend_tpl).upper():
+        return f"{str(req_tpl).upper()} → {str(rend_tpl).upper()} FALLBACK"
+
+    if scene.get("fallback_reason") and rend_tpl == "callout" and req_tpl != "callout":
+        return "CALLOUT FALLBACK"
+
     return None
 
 
@@ -768,12 +781,59 @@ def render_production_workspace() -> None:
 
                     with col_sc2:
                         st.markdown(f"**Visual Type:** {v_type}")
+                        if scene.get("visual_group_id"):
+                            st.markdown(f"**Visual Group:** `{scene.get('visual_group_id')}`")
                         st.markdown(f"**Duration:** {dur:.2f}s ({scene.get('duration_frames', 0)} frames)")
                         st.markdown(f"**Time range:** {scene.get('start', 0.0):.2f}s → {scene.get('end', 0.0):.2f}s")
+                        if scene.get("narration"):
+                            st.caption(f"🗣️ *\"{scene.get('narration')}\"*")
                         if scene.get("purpose"):
                             st.markdown(f"**Purpose:** {scene.get('purpose')}")
-                        if scene.get("source_stage"):
-                            st.markdown(f"**Source Stage:** {scene.get('source_stage')}")
+
+                        # B-roll V2 Diagnostics
+                        if v_type == "BROLL":
+                            b_meta = scene.get("metadata") or {}
+                            if not b_meta and out_f:
+                                meta_json_p = Path(out_f).parent / "metadata.json"
+                                if meta_json_p.exists():
+                                    try:
+                                        b_meta = json.loads(meta_json_p.read_text(encoding="utf-8-sig")).get("metadata", {})
+                                    except Exception:
+                                        pass
+
+                            conf = b_meta.get("semantic_confidence")
+                            if conf:
+                                conf_color = "green" if conf == "HIGH" else ("orange" if conf == "MEDIUM" else "red")
+                                st.markdown(f"**Confidence:** :{conf_color}[**{conf}**]")
+
+                            q_tier = b_meta.get("query_tier")
+                            if q_tier:
+                                st.markdown(f"**Query Tier:** `{q_tier}`")
+
+                            p_query = b_meta.get("primary_query")
+                            q_used = scene.get("query_used") or b_meta.get("query_stage")
+                            if p_query:
+                                st.markdown(f"**Primary Query:** `{p_query}`")
+                            if q_used and q_used != p_query:
+                                st.markdown(f"**Query Used:** `{q_used}`")
+
+                            matched = b_meta.get("matched_concepts")
+                            if matched:
+                                st.markdown(f"**Matched Concepts:** `{'`, `'.join(matched)}`")
+
+                            missing = b_meta.get("missing_concepts")
+                            if missing:
+                                st.markdown(f"**Missing Concepts:** :red[`{'`, `'.join(missing)}`]")
+
+                        # Motion / DATA Diagnostics
+                        elif v_type in ("DATA", "TEXT"):
+                            req_tpl = scene.get("requested_template")
+                            rend_tpl = scene.get("rendered_template")
+                            if req_tpl:
+                                st.markdown(f"**Template:** `{req_tpl}`" + (f" → `{rend_tpl}`" if rend_tpl and rend_tpl != req_tpl else ""))
+                            fb_r = scene.get("fallback_reason")
+                            if fb_r:
+                                st.warning(f"Fallback reason: {fb_r}")
 
         # Editor Package & Assembly Downloader
         st.subheader("📦 Package Export & Final Video")
