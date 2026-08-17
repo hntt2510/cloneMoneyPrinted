@@ -94,7 +94,11 @@ def run_production_workflow(
         else:
             result.execution_status = "failed"
             result.failed_stage = "execution"
-            result.error = f"Orchestrator failed: 0 of {ready_scenes + failed_scenes} scenes ready"
+            orchestrator_error = orchestrator_res.get("error")
+            result.error = (
+                orchestrator_error
+                or f"Orchestrator failed: 0 of {ready_scenes + failed_scenes} scenes ready"
+            )
             return result
 
     except Exception as exc:

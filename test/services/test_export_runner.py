@@ -286,7 +286,9 @@ class TestExportRunner(unittest.TestCase):
     def test_complete_editor_package_export(self) -> None:
         project, project_path = self._setup_workspace_fixture(title="Complete Project Guide")
 
-        with patch("app.services.export_runner.utils.task_dir", return_value=str(self.task_dir)):
+        with patch("app.services.export_runner.utils.task_dir", return_value=str(self.task_dir)), patch(
+            "app.services.export_runner.probe_media_frames", return_value=90
+        ):
             result = export_editor_package(project_path, task_id=self.task_id, output_dir=self.output_dir)
 
         self.assertEqual(result.status, "complete")
@@ -379,14 +381,18 @@ class TestExportRunner(unittest.TestCase):
     def test_repeat_export_reuse_and_invalidation(self) -> None:
         project, project_path = self._setup_workspace_fixture(title="Reused Export Project")
 
-        with patch("app.services.export_runner.utils.task_dir", return_value=str(self.task_dir)):
+        with patch("app.services.export_runner.utils.task_dir", return_value=str(self.task_dir)), patch(
+            "app.services.export_runner.probe_media_frames", return_value=90
+        ):
             res1 = export_editor_package(project_path, task_id=self.task_id, output_dir=self.output_dir)
 
         manifest_file = Path(res1.edit_manifest_file)
         mtime1 = manifest_file.stat().st_mtime_ns
 
         # Second export with unchanged assets
-        with patch("app.services.export_runner.utils.task_dir", return_value=str(self.task_dir)):
+        with patch("app.services.export_runner.utils.task_dir", return_value=str(self.task_dir)), patch(
+            "app.services.export_runner.probe_media_frames", return_value=90
+        ):
             res2 = export_editor_package(project_path, task_id=self.task_id, output_dir=self.output_dir)
 
         self.assertEqual(res1.status, res2.status)
@@ -396,7 +402,9 @@ class TestExportRunner(unittest.TestCase):
         s002_mp4.write_bytes(b"\xFF\xEE\xDD\xCC" * 512)
 
         # Third export invalidates and updates only changed scene
-        with patch("app.services.export_runner.utils.task_dir", return_value=str(self.task_dir)):
+        with patch("app.services.export_runner.utils.task_dir", return_value=str(self.task_dir)), patch(
+            "app.services.export_runner.probe_media_frames", return_value=90
+        ):
             res3 = export_editor_package(project_path, task_id=self.task_id, output_dir=self.output_dir)
 
         self.assertEqual(res3.status, "complete")

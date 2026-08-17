@@ -697,11 +697,14 @@ def render_production_workspace() -> None:
 
         wf_res = st.session_state.get("production_run_result")
         if wf_res and getattr(wf_res, "task_id", None) == active_task_id and not getattr(wf_res, "is_success", True):
+            err_text = sanitize_error_message(wf_res.error or "Stage execution incomplete")
             st.error(
                 f"Production Workflow Incomplete ({wf_res.failed_stage or 'stage error'})\n\n"
-                f"Reason: {sanitize_error_message(wf_res.error or 'Stage execution incomplete')}\n\n"
+                f"Reason: {err_text}\n\n"
                 f"Task: `{active_task_id}`"
             )
+            if "stale scene media" in err_text.lower() or "stale scene asset" in err_text.lower():
+                st.warning("⚠️ Scene assets were generated with older timing. Resume Production to rebuild stale scenes.")
 
         try:
             manifest_data = json.loads(exec_manifest_path.read_text(encoding="utf-8-sig"))
@@ -709,6 +712,18 @@ def render_production_workspace() -> None:
             manifest_data = {}
 
         scenes_list = manifest_data.get("scenes", [])
+        showing_prior = False
+        if not scenes_list:
+            prior_manifest_path = task_storage_dir / "execution_manifest.prior.json"
+            if prior_manifest_path.exists():
+                try:
+                    prior_data = json.loads(prior_manifest_path.read_text(encoding="utf-8-sig"))
+                    if prior_data.get("scenes"):
+                        scenes_list = prior_data.get("scenes", [])
+                        showing_prior = True
+                except Exception:
+                    pass
+
         total_count = len(scenes_list)
         ready_count = sum(1 for s in scenes_list if s.get("status") == "ready")
         failed_count = sum(1 for s in scenes_list if s.get("status") == "failed")
@@ -725,6 +740,8 @@ def render_production_workspace() -> None:
 
         # Scene Review Grid
         st.subheader("Scene Asset Grid")
+        if showing_prior:
+            st.info("ℹ️ Displaying prior scene artifacts from previous execution snapshot.")
         if scenes_list:
             for scene in scenes_list:
                 s_id = scene.get("scene_id", "scene")

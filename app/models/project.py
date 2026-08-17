@@ -526,15 +526,27 @@ class ProjectSpec(ProjectModel):
             timeline_by_id = {cue.id: cue for cue in self.timeline_cues}
             if set(visual_ids) != set(timeline_by_id):
                 raise ValueError("visual cues must correspond one-to-one with timeline cues")
+            fps = self.project.fps if (self.project and self.project.fps) else (self.production.fps if (self.production and self.production.fps) else 30)
             for visual in self.visual_cues:
                 timeline = timeline_by_id[visual.id]
-                if (
-                    visual.order != timeline.order
-                    or visual.start != timeline.start
-                    or visual.end != timeline.end
-                    or visual.narration != timeline.narration
-                ):
-                    raise ValueError("visual cue timing and narration must match timeline")
+                if visual.order != timeline.order:
+                    raise ValueError("visual cue order must match timeline cue order")
+                if visual.narration != timeline.narration:
+                    raise ValueError("visual cue narration must match timeline cue narration")
+                if visual.start is None or visual.end is None:
+                    raise ValueError("visual cue start and end must not be None")
+                v_start = round(visual.start * fps)
+                v_end = round(visual.end * fps)
+                t_start = round(timeline.start * fps)
+                t_end = round(timeline.end * fps)
+                if v_start > t_start:
+                    raise ValueError(
+                        f"visual cue {visual.id} starts at frame {v_start} after narration starts at frame {t_start}"
+                    )
+                if v_end < t_end:
+                    raise ValueError(
+                        f"visual cue {visual.id} ends at frame {v_end} before narration ends at frame {t_end}"
+                    )
             groups: dict[str, list[int]] = {}
             for visual in sorted(self.visual_cues, key=lambda item: item.order):
                 if visual.visual_group_id:

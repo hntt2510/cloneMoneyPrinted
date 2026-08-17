@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -266,6 +267,49 @@ def compute_export_fingerprint(
     }
     dumped = json.dumps(canonical, sort_keys=True)
     return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
+
+
+def probe_media_frames(video_file: Path | str, fps: int = 30) -> int:
+    """Probe physical video frame count using ffprobe or VideoFileClip fallback."""
+    video_file = Path(video_file).resolve()
+    if not video_file.exists() or video_file.stat().st_size == 0:
+        return 0
+    fps = max(1, fps)
+    ffmpeg_bin = utils.get_ffmpeg_binary()
+    ffprobe_bin = ffmpeg_bin.replace("ffmpeg.exe", "ffprobe.exe").replace("ffmpeg", "ffprobe") if ffmpeg_bin else "ffprobe"
+    try:
+        cmd = [
+            ffprobe_bin,
+            "-v", "error",
+            "-show_entries", "format=duration:stream=nb_frames,duration,r_frame_rate",
+            "-of", "json",
+            str(video_file),
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        if res.returncode == 0:
+            data = json.loads(res.stdout)
+            streams = data.get("streams", [])
+            for stm in streams:
+                if "nb_frames" in stm and stm["nb_frames"].isdigit():
+                    return int(stm["nb_frames"])
+                if "duration" in stm:
+                    try:
+                        return round(float(stm["duration"]) * fps)
+                    except (ValueError, TypeError):
+                        pass
+            if "format" in data and "duration" in data["format"]:
+                return round(float(data["format"]["duration"]) * fps)
+    except Exception:
+        pass
+
+    try:
+        from moviepy.video.io.VideoFileClip import VideoFileClip
+        clip = VideoFileClip(str(video_file))
+        dur = float(clip.duration or 0.0)
+        clip.close()
+        return round(dur * fps)
+    except Exception:
+        return 0
 
 
 def _resolve_file_path(p_str: str | Path | None, base_dir: Path) -> Path | None:
@@ -577,7 +621,9 @@ def export_editor_package(
     else:
         pkg_status = EditorPackageStatus.partial
 
-    # Invariant: A COMPLETE editor package must not contain hidden timeline holes.
+    export_error: str | None = None
+
+    # Invariant: A COMPLETE editor package must not contain hidden timeline holes or stale physical media.
     if pkg_status == EditorPackageStatus.complete:
         is_cov_valid, cov_errors = validate_scene_timeline_coverage(
             exported_scenes,
@@ -585,8 +631,23 @@ def export_editor_package(
             fps=fps,
         )
         if not is_cov_valid:
+            export_error = f"Timeline coverage validation failed: {'; '.join(cov_errors)}"
             logger.error(f"Editor package timeline coverage validation failed: {cov_errors}")
             pkg_status = EditorPackageStatus.failed
+        else:
+            # Physical media duration validation against manifest duration_frames
+            for sc in exported_scenes:
+                if sc.exported_file:
+                    sc_video_path = export_path / sc.exported_file
+                    actual_frames = probe_media_frames(sc_video_path, fps=fps)
+                    if actual_frames > 0 and abs(actual_frames - sc.duration_frames) > 2:
+                        pkg_status = EditorPackageStatus.failed
+                        export_error = (
+                            f"Stale scene asset {sc.scene_id}: expected {sc.duration_frames} frames, "
+                            f"media contains {actual_frames} frames. Resume production to rerender scene assets."
+                        )
+                        logger.error(export_error)
+                        break
 
     duration_seconds = total_duration_frames / float(fps) if fps else 0.0
 
@@ -652,5 +713,5 @@ def export_editor_package(
         readme_file=str(readme_file.resolve()),
         ready_scene_count=ready_count,
         missing_scene_count=len(missing_scene_ids),
-        error=None if pkg_status != EditorPackageStatus.failed else f"No scenes exported for project {project_slug}",
+        error=None if pkg_status != EditorPackageStatus.failed else (export_error or f"No scenes exported for project {project_slug}"),
     )

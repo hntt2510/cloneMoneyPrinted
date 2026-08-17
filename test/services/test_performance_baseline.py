@@ -223,7 +223,9 @@ class TestPerformanceBaseline(unittest.TestCase):
         ]
         save_project_spec(project, self.task_dir / "project.executed.json")
 
-        with patch("app.services.export_runner.utils.task_dir", return_value=str(self.task_dir)):
+        with patch("app.services.export_runner.utils.task_dir", return_value=str(self.task_dir)), patch(
+            "app.services.export_runner.probe_media_frames", return_value=30
+        ):
             start = time.perf_counter()
             res = export_editor_package(project_path, task_id=self.task_id, output_dir=self.export_dir)
             elapsed = time.perf_counter() - start

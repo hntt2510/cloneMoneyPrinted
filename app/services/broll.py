@@ -582,8 +582,50 @@ def acquire_broll_scene(
                 return asset
         except Exception as resume_exc:
             logger.warning(
-                f"Existing B-roll artifact for scene {cue.id} is invalid/corrupted ({resume_exc}); reacquiring."
+                f"Existing B-roll artifact for scene {cue.id} is invalid/corrupted ({resume_exc}); attempting re-trim or reacquisition."
             )
+            # Check if existing source.mp4 can be reused to avoid redundant network download
+            if source_path.exists() and source_path.stat().st_size > 0 and metadata_path.exists():
+                try:
+                    saved_data = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    asset = SelectedBrollAsset.model_validate(saved_data)
+                    src_dur = get_video_duration(source_path)
+                    if src_dur >= scene_duration and asset.scene_id == cue.id:
+                        logger.info(f"Re-trimming existing source.mp4 for scene {cue.id} to new duration {scene_duration:.3f}s")
+                        _, trim_start, trim_end = render_scene_clip(
+                            source_path=source_path,
+                            destination_path=rendered_path,
+                            scene_duration=scene_duration,
+                            target_width=target_width,
+                            target_height=target_height,
+                            fps=fps,
+                        )
+                        asset.scene_duration = scene_duration
+                        asset.trim_start = trim_start
+                        asset.trim_end = trim_end
+                        asset.source_duration = src_dur
+                        asset.metadata["start_frame"] = start_frame
+                        asset.metadata["end_frame"] = end_frame
+                        asset.metadata["duration_frames"] = duration_frames
+                        metadata_path.write_text(json.dumps(asset.model_dump(mode="json"), indent=2), encoding="utf-8")
+                        dummy_candidate = BrollCandidate(
+                            id=asset.candidate_id,
+                            provider=asset.provider,
+                            provider_asset_id=asset.provider_asset_id,
+                            query=asset.query_used,
+                            download_url=asset.download_url,
+                            source_url=asset.source_url,
+                            duration=asset.source_duration,
+                            width=asset.width,
+                            height=asset.height,
+                        )
+                        context.record_selection(dummy_candidate, asset)
+                        if on_progress:
+                            on_progress({"status": JobStatus.ready, "attempt": 0, "asset": asset})
+                        return asset
+                except Exception as trim_exc:
+                    logger.warning(f"Re-trim from existing source.mp4 failed for {cue.id}: {trim_exc}; proceeding to full search.")
+
             try:
                 if rendered_path.exists():
                     rendered_path.unlink()

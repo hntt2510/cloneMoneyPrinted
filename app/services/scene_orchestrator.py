@@ -370,7 +370,16 @@ def _persist_execution_manifest_snapshot(
         error=error,
         outputs=outputs or {},
     )
-    _atomic_write_json(task_dir / "execution_manifest.json", manifest.model_dump(mode="json"))
+    manifest_path = task_dir / "execution_manifest.json"
+    prior_path = task_dir / "execution_manifest.prior.json"
+    if manifest_path.exists() and not scenes and not prior_path.exists():
+        try:
+            existing_data = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            if existing_data.get("scenes"):
+                _atomic_write_json(prior_path, existing_data)
+        except Exception:
+            pass
+    _atomic_write_json(manifest_path, manifest.model_dump(mode="json"))
     return manifest
 
 

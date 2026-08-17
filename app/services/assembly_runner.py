@@ -34,6 +34,7 @@ from app.services.evidence_sources import compute_file_sha256
 from app.services.export_runner import (
     copy_file_verified,
     export_editor_package,
+    probe_media_frames,
     slugify_project_title,
 )
 from app.services.project_runner import ProjectRunError
@@ -287,6 +288,12 @@ def assemble_final_video(
         scene_path = export_dir / sc.exported_file
         if not scene_path.exists():
             raise ProjectRunError(f"Scene video file does not exist: {scene_path}")
+        actual_frames = probe_media_frames(scene_path, fps=edit_manifest.fps)
+        if actual_frames > 0 and abs(actual_frames - sc.duration_frames) > 2:
+            raise ProjectRunError(
+                f"Final assembly blocked: stale scene media detected. {sc.scene_id}: "
+                f"expected {sc.duration_frames} frames, actual {actual_frames} frames. Resume Production is required."
+            )
 
     # Defense-in-depth: Validate complete timeline coverage before rendering
     is_valid_coverage, coverage_errors = validate_scene_timeline_coverage(
