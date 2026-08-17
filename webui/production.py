@@ -123,6 +123,88 @@ def get_recent_tasks(limit: int = 15) -> list[dict[str, Any]]:
     return discovered[:limit]
 
 
+# ---------------------------------------------------------------------------
+# Task Project Path Resolver
+# ---------------------------------------------------------------------------
+
+ALLOWED_STORAGE_ROOTS: list[str] = []
+
+def _get_allowed_storage_roots() -> list[Path]:
+    """Return the list of allowed storage root directories."""
+    roots = [
+        Path(utils.storage_dir("tasks", create=False)).resolve(),
+        Path(utils.storage_dir("project_inputs", create=False)).resolve(),
+    ]
+    return [r for r in roots if r.exists()]
+
+
+def resolve_task_project_path(task_id: str) -> tuple[Path | None, str | None]:
+    """
+    Resolve the canonical project.json path for a given task ID.
+
+    Searches in priority order:
+    1. storage/project_inputs/<task_id>/project.json
+    2. storage/tasks/<task_id>/project.json
+    3. storage/tasks/<task_id>/project.executed.json (fallback)
+
+    Returns (resolved_path, error_message). If successful, error is None.
+    Validates that task_id is a valid UUID or task identifier and that the
+    resolved path remains strictly under allowed storage roots.
+    """
+    # --- Task ID validation ---
+    if not task_id or not isinstance(task_id, str):
+        return None, "Task ID is empty or invalid."
+
+    task_id_clean = task_id.strip()
+    is_valid = False
+    try:
+        uuid.UUID(task_id_clean)
+        is_valid = True
+    except ValueError:
+        if (task_id_clean.startswith("task_") or len(task_id_clean) >= 8) and ".." not in task_id_clean:
+            is_valid = True
+
+    if not is_valid or "/" in task_id_clean or "\\" in task_id_clean or ".." in task_id_clean:
+        return None, f"Task ID validation failed: '{task_id}'"
+
+    # --- Candidate resolution ---
+    candidates: list[Path] = [
+        Path(utils.storage_dir("project_inputs", create=False)) / task_id_clean / "project.json",
+        Path(utils.task_dir(task_id_clean)) / "project.json",
+        Path(utils.task_dir(task_id_clean)) / "project.executed.json",
+    ]
+
+    allowed_roots = _get_allowed_storage_roots()
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            continue
+
+        if not resolved.exists():
+            continue
+
+        # --- Security: must remain under an allowed storage root ---
+        is_safe = any(
+            str(resolved).startswith(str(root))
+            for root in allowed_roots
+        ) if allowed_roots else True  # If roots not found yet, relax for init
+
+        if not is_safe:
+            return None, f"Path traversal guard triggered for task '{task_id}': {resolved}"
+
+        # --- Try loading the spec to verify it's valid ---
+        try:
+            load_project_spec(resolved)
+        except Exception as exc:
+            continue  # Try next candidate
+
+        return resolved, None
+
+    return None, f"No valid project specification found for task '{task_id}'."
+
+
 def create_editor_package_zip(export_dir: Path | str, destination_zip: Path | str | None = None) -> Path:
     """Create a zip archive of the editor package with relative paths and path traversal protection."""
     src_dir = Path(export_dir).resolve()
@@ -304,11 +386,17 @@ def render_production_workspace() -> None:
         st.session_state["production_run_result"] = None
     if "demo_prefill" not in st.session_state:
         st.session_state["demo_prefill"] = False
+    # Mode C state
+    if "production_loaded_project_path" not in st.session_state:
+        st.session_state["production_loaded_project_path"] = None
+    if "production_workspace_loaded" not in st.session_state:
+        st.session_state["production_workspace_loaded"] = False
 
     active_task_id = st.session_state["production_task_id"]
     task_storage_dir = Path(utils.task_dir(active_task_id)).resolve()
     project_inputs_dir = Path(utils.storage_dir("project_inputs", create=True)) / active_task_id
     project_inputs_dir.mkdir(parents=True, exist_ok=True)
+    spec_save_target = project_inputs_dir / "project.json"
 
     # Provider Readiness Expander
     with st.expander("⚡ System & Provider Readiness", expanded=False):
@@ -329,7 +417,8 @@ def render_production_workspace() -> None:
     )
 
     configured_spec: ProjectSpec | None = None
-    spec_save_target = project_inputs_dir / "project.json"
+    # active_project_path is the canonical spec path for all G08/G09/G10 operations
+    active_project_path: Path = spec_save_target
 
     # -----------------------------------------------------------------------
     # MODE A: FORM BUILDER
@@ -455,14 +544,54 @@ def render_production_workspace() -> None:
         if options:
             selected_task_opt = st.selectbox("Select Previous Task", options)
             selected_tid = selected_task_opt.split(" — ")[0]
+
             if st.button("Load Task Workspace"):
-                st.session_state["production_task_id"] = selected_tid
-                target_p = Path(utils.task_dir(selected_tid)) / "project.json"
-                if target_p.exists():
-                    configured_spec = load_project_spec(target_p)
-                st.rerun()
+                resolved_p, resolve_err = resolve_task_project_path(selected_tid)
+                if resolve_err or resolved_p is None:
+                    st.error(f"Cannot load task workspace: {resolve_err or 'Project file not found'}")
+                else:
+                    # Clear stale run result from a different task
+                    prev_run = st.session_state.get("production_run_result")
+                    if prev_run and getattr(prev_run, "task_id", None) != selected_tid:
+                        st.session_state["production_run_result"] = None
+
+                    st.session_state["production_task_id"] = selected_tid
+                    st.session_state["production_loaded_project_path"] = str(resolved_p)
+                    st.session_state["production_workspace_loaded"] = True
+                    st.rerun()
         else:
             st.info("No previous tasks found in storage/tasks.")
+
+        # Reload spec from persisted path on every render (survives st.rerun)
+        loaded_path_str = st.session_state.get("production_loaded_project_path")
+        workspace_loaded = st.session_state.get("production_workspace_loaded", False)
+        if workspace_loaded and loaded_path_str:
+            try:
+                loaded_path = Path(loaded_path_str).resolve()
+                configured_spec = load_project_spec(loaded_path)
+                active_project_path = loaded_path
+
+                # Display Workspace Loaded Banner
+                task_exec_manifest = task_storage_dir / "execution_manifest.json"
+                task_status = "unknown"
+                if task_exec_manifest.exists():
+                    try:
+                        _em = json.loads(task_exec_manifest.read_text(encoding="utf-8-sig"))
+                        task_status = (_em.get("status") or "unknown").upper()
+                    except Exception:
+                        pass
+                st.success(
+                    f"Workspace Loaded ✅\n\n"
+                    f"**Task:** `{active_task_id}`\n\n"
+                    f"**Project:** {configured_spec.project.title}\n\n"
+                    f"**Status:** {task_status}\n\n"
+                    f"**Spec:** `{Path(loaded_path_str).name}`"
+                )
+            except Exception as exc:
+                st.error(f"Failed to reload workspace spec: {sanitize_error_message(str(exc))}")
+                st.session_state["production_workspace_loaded"] = False
+                st.session_state["production_loaded_project_path"] = None
+                configured_spec = None
 
     # -----------------------------------------------------------------------
     # Evidence & Media Assets Upload Section
@@ -523,13 +652,14 @@ def render_production_workspace() -> None:
         if configured_spec is None:
             st.error("Please configure a valid project specification before starting.")
         else:
-            # Persist project specification to inputs and task directories
-            save_project_spec(configured_spec, spec_save_target)
-            save_project_spec(configured_spec, task_storage_dir / "project.json")
-
-            # Copy any uploaded evidence sources into the task workspace
-            if (project_inputs_dir / "sources.json").exists():
-                shutil.copy2(project_inputs_dir / "sources.json", task_storage_dir / "sources.json")
+            # For Mode A and Mode B: persist spec to inputs dir and task dir
+            # For Mode C: active_project_path already points to the task's original project.json
+            if not st.session_state.get("production_workspace_loaded", False):
+                save_project_spec(configured_spec, spec_save_target)
+                save_project_spec(configured_spec, task_storage_dir / "project.json")
+                # Copy any uploaded evidence sources into the task workspace
+                if (project_inputs_dir / "sources.json").exists():
+                    shutil.copy2(project_inputs_dir / "sources.json", task_storage_dir / "sources.json")
 
             with progress_container:
                 progress_bar = st.progress(0, text="Initializing workflow coordinator...")
@@ -544,7 +674,7 @@ def render_production_workspace() -> None:
 
                 try:
                     wf_result = run_production_workflow(
-                        project_path=spec_save_target,
+                        project_path=active_project_path,
                         task_id=active_task_id,
                         output_target=output_target,
                         on_progress=_on_progress_ui,
@@ -637,7 +767,7 @@ def render_production_workspace() -> None:
             exp_btn = st.button("Re-export Editor Package")
             if exp_btn:
                 try:
-                    res = export_editor_package(spec_save_target, task_id=active_task_id)
+                    res = export_editor_package(active_project_path, task_id=active_task_id)
                     st.success(f"Editor package exported to: {res.export_dir}")
                 except Exception as ex:
                     st.error(f"Export failed: {ex}")
@@ -668,7 +798,7 @@ def render_production_workspace() -> None:
             ass_btn = st.button("Assemble Final Video")
             if ass_btn:
                 try:
-                    res_ass = assemble_final_video(spec_save_target, task_id=active_task_id)
+                    res_ass = assemble_final_video(active_project_path, task_id=active_task_id)
                     qc_data = None
                     if res_ass.qc_report_file and Path(res_ass.qc_report_file).exists():
                         try:

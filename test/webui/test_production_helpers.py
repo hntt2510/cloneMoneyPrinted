@@ -21,6 +21,7 @@ from webui.production import (
     create_editor_package_zip,
     format_fallback_badge,
     get_recent_tasks,
+    resolve_task_project_path,
     sanitize_manifest_for_display,
     save_uploaded_file,
 )
@@ -205,6 +206,101 @@ class TestProductionHelpers(unittest.TestCase):
         for key, val in readiness.items():
             self.assertIn("ready", val)
             self.assertIn("label", val)
+
+
+class TestResolveTaskProjectPath(unittest.TestCase):
+    """Tests for resolve_task_project_path() helper — Mode C security & correctness."""
+
+    MINIMAL_PROJECT_JSON = json.dumps({
+        "schema_version": "1.0",
+        "project": {"title": "Mode C Test Project"},
+        "script": {"subject": "Test subject for Mode C"},
+        "narration": {"mode": "tts"},
+    })
+
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.storage_root = Path(self.tmp_dir.name)
+        self.task_id = "c909e895-846a-4283-9ee2-70a9bc7e8a0d"
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def _make_task_project_json(self, relative: str) -> Path:
+        p = self.storage_root / relative
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(self.MINIMAL_PROJECT_JSON, encoding="utf-8")
+        return p
+
+    # -----------------------------------------------------------------------
+    # Validation tests
+    # -----------------------------------------------------------------------
+
+    def test_empty_task_id_returns_error(self):
+        path, err = resolve_task_project_path("")
+        self.assertIsNone(path)
+        self.assertIsNotNone(err)
+        self.assertIn("empty", err.lower())
+
+    def test_none_task_id_returns_error(self):
+        path, err = resolve_task_project_path(None)  # type: ignore[arg-type]
+        self.assertIsNone(path)
+        self.assertIsNotNone(err)
+
+    def test_path_traversal_task_id_rejected(self):
+        path, err = resolve_task_project_path("../../etc/passwd")
+        self.assertIsNone(path)
+        self.assertIsNotNone(err)
+        self.assertIn("validation failed", err.lower())
+
+    def test_path_traversal_with_backslash_rejected(self):
+        path, err = resolve_task_project_path("..\\..\\windows\\system32")
+        self.assertIsNone(path)
+        self.assertIsNotNone(err)
+
+    def test_no_project_file_returns_error(self):
+        """Resolving a UUID with no project.json under storage returns error."""
+        # No file created — all candidates absent
+        with patch("webui.production.utils.task_dir", return_value=str(self.storage_root / "tasks" / self.task_id)), \
+             patch("webui.production.utils.storage_dir", return_value=str(self.storage_root / "tasks")):
+            path, err = resolve_task_project_path(self.task_id)
+        self.assertIsNone(path)
+        self.assertIsNotNone(err)
+
+    # -----------------------------------------------------------------------
+    # Positive path tests
+    # -----------------------------------------------------------------------
+
+    def test_resolves_task_dir_project_json(self):
+        """Prefers storage/tasks/<task_id>/project.json."""
+        proj_file = self._make_task_project_json(f"tasks/{self.task_id}/project.json")
+        with patch("webui.production.utils.task_dir", return_value=str(proj_file.parent)), \
+             patch("webui.production.utils.storage_dir", return_value=str(self.storage_root / "tasks")):
+            path, err = resolve_task_project_path(self.task_id)
+        self.assertIsNone(err)
+        self.assertIsNotNone(path)
+        self.assertTrue(path.exists())
+
+    def test_resolves_project_inputs_if_no_task_dir_file(self):
+        """Falls back to storage/project_inputs/<task_id>/project.json when tasks/ file is absent."""
+        proj_file = self._make_task_project_json(f"project_inputs/{self.task_id}/project.json")
+        with patch("webui.production.utils.task_dir", return_value=str(self.storage_root / "tasks" / self.task_id)), \
+             patch("webui.production.utils.storage_dir", return_value=str(proj_file.parent.parent)):
+            path, err = resolve_task_project_path(self.task_id)
+        self.assertIsNone(err)
+        self.assertIsNotNone(path)
+        self.assertTrue(path.exists())
+
+    def test_returned_path_is_loadable_project_spec(self):
+        """Resolved path must be loadable by load_project_spec."""
+        proj_file = self._make_task_project_json(f"tasks/{self.task_id}/project.json")
+        with patch("webui.production.utils.task_dir", return_value=str(proj_file.parent)), \
+             patch("webui.production.utils.storage_dir", return_value=str(self.storage_root / "tasks")):
+            path, err = resolve_task_project_path(self.task_id)
+        self.assertIsNone(err)
+        spec = load_project_spec(path)
+        self.assertEqual(spec.project.title, "Mode C Test Project")
 
 
 if __name__ == "__main__":
