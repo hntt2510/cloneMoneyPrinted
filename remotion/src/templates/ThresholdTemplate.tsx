@@ -17,6 +17,7 @@ export const ThresholdTemplate: React.FC<ThresholdProps> = ({
   theme: customTheme,
   isGrouped = false,
   isFirstInGroup = true,
+  animation_plan,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
@@ -28,14 +29,45 @@ export const ThresholdTemplate: React.FC<ThresholdProps> = ({
   const currentPct = Math.min(100, Math.max(5, (current_value / maxVal) * 100));
   const thresholdPct = Math.min(95, Math.max(5, (threshold_value / maxVal) * 100));
 
-  const spr = spring({
-    frame: Math.max(0, frame - (isContinuous ? 0 : 8)),
-    fps,
-    config: { damping: 14, stiffness: 90, mass: 0.9 },
-  });
+  let animatedCurrentPct = currentPct;
+  let pulseScale = 1;
 
-  const progress = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
-  const animatedCurrentPct = currentPct * progress;
+  if (isContinuous) {
+    animatedCurrentPct = currentPct;
+  } else if (animation_plan?.beats && animation_plan.beats.some(b => b.kind === 'threshold')) {
+    const tBeat = animation_plan.beats.find(b => b.kind === 'threshold')!;
+    const phase1Duration = Math.max(1, tBeat.end_frame - tBeat.start_frame) * 0.5;
+    const phase2Start = tBeat.start_frame + phase1Duration;
+    
+    // Phase 1: 0 to threshold (or current if current < threshold)
+    const target1 = Math.min(currentPct, thresholdPct);
+    const p1 = interpolate(frame, [tBeat.start_frame, tBeat.start_frame + phase1Duration], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+    const ease1 = spring({ frame: p1 * fps, fps, config: { damping: 14, stiffness: 60 } });
+    
+    // Phase 2: threshold to current (only if current > threshold)
+    let p2 = 0;
+    let ease2 = 0;
+    if (currentPct > thresholdPct) {
+      p2 = interpolate(frame, [phase2Start, tBeat.end_frame], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+      ease2 = spring({ frame: p2 * fps, fps, config: { damping: 14, stiffness: 60 } });
+      
+      const pulseSpr = spring({
+        frame: Math.max(0, frame - phase2Start),
+        fps,
+        config: { damping: 10, stiffness: 120 }
+      });
+      pulseScale = 1 + interpolate(pulseSpr, [0, 1], [0, 0.15]) - interpolate(pulseSpr, [0, 1], [0, 0.15]);
+    }
+    
+    animatedCurrentPct = (target1 * ease1) + ((currentPct - target1) * ease2);
+  } else {
+    const spr = spring({
+      frame: Math.max(0, frame - 8),
+      fps,
+      config: { damping: 14, stiffness: 90, mass: 0.9 },
+    });
+    animatedCurrentPct = currentPct * interpolate(spr, [0, 1], [0, 1]);
+  }
 
   const meetsThreshold = current_value >= threshold_value;
   const statusColor = meetsThreshold ? theme.positive : theme.warning;
@@ -110,6 +142,7 @@ export const ThresholdTemplate: React.FC<ThresholdProps> = ({
               width: 4,
               backgroundColor: theme.text,
               borderRadius: 2,
+              transform: `scale(${pulseScale})`,
               boxShadow: '0 0 10px rgba(255,255,255,0.8)',
               zIndex: 2,
             }}

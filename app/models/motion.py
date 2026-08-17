@@ -33,6 +33,39 @@ class MotionModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+# --- Kinetic Timing Models ---
+
+class KineticBeatKind(str, Enum):
+    number = "number"
+    comparison_item = "comparison_item"
+    chart_item = "chart_item"
+    milestone = "milestone"
+    threshold = "threshold"
+    takeaway = "takeaway"
+    phrase = "phrase"
+
+
+class KineticBeat(BaseModel):
+    id: str
+    start_frame: int
+    end_frame: int
+    kind: KineticBeatKind
+    text: str
+    emphasis: bool = False
+    data_ref: str | None = None
+
+
+class MotionAnimationPlan(BaseModel):
+    scene_id: str
+    beats: list[KineticBeat]
+    enter_preset: str = "fade_in"
+    exit_preset: str = "fade_out"
+    final_hold_frames: int = 15
+    timing_source: str = "auto"
+    kinetic_timing_source: str = "auto"
+    motion_engine_version: str = "2"
+
+
 # --- Template Prop Models ---
 
 class NumberProps(MotionModel):
@@ -274,6 +307,7 @@ class MotionSceneSpec(MotionModel):
     width: int = Field(ge=1)
     height: int = Field(ge=1)
     visual_group_id: str | None = None
+    animation_plan: MotionAnimationPlan | None = None
 
 
 class MotionGroupSpec(MotionModel):

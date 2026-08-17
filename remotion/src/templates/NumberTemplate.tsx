@@ -16,6 +16,8 @@ export const NumberTemplate: React.FC<NumberProps> = ({
   theme: customTheme,
   isGrouped = false,
   isFirstInGroup = true,
+  animation_plan,
+  numeric_value,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
@@ -36,7 +38,51 @@ export const NumberTemplate: React.FC<NumberProps> = ({
   const valueFontSize = isPortrait ? width * 0.16 : width * 0.085;
   const labelFontSize = isPortrait ? width * 0.045 : width * 0.024;
 
-  const displayString = `${prefix || ''}${value}${suffix || ''}`;
+  let displayString = `${prefix || ''}${value}${suffix || ''}`;
+  let finalScale = numberScale;
+
+  if (numeric_value !== null && numeric_value !== undefined && animation_plan?.beats) {
+    const numBeat = animation_plan.beats.find((b) => b.kind === 'number') || animation_plan.beats[0];
+    if (numBeat) {
+      const p = interpolate(
+        frame,
+        [numBeat.start_frame, numBeat.end_frame],
+        [0, 1],
+        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+      );
+      const easeP = spring({
+        frame: p * fps,
+        fps,
+        config: { damping: 14, stiffness: 45 },
+      });
+      const currentValue = easeP * numeric_value;
+      const decimals = value.includes('.') ? value.split('.')[1].length : 0;
+      
+      const formatted = currentValue.toLocaleString('en-US', {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      });
+      displayString = `${prefix || ''}${formatted}${suffix || ''}`;
+
+      const popSpr = spring({
+        frame: frame - numBeat.end_frame,
+        fps,
+        config: { damping: 12, stiffness: 150 },
+      });
+      finalScale = numberScale + interpolate(popSpr, [0, 1], [0, 0.05]) - interpolate(popSpr, [0, 1], [0, 0.05]);
+      if (frame >= numBeat.end_frame) {
+        displayString = `${prefix || ''}${value}${suffix || ''}`; // Exact target at end
+        finalScale = numberScale + interpolate(popSpr, [0, 1], [0, 0.05], { extrapolateRight: 'clamp' });
+        // Settle back to normal size
+        const settleSpr = spring({
+          frame: Math.max(0, frame - numBeat.end_frame - 5),
+          fps,
+          config: { damping: 12, stiffness: 100 },
+        });
+        finalScale = finalScale - interpolate(settleSpr, [0, 1], [0, 0.05], { extrapolateRight: 'clamp' });
+      }
+    }
+  }
 
   return (
     <Layout theme={theme} isGrouped={isGrouped}>
@@ -51,7 +97,7 @@ export const NumberTemplate: React.FC<NumberProps> = ({
         <div
           style={{
             opacity: numberOpacity,
-            transform: `scale(${numberScale})`,
+            transform: `scale(${finalScale})`,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',

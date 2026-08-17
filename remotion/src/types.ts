@@ -12,11 +12,33 @@ export interface Theme {
   border: string;
 }
 
+export interface KineticBeat {
+  id: string;
+  start_frame: number;
+  end_frame: number;
+  kind: "number" | "comparison_item" | "chart_item" | "milestone" | "threshold" | "takeaway" | "phrase";
+  text: string;
+  emphasis?: boolean;
+  data_ref?: string | null;
+}
+
+export interface MotionAnimationPlan {
+  scene_id: string;
+  beats: KineticBeat[];
+  enter_preset?: string;
+  exit_preset?: string;
+  final_hold_frames?: number;
+  timing_source?: string;
+  kinetic_timing_source?: string;
+  motion_engine_version?: string;
+}
+
 export interface BaseTemplateProps {
   theme?: Partial<Theme>;
   isGrouped?: boolean;
   isFirstInGroup?: boolean;
   groupSceneIndex?: number;
+  animation_plan?: MotionAnimationPlan | null;
 }
 
 export interface NumberProps extends BaseTemplateProps {
@@ -147,6 +169,7 @@ export interface GroupScene {
   start_frame: number;
   end_frame: number;
   duration_frames: number;
+  animation_plan?: MotionAnimationPlan | null;
 }
 
 export interface GroupCompositionProps {

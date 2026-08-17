@@ -11,6 +11,7 @@ export const TextTemplate: React.FC<TextProps> = ({
   theme: customTheme,
   isGrouped = false,
   isFirstInGroup = true,
+  animation_plan,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
@@ -64,7 +65,34 @@ export const TextTemplate: React.FC<TextProps> = ({
             wordBreak: 'break-word',
           }}
         >
-          {headline}
+          {animation_plan?.beats && animation_plan.beats.length > 1 ? (
+            animation_plan.beats.map((beat, i) => {
+              const isActive = frame >= beat.start_frame;
+              const emphasisSpring = spring({
+                frame: Math.max(0, frame - beat.start_frame),
+                fps,
+                config: { damping: 10, stiffness: 100 },
+              });
+              const s = beat.emphasis ? 1 + interpolate(emphasisSpring, [0, 1], [0, 0.1]) : 1;
+              return (
+                <span
+                  key={beat.id}
+                  style={{
+                    opacity: isActive ? 1 : 0.1,
+                    display: 'inline-block',
+                    marginRight: '0.25em',
+                    transform: `scale(${isActive ? s : 1})`,
+                    color: beat.emphasis ? theme.accent : theme.text,
+                    transition: 'opacity 0.2s',
+                  }}
+                >
+                  {beat.text}
+                </span>
+              );
+            })
+          ) : (
+            headline
+          )}
         </h1>
 
         {/* Accent Underline */}

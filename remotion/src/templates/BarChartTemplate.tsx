@@ -13,6 +13,7 @@ export const BarChartTemplate: React.FC<BarChartProps> = ({
   theme: customTheme,
   isGrouped = false,
   isFirstInGroup = true,
+  animation_plan,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
@@ -52,7 +53,14 @@ export const BarChartTemplate: React.FC<BarChartProps> = ({
           }}
         >
           {validItems.map((item, idx) => {
-            const delay = isContinuous ? 0 : 8 + idx * 4;
+            let delay = isContinuous ? 0 : 8 + idx * 4;
+            if (animation_plan?.beats) {
+              const cBeats = animation_plan.beats.filter(b => b.kind === 'chart_item');
+              if (cBeats[idx]) {
+                delay = cBeats[idx].start_frame;
+              }
+            }
+            
             const spr = spring({
               frame: Math.max(0, frame - delay),
               fps,

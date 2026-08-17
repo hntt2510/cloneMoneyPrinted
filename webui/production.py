@@ -481,7 +481,35 @@ def render_production_workspace() -> None:
                 ["auto", "stock_clean", "cinematic_vlog", "real_life_documentary", "minimal_business", "shorts_fast"],
                 index=0,
             )
-            voice_name = st.text_input("Voice Name", value="en-US-JennyNeural-Female")
+            
+            narration_source = st.radio("Narration Source", ["Generated TTS", "External Audio + SRT"], index=0)
+            voice_name = ""
+            narration_mode_ui = "synthesized"
+            custom_audio_path = None
+            custom_timing_path = None
+            
+            if narration_source == "Generated TTS":
+                voice_name = st.text_input("Voice Name", value="en-US-JennyNeural-Female")
+            else:
+                narration_mode_ui = "file"
+                ext_audio = st.file_uploader("Upload Audio (WAV/MP3)", type=["wav", "mp3"])
+                if ext_audio:
+                    ext_audio_p = project_inputs_dir / f"narration{Path(ext_audio.name).suffix}"
+                    ext_audio_p.write_bytes(ext_audio.read())
+                    st.session_state["narration_audio_path"] = str(ext_audio_p)
+                if st.session_state.get("narration_audio_path"):
+                    custom_audio_path = st.session_state["narration_audio_path"]
+                    st.audio(custom_audio_path)
+                
+                ext_srt = st.file_uploader("Upload SRT", type=["srt"])
+                if ext_srt:
+                    ext_srt_p = project_inputs_dir / "narration.srt"
+                    ext_srt_p.write_bytes(ext_srt.read())
+                    st.session_state["narration_srt_path"] = str(ext_srt_p)
+                if st.session_state.get("narration_srt_path"):
+                    custom_timing_path = st.session_state["narration_srt_path"]
+                    st.success(f"SRT loaded: {Path(custom_timing_path).name}")
+
             subtitle_enabled = st.checkbox("Burn Subtitles", value=True)
 
         with col_p3:
@@ -514,7 +542,10 @@ def render_production_workspace() -> None:
                     aspect_ratio=aspect_choice,
                     fps=int(fps_choice),
                     video_style_preset=style_preset,
+                    narration_mode=narration_mode_ui,
                     voice_name=voice_name,
+                    custom_audio_file=custom_audio_path,
+                    custom_timing_file=custom_timing_path,
                     subtitle_enabled=subtitle_enabled,
                     video_source=stock_source,
                     n_threads=int(thread_count),
@@ -598,6 +629,7 @@ def render_production_workspace() -> None:
                     f"**Task:** `{active_task_id}`\n\n"
                     f"**Project:** {configured_spec.project.title}\n\n"
                     f"**Status:** {task_status}\n\n"
+                    f"**Narration Mode:** {configured_spec.narration.mode.value.upper()}\n\n"
                     f"**Spec:** `{Path(loaded_path_str).name}`"
                 )
             except Exception as exc:
@@ -624,13 +656,7 @@ def render_production_workspace() -> None:
                 st.success(f"Saved {len(evidence_files)} evidence files")
 
         with col_u2:
-            custom_audio = st.file_uploader("Upload Custom Audio Narration (MP3, WAV)", type=["mp3", "wav"])
-            if custom_audio:
-                saved_audio = save_uploaded_file(custom_audio, project_inputs_dir, allowed_extensions={".mp3", ".wav"})
-                if configured_spec:
-                    configured_spec.narration.mode = "file"  # type: ignore[assignment]
-                    configured_spec.narration.file = str(saved_audio)
-                st.success(f"Attached narration audio: {saved_audio.name}")
+            st.info("Additional media support arriving soon.")
 
     # -----------------------------------------------------------------------
     # Output Target & Execution
