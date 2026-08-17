@@ -693,6 +693,11 @@ def export_editor_package(
             "source_manifest_file": str(source_manifest_file.resolve()),
         },
     )
+    
+    if timeline_plan:
+        edit_manifest.outputs["timing_source"] = timeline_plan.timing_source
+        if timeline_plan.timing_source == "user_srt":
+            edit_manifest.outputs["audio_source"] = "external"
 
     edit_manifest_file = export_path / "edit_manifest.json"
     edit_manifest_file.write_text(json.dumps(edit_manifest.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

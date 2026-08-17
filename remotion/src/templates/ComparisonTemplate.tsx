@@ -13,6 +13,7 @@ export const ComparisonTemplate: React.FC<ComparisonProps> = ({
   theme: customTheme,
   isGrouped = false,
   isFirstInGroup = true,
+  animation_plan,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
@@ -42,7 +43,14 @@ export const ComparisonTemplate: React.FC<ComparisonProps> = ({
         }}
       >
         {validItems.map((item, idx) => {
-          const delay = isContinuous ? 0 : 6 + idx * 5;
+          let delay = isContinuous ? 0 : 6 + idx * 5;
+          if (animation_plan?.beats) {
+            const compBeats = animation_plan.beats.filter((b) => b.kind === 'comparison_item');
+            if (compBeats[idx]) {
+              delay = compBeats[idx].start_frame;
+            }
+          }
+
           const spr = spring({
             frame: Math.max(0, frame - delay),
             fps,

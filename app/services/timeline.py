@@ -92,7 +92,7 @@ def parse_srt_text(content: str) -> list[SrtCue]:
 def parse_srt_file(path: str | Path) -> list[SrtCue]:
     source = Path(path)
     try:
-        return parse_srt_text(source.read_text(encoding="utf-8"))
+        return parse_srt_text(source.read_text(encoding="utf-8-sig"))
     except OSError as exc:
         raise TimelineError(f"unable to read timing file {source}: {exc}") from exc
 

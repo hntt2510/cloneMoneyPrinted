@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.models.project import ProjectManifest, ProjectStatus
+from app.models.project import ProjectManifest, ProjectStatus, NarrationMode
 from app.services import task as tm
 from app.services.project_runner import ProjectRunError, _save_manifest, _utc_now
 from app.services.project_spec import (
@@ -62,17 +62,36 @@ def run_timeline_plan(
 
     try:
         params = project_to_video_params(project, source.parent)
-        script = tm.generate_script(run_task_id, params)
-        if not script or "Error: " in script:
-            raise ProjectRunError("script generation failed")
-        audio_file, reported_duration, sub_maker = tm.generate_audio(
-            run_task_id, params, script
-        )
-        if not audio_file:
-            raise ProjectRunError("narration audio generation failed")
-        duration = voice.get_audio_duration(audio_file) or float(reported_duration or 0)
-        if duration <= 0:
-            raise ProjectRunError("narration audio duration could not be determined")
+        
+        if project.narration.mode == NarrationMode.file:
+            raw_file = project.narration.file
+            if not raw_file:
+                raise ProjectRunError("External narration requires a WAV/MP3 file.")
+            audio_file = str(resolve_project_path(source.parent, raw_file))
+            if not Path(audio_file).exists():
+                raise ProjectRunError(f"External narration audio file not found: {audio_file}")
+            duration = voice.get_audio_duration(audio_file) or 0.0
+            if duration <= 0:
+                raise ProjectRunError("External narration audio has zero or invalid duration.")
+            sub_maker = None
+            script = project.script.script
+            if not script.strip() and project.narration.timing_file:
+                srt_path = resolve_project_path(source.parent, project.narration.timing_file)
+                from app.services.timeline import parse_srt_file
+                derived_cues = parse_srt_file(srt_path)
+                script = " ".join(c.text for c in derived_cues)
+        else:
+            script = tm.generate_script(run_task_id, params)
+            if not script or "Error: " in script:
+                raise ProjectRunError("script generation failed")
+            audio_file, reported_duration, sub_maker = tm.generate_audio(
+                run_task_id, params, script
+            )
+            if not audio_file:
+                raise ProjectRunError("narration audio generation failed")
+            duration = voice.get_audio_duration(audio_file) or float(reported_duration or 0)
+            if duration <= 0:
+                raise ProjectRunError("narration audio duration could not be determined")
 
         source_timing = (
             resolve_project_path(source.parent, project.narration.timing_file)

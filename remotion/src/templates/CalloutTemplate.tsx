@@ -13,6 +13,7 @@ export const CalloutTemplate: React.FC<CalloutProps> = ({
   theme: customTheme,
   isGrouped = false,
   isFirstInGroup = true,
+  animation_plan,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
@@ -21,14 +22,32 @@ export const CalloutTemplate: React.FC<CalloutProps> = ({
 
   const isContinuous = isGrouped && !isFirstInGroup;
 
-  const spr = spring({
-    frame: Math.max(0, frame - (isContinuous ? 0 : 5)),
+  let empStart = isContinuous ? 0 : 5;
+  let subStart = isContinuous ? 0 : 15;
+
+  if (animation_plan?.beats) {
+    const tBeats = animation_plan.beats.filter(b => b.kind === 'takeaway');
+    if (tBeats.length > 0) {
+      empStart = tBeats[0].start_frame;
+      subStart = tBeats.length > 1 ? tBeats[1].start_frame : empStart + 10;
+    }
+  }
+
+  const empSpr = spring({
+    frame: Math.max(0, frame - empStart),
+    fps,
+    config: { damping: 13, stiffness: 90, mass: 0.85 },
+  });
+  
+  const subSpr = spring({
+    frame: Math.max(0, frame - subStart),
     fps,
     config: { damping: 13, stiffness: 90, mass: 0.85 },
   });
 
-  const scale = isContinuous ? 1 : interpolate(spr, [0, 1], [0.9, 1]);
-  const opacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
+  const empScale = isContinuous ? 1 : interpolate(empSpr, [0, 1], [0.9, 1]);
+  const empOpacity = isContinuous ? 1 : interpolate(empSpr, [0, 1], [0, 1]);
+  const subOpacity = isContinuous ? 1 : interpolate(subSpr, [0, 1], [0, 1]);
 
   return (
     <Layout theme={theme} isGrouped={isGrouped}>
@@ -44,8 +63,6 @@ export const CalloutTemplate: React.FC<CalloutProps> = ({
       >
         <div
           style={{
-            opacity,
-            transform: `scale(${scale})`,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -55,6 +72,8 @@ export const CalloutTemplate: React.FC<CalloutProps> = ({
           {emphasis && (
             <div
               style={{
+                opacity: empOpacity,
+                transform: `scale(${empScale})`,
                 backgroundColor: `${theme.primary}20`,
                 border: `2px solid ${theme.accent}`,
                 borderRadius: 16,
@@ -74,6 +93,7 @@ export const CalloutTemplate: React.FC<CalloutProps> = ({
           {subtext && (
             <div
               style={{
+                opacity: subOpacity,
                 marginTop: emphasis ? 20 : 0,
                 fontSize: Math.min(32, Math.max(16, Math.round(isPortrait ? width * 0.045 : width * 0.024))),
                 fontWeight: 500,

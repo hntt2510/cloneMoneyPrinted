@@ -35,6 +35,8 @@ def compute_scene_fingerprint(scene_spec: MotionSceneSpec) -> str:
         "width": scene_spec.width,
         "height": scene_spec.height,
     }
+    if scene_spec.animation_plan:
+        canonical["animation_plan"] = scene_spec.animation_plan.model_dump()
     dumped = json.dumps(canonical, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
 
@@ -56,6 +58,7 @@ def compute_group_fingerprint(group_spec: MotionGroupSpec) -> str:
                 "rel_start_frame": s.start_frame - base_start,
                 "rel_end_frame": s.end_frame - base_start,
                 "duration_frames": s.duration_frames,
+                "animation_plan": s.animation_plan.model_dump() if s.animation_plan else None,
             }
             for s in group_spec.scenes
         ],

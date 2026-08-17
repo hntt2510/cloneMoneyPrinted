@@ -103,6 +103,7 @@ def build_project_spec_from_ui(
     video_source: str = "pexels",
     n_threads: int = 4,
     custom_audio_file: str | None = None,
+    custom_timing_file: str | None = None,
     local_materials: list[str] | None = None,
     search_terms: list[str] | None = None,
     video_clip_duration: int = 5,
@@ -165,6 +166,7 @@ def build_project_spec_from_ui(
     narration_spec = NarrationSpec(
         mode=resolved_narration_mode,
         file=custom_audio_file.strip() if custom_audio_file and custom_audio_file.strip() else None,
+        timing_file=custom_timing_file.strip() if custom_timing_file and custom_timing_file.strip() else None,
         voice_name=voice_name or "",
         voice_rate=voice_rate,
         voice_volume=voice_volume,

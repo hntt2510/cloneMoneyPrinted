@@ -14,6 +14,7 @@ export const LineChartTemplate: React.FC<LineChartProps> = ({
   theme: customTheme,
   isGrouped = false,
   isFirstInGroup = true,
+  animation_plan,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height, durationInFrames } = useVideoConfig();
@@ -54,12 +55,22 @@ export const LineChartTemplate: React.FC<LineChartProps> = ({
     ? `${pathD} L ${coords[coords.length - 1].x} ${svgHeight - paddingBottom} L ${coords[0].x} ${svgHeight - paddingBottom} Z`
     : '';
 
-  const lineProgress = isContinuous
+  let lineProgress = isContinuous
     ? 1
     : interpolate(frame, [8, Math.round(durationInFrames * 0.65)], [0, 1], {
         extrapolateLeft: 'clamp',
         extrapolateRight: 'clamp',
       });
+      
+  const chartBeats = animation_plan?.beats?.filter(b => b.kind === 'chart_item') || [];
+  if (chartBeats.length > 0) {
+    const firstBeat = chartBeats[0];
+    const lastBeat = chartBeats[chartBeats.length - 1];
+    lineProgress = interpolate(frame, [firstBeat.start_frame, lastBeat.start_frame], [0, 1], {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    });
+  }
 
   return (
     <Layout theme={theme} isGrouped={isGrouped}>
@@ -107,7 +118,11 @@ export const LineChartTemplate: React.FC<LineChartProps> = ({
           />
 
           {coords.map((c, idx) => {
-            const pointAppearFrame = isContinuous ? 0 : 8 + Math.round((idx / Math.max(1, count - 1)) * durationInFrames * 0.55);
+            let pointAppearFrame = isContinuous ? 0 : 8 + Math.round((idx / Math.max(1, count - 1)) * durationInFrames * 0.55);
+            if (chartBeats[idx]) {
+              pointAppearFrame = chartBeats[idx].start_frame;
+            }
+            
             const spr = spring({
               frame: Math.max(0, frame - pointAppearFrame),
               fps,

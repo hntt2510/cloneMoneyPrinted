@@ -18,6 +18,7 @@ export const CounterTemplate: React.FC<CounterProps> = ({
   theme: customTheme,
   isGrouped = false,
   isFirstInGroup = true,
+  animation_plan,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height, durationInFrames } = useVideoConfig();
@@ -25,8 +26,17 @@ export const CounterTemplate: React.FC<CounterProps> = ({
   const isPortrait = height > width;
 
   const isContinuous = isGrouped && !isFirstInGroup;
-  const startFrame = isContinuous ? 0 : 5;
-  const countDuration = Math.max(15, Math.round(durationInFrames * (isContinuous ? 0.8 : 0.6)));
+  
+  let startFrame = isContinuous ? 0 : 5;
+  let countDuration = Math.max(15, Math.round(durationInFrames * (isContinuous ? 0.8 : 0.6)));
+
+  if (animation_plan?.beats && animation_plan.beats.length > 0) {
+    const numBeat = animation_plan.beats.find((b) => b.kind === 'number') || animation_plan.beats[0];
+    if (numBeat) {
+      startFrame = numBeat.start_frame;
+      countDuration = Math.max(5, numBeat.end_frame - numBeat.start_frame);
+    }
+  }
 
   const progress = interpolate(frame, [startFrame, startFrame + countDuration], [0, 1], {
     extrapolateLeft: 'clamp',

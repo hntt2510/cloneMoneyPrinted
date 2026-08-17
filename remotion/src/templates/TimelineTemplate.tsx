@@ -12,6 +12,7 @@ export const TimelineTemplate: React.FC<TimelineProps> = ({
   theme: customTheme,
   isGrouped = false,
   isFirstInGroup = true,
+  animation_plan,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height, durationInFrames } = useVideoConfig();
@@ -22,14 +23,26 @@ export const TimelineTemplate: React.FC<TimelineProps> = ({
   const validMilestones = milestones.slice(0, 5);
   const count = validMilestones.length;
 
+  let lineStartFrame = isContinuous ? 0 : 8;
   const lineDuration = Math.max(20, Math.round(durationInFrames * (isContinuous ? 0.8 : 0.5)));
-  const lineStartFrame = isContinuous ? 0 : 8;
-  const lineProgress = isContinuous
+  
+  const mBeats = animation_plan?.beats?.filter(b => b.kind === 'milestone') || [];
+  
+  let lineProgress = isContinuous
     ? 1
     : interpolate(frame, [lineStartFrame, lineStartFrame + lineDuration], [0, 1], {
         extrapolateLeft: 'clamp',
         extrapolateRight: 'clamp',
       });
+      
+  if (mBeats.length > 0) {
+    const firstBeat = mBeats[0];
+    const lastBeat = mBeats[mBeats.length - 1];
+    lineProgress = interpolate(frame, [firstBeat.start_frame, lastBeat.start_frame], [0, 1], {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    });
+  }
 
   return (
     <Layout theme={theme} isGrouped={isGrouped}>
@@ -89,7 +102,11 @@ export const TimelineTemplate: React.FC<TimelineProps> = ({
         )}
 
         {validMilestones.map((m, idx) => {
-          const nodeDelay = isContinuous ? 0 : 10 + Math.round((idx / Math.max(1, count - 1)) * lineDuration * 0.8);
+          let nodeDelay = isContinuous ? 0 : 10 + Math.round((idx / Math.max(1, count - 1)) * lineDuration * 0.8);
+          if (mBeats[idx]) {
+            nodeDelay = mBeats[idx].start_frame;
+          }
+          
           const spr = spring({
             frame: Math.max(0, frame - nodeDelay),
             fps,

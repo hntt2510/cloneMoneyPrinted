@@ -24,6 +24,7 @@ from app.models.motion import (
     TimelineProps,
 )
 from app.models.project import ProjectSpec, VisualCue, VisualType
+from app.services.kinetic_beat_deriver import derive_kinetic_beats
 
 
 def _parse_float(val: Any) -> float | None:
@@ -129,6 +130,14 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
             width=width,
             height=height,
             visual_group_id=cue.visual_group_id,
+            animation_plan=derive_kinetic_beats(
+                narration=cue.narration or "",
+                fps=fps,
+                duration_frames=duration_frames,
+                timing_source="auto",
+                template="text",
+                scene_id=cue.id,
+            ),
         )
 
     # VisualType.data
@@ -390,4 +399,12 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
         width=width,
         height=height,
         visual_group_id=cue.visual_group_id,
+        animation_plan=derive_kinetic_beats(
+            narration=cue.narration or "",
+            fps=fps,
+            duration_frames=duration_frames,
+            timing_source="auto",
+            template=requested_template,
+            scene_id=cue.id,
+        ),
     )
