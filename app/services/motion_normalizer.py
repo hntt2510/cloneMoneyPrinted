@@ -85,12 +85,17 @@ def _get_first_present(d: dict[str, Any], keys: list[str]) -> Any:
     return None
 
 
-def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSpec:
+def normalize_motion_spec(
+    cue: VisualCue,
+    project: ProjectSpec,
+    timing_source: str | None = None,
+) -> MotionSceneSpec:
     """Deterministically normalize a VisualCue (DATA or TEXT) into a typed MotionSceneSpec.
 
     If a specialized DATA template is missing valid structured props, falls back safely to 'callout'
     without inventing or guessing factual numbers.
     """
+    resolved_timing_source = timing_source or getattr(project, "timing_source", "estimated") or "estimated"
     fps = project.project.fps or 30
     width, height = project.project.aspect_ratio.to_resolution()
 
@@ -113,6 +118,7 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
             subheadline=subheadline or None,
             style_variant=str(raw_payload.get("style_variant") or "bold"),
         )
+        props_dict = text_props.model_dump(mode="json")
         return MotionSceneSpec(
             scene_id=cue.id,
             order=cue.order,
@@ -120,7 +126,7 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
             requested_template="text",
             rendered_template="text",
             fallback_reason=None,
-            props=text_props.model_dump(mode="json"),
+            props=props_dict,
             start_time=start_time,
             end_time=end_time,
             start_frame=start_frame,
@@ -134,9 +140,10 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
                 narration=cue.narration or "",
                 fps=fps,
                 duration_frames=duration_frames,
-                timing_source="auto",
+                timing_source=resolved_timing_source,
                 template="text",
                 scene_id=cue.id,
+                props=props_dict,
             ),
         )
 
@@ -403,8 +410,9 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
             narration=cue.narration or "",
             fps=fps,
             duration_frames=duration_frames,
-            timing_source="auto",
-            template=requested_template,
+            timing_source=resolved_timing_source,
+            template=rendered_template,
             scene_id=cue.id,
+            props=props_dict,
         ),
     )

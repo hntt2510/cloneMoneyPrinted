@@ -508,7 +508,16 @@ def render_production_workspace() -> None:
                     st.session_state["narration_srt_path"] = str(ext_srt_p)
                 if st.session_state.get("narration_srt_path"):
                     custom_timing_path = st.session_state["narration_srt_path"]
-                    st.success(f"SRT loaded: {Path(custom_timing_path).name}")
+                    try:
+                        from app.services.timeline import parse_srt_file
+                        cues_preview = parse_srt_file(custom_timing_path)
+                        st.success(f"SRT loaded: {Path(custom_timing_path).name} ({len(cues_preview)} cues, {cues_preview[-1].end:.1f}s)")
+                        if not script_input.strip():
+                            st.info("ℹ️ Script derived from uploaded SRT")
+                    except Exception as srt_err:
+                        st.error(f"Invalid SRT timing file: {srt_err}")
+                else:
+                    st.warning("⚠️ Timing SRT file is required for External Audio + SRT mode.")
 
             subtitle_enabled = st.checkbox("Burn Subtitles", value=True)
 
@@ -624,12 +633,14 @@ def render_production_workspace() -> None:
                         task_status = (_em.get("status") or "unknown").upper()
                     except Exception:
                         pass
+                timing_info = f"\n\n**Timing SRT:** `{Path(configured_spec.narration.timing_file).name}`" if configured_spec.narration.timing_file else ""
                 st.success(
                     f"Workspace Loaded ✅\n\n"
                     f"**Task:** `{active_task_id}`\n\n"
                     f"**Project:** {configured_spec.project.title}\n\n"
                     f"**Status:** {task_status}\n\n"
-                    f"**Narration Mode:** {configured_spec.narration.mode.value.upper()}\n\n"
+                    f"**Narration Mode:** {configured_spec.narration.mode.value.upper()}"
+                    f"{timing_info}\n\n"
                     f"**Spec:** `{Path(loaded_path_str).name}`"
                 )
             except Exception as exc:
@@ -690,6 +701,18 @@ def render_production_workspace() -> None:
     if run_clicked:
         if configured_spec is None:
             st.error("Please configure a valid project specification before starting.")
+        elif (
+            "Mode A" in input_mode
+            and narration_source == "External Audio + SRT"
+            and not custom_timing_path
+        ):
+            st.error("External Audio + SRT requires a timing SRT file.")
+        elif (
+            "Mode A" in input_mode
+            and narration_source == "External Audio + SRT"
+            and not custom_audio_path
+        ):
+            st.error("External narration requires a WAV/MP3 file.")
         else:
             # For Mode A and Mode B: persist spec to inputs dir and task dir
             # For Mode C: active_project_path already points to the task's original project.json

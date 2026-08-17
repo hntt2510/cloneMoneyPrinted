@@ -65,21 +65,15 @@ export const NumberTemplate: React.FC<NumberProps> = ({
       displayString = `${prefix || ''}${formatted}${suffix || ''}`;
 
       const popSpr = spring({
-        frame: frame - numBeat.end_frame,
+        frame: Math.max(0, frame - numBeat.end_frame),
         fps,
-        config: { damping: 12, stiffness: 150 },
+        config: { damping: 12, stiffness: 120 },
       });
-      finalScale = numberScale + interpolate(popSpr, [0, 1], [0, 0.05]) - interpolate(popSpr, [0, 1], [0, 0.05]);
+      const popBoost = interpolate(popSpr, [0, 0.5, 1], [0, 0.05, 0]);
+      finalScale = numberScale * (1 + popBoost);
+
       if (frame >= numBeat.end_frame) {
         displayString = `${prefix || ''}${value}${suffix || ''}`; // Exact target at end
-        finalScale = numberScale + interpolate(popSpr, [0, 1], [0, 0.05], { extrapolateRight: 'clamp' });
-        // Settle back to normal size
-        const settleSpr = spring({
-          frame: Math.max(0, frame - numBeat.end_frame - 5),
-          fps,
-          config: { damping: 12, stiffness: 100 },
-        });
-        finalScale = finalScale - interpolate(settleSpr, [0, 1], [0, 0.05], { extrapolateRight: 'clamp' });
       }
     }
   }
