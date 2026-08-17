@@ -751,6 +751,14 @@ def render_production_workspace() -> None:
         kpi_cols[4].metric("Failed", failed_count)
         kpi_cols[5].metric("FPS", manifest_data.get("fps", 30))
 
+        # Fallback ratio quality warning
+        fallback_count = sum(1 for s in scenes_list if s.get("fallback_from"))
+        if total_count > 0 and fallback_count > 0 and (fallback_count / total_count) >= 0.5:
+            st.warning(
+                f"⚠️ Visual planning used deterministic fallback for {fallback_count}/{total_count} scenes. "
+                f"Review planner diagnostics; rich motion opportunities may have been reduced."
+            )
+
         # Scene Review Grid
         st.subheader("Scene Asset Grid")
         if showing_prior:
@@ -776,6 +784,8 @@ def render_production_workspace() -> None:
                             st.video(str(out_f))
                         elif s_status == "failed":
                             st.error(f"Generation Failed: {scene.get('error', 'Unknown scene failure')}")
+                            if scene.get("planned_visual_type"):
+                                st.caption(f"Planned: `{scene.get('planned_visual_type')}` | Stage: `{scene.get('source_stage', 'unknown')}` | Attempts: {scene.get('attempts', 1)}")
                         else:
                             st.warning(f"Clip output unavailable: {out_f}")
 

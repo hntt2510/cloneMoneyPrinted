@@ -1,51 +1,49 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
-from typing import Any, Callable, Iterable
-
-from pydantic import BaseModel, ConfigDict, ValidationError
+import re
+from typing import Any, Callable
+from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.models.project import (
     BrollPayload,
+    BrollSemanticIntent,
     DataPayload,
     DataTemplate,
     DocumentPayload,
     ProjectSpec,
-    TimelineCue,
     TextPayload,
+    TimelineCue,
     VisualCue,
     VisualPlan,
     VisualPurpose,
     VisualType,
 )
 from app.services import llm
+from app.services.numeric_parser import (
+    CanonicalNumericFact,
+    extract_canonical_numeric_facts,
+)
 
 BATCH_SIZE = 10
 REPAIR_ATTEMPTS = 2
-_NUMBER_RE = re.compile(r"(?<!\w)(?:\$\s*)?\d[\d,.]*(?:\s*[KMB])?\s*%?", re.IGNORECASE)
+MIN_DURATION_SECONDS = 0.5
+MAX_SEARCH_QUERY_WORDS = 8
+
 _DOCUMENT_RE = re.compile(
-    r"\b(?:irs|ssa|form|report|research|study|official|law|regulation|rule|source|medicare official)\b",
+    r"\b(article|document|study|report|filing|memo|record|evidence|exhibit|paperwork|policy document|form|publication)\b",
     re.IGNORECASE,
 )
 _COMPARISON_RE = re.compile(
-    r"\b(?:vs\.?|versus|more|less|higher|lower|difference|gap|from|until|between|threshold)\b",
+    r"\b(versus|vs|compare|compared|more than|less than|higher than|lower than|increase|decrease|growth|decline|cost breakdown|premium vs|deductible vs|limit vs)\b",
     re.IGNORECASE,
 )
 
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class NumericFact:
-    value: float
-    is_percent: bool = False
-
-
 class PlannerError(ValueError):
-    """A planner response cannot be made into a valid visual plan."""
+    """Raised when the LLM planner returns an invalid visual decision."""
 
 
 class PlannerDecision(BaseModel):
@@ -79,64 +77,18 @@ def _parse_batch_response(value: str) -> PlannerBatch:
     return PlannerBatch.model_validate(raw)
 
 
-def _parse_single_numeric_fact(raw: str) -> NumericFact | None:
-    """Parse a single numeric token into a canonical NumericFact."""
-    text = raw.strip()
-    if not text:
-        return None
-    is_percent = "%" in text
-    clean = re.sub(r"[\$\%,]", "", text).strip()
-    if not clean:
-        return None
-    multiplier = 1.0
-    if clean[-1] in "kK":
-        multiplier = 1_000.0
-        clean = clean[:-1].strip()
-    elif clean[-1] in "mM":
-        multiplier = 1_000_000.0
-        clean = clean[:-1].strip()
-    elif clean[-1] in "bB":
-        multiplier = 1_000_000_000.0
-        clean = clean[:-1].strip()
-    clean = clean.rstrip(".")
-    if not clean:
-        return None
-    try:
-        val = float(clean) * multiplier
-        return NumericFact(value=val, is_percent=is_percent)
-    except ValueError:
-        return None
-
-
-def _extract_numeric_facts(value: Any) -> set[NumericFact]:
-    """Recursively extract all canonical NumericFact items from any value."""
-    facts: set[NumericFact] = set()
-    if isinstance(value, bool):
-        return facts
-    if isinstance(value, (int, float)):
-        facts.add(NumericFact(value=float(value), is_percent=False))
-    elif isinstance(value, str):
-        for match in _NUMBER_RE.finditer(value):
-            fact = _parse_single_numeric_fact(match.group(0))
-            if fact is not None:
-                facts.add(fact)
-    elif isinstance(value, dict):
-        for item in value.values():
-            facts.update(_extract_numeric_facts(item))
-    elif isinstance(value, (list, tuple, set)):
-        for item in value:
-            facts.update(_extract_numeric_facts(item))
-    return facts
-
-
 def _validate_numeric_grounding(
-    facts_to_check: set[NumericFact],
-    allowed_facts: set[NumericFact],
+    facts_to_check: list[CanonicalNumericFact],
+    allowed_facts: list[CanonicalNumericFact],
     cue_id: str,
     payload_type: str,
 ) -> None:
-    """Validate that all numeric facts in facts_to_check are present in allowed_facts."""
-    ungrounded = facts_to_check - allowed_facts
+    """Validate that all numeric facts in facts_to_check are grounded in allowed_facts."""
+    ungrounded: list[CanonicalNumericFact] = []
+    for f in facts_to_check:
+        if not any(f.matches(a) for a in allowed_facts):
+            ungrounded.append(f)
+
     if ungrounded:
         formatted = ", ".join(
             f"{f.value:g}%" if f.is_percent else f"{f.value:g}"
@@ -155,12 +107,6 @@ def _build_local_context(
 ) -> str:
     """Build grounding context limited to current cue + immediately adjacent cues,
     plus any cues that share the same visual_group_id.
-
-    Allowed grounding context:
-    - current cue narration
-    - immediately previous cue narration (if present)
-    - immediately next cue narration (if present)
-    - all cues in the same visual_group_id (for multi-scene evolving narratives)
     """
     indices_to_include = {current_index}
     if current_index > 0:
@@ -183,23 +129,22 @@ def _validate_grounded_data(
     timeline_cue: TimelineCue,
     local_context: str,
 ) -> None:
-    """Validate DATA visual: all numeric tokens in headline AND data must be grounded
-    in the local context (current + adjacent cues only) using exact canonical fact comparison,
-    and structured props must satisfy the requested template contract.
+    """Validate DATA visual: all numeric facts in headline AND data must be grounded
+    in the local context using canonical fact comparison, and structured props must satisfy the template contract.
     """
     if decision.visual_type != VisualType.data:
         return
     payload = DataPayload.model_validate(decision.payload)
-    allowed_facts = _extract_numeric_facts(local_context)
+    allowed_facts = extract_canonical_numeric_facts(local_context)
 
     # Validate headline numeric facts
-    headline_facts = _extract_numeric_facts(payload.headline)
+    headline_facts = extract_canonical_numeric_facts(payload.headline)
     _validate_numeric_grounding(
         headline_facts, allowed_facts, timeline_cue.id, "DATA headline"
     )
 
     # Validate all data payload facts recursively
-    data_facts = _extract_numeric_facts(payload.data)
+    data_facts = extract_canonical_numeric_facts(payload.data)
     _validate_numeric_grounding(
         data_facts, allowed_facts, timeline_cue.id, "DATA payload"
     )
@@ -241,16 +186,16 @@ def _validate_grounded_text(
     local_context: str,
 ) -> None:
     """Validate TEXT visual: headline/subheadline must not introduce new numeric claims
-    absent from the local context (current + adjacent cues only) using exact canonical fact comparison.
+    absent from the local context.
     """
     if decision.visual_type != VisualType.text:
         return
     payload = TextPayload.model_validate(decision.payload)
-    allowed_facts = _extract_numeric_facts(local_context)
+    allowed_facts = extract_canonical_numeric_facts(local_context)
 
-    text_facts = _extract_numeric_facts(payload.headline)
+    text_facts = extract_canonical_numeric_facts(payload.headline)
     if payload.subheadline is not None:
-        text_facts.update(_extract_numeric_facts(payload.subheadline))
+        text_facts.extend(extract_canonical_numeric_facts(payload.subheadline))
     _validate_numeric_grounding(
         text_facts, allowed_facts, timeline_cue.id, "TEXT payload"
     )
@@ -295,13 +240,12 @@ def _build_prompt(
         "   - TEXT: Use only for short emphatic takeaways or section transitions.\n"
         "2. Action-Aware B-roll Search:\n"
         "   - Distinguish NOUN/TOPIC from ACTION/RELATIONSHIP. (e.g. for 'tree branch falls on parked car', do NOT search generic 'car in rain'; search 'fallen tree branch on parked car storm').\n"
-        "   - Search terms provide topic context, but the specific cue action and entities MUST drive the query.\n"
         "   - Broll payload MUST include:\n"
         "     * `search_query`: camera-visible literal action query (Tier 1)\n"
         "     * `fallback_queries`: list of semantic fallback queries\n"
         "     * `query_tiers`: {\"tier1\": \"literal event\", \"tier2\": \"outcome/state visual\", \"tier3\": \"close alternative\", \"tier4\": \"broad context\"}\n"
         "     * `semantic_intent`: {\"subject\": \"...\", \"action\": \"...\", \"object\": \"...\", \"setting\": \"...\", \"outcome\": \"...\", \"must_show_concepts\": [...], \"preferred_visuals\": [...], \"acceptable_alternatives\": [...], \"reject_visuals\": [...]}\n"
-        "     * `avoid`: list of unwanted visual concepts (e.g. ['rainy windshield', 'generic highway driving'])\n"
+        "     * `avoid`: list of unwanted visual concepts\n"
         "     * `source_priority`: ['pexels', 'pixabay', 'coverr']\n"
         "3. Structured DATA Templates:\n"
         "   - Never output unstructured numbers or empty callouts when structured data is grounded.\n"
@@ -317,7 +261,7 @@ def _build_prompt(
         "4. Multi-Cue Visual Grouping:\n"
         "   - Set `visual_group_id` (e.g. 'vg_limit_comparison') on adjacent cues that express one evolving motion concept.\n"
         "5. Factual Grounding:\n"
-        "   - All numeric values must be grounded strictly in the supplied narration context. Do not fabricate numbers.\n"
+        "   - All numeric values must be grounded strictly in the supplied narration context. Both spoken word numbers ('six thousand dollars') and digits ('$6,000') are valid.\n"
         f"\nProject title: {project.project.title}"
         f"\nProject subject: {project.script.subject}"
         f"\nGlobal search terms: {json.dumps(search_terms, ensure_ascii=False)}"
@@ -328,6 +272,24 @@ def _build_prompt(
     )
     if repair_error:
         prompt += f"\n\nREPAIR INSTRUCTIONS: The previous response failed validation with error:\n{repair_error}\nFix the JSON payload so that it strictly adheres to all schema rules."
+    return prompt
+
+
+def _build_cue_repair_prompt(
+    project: ProjectSpec,
+    invalid_items: list[dict[str, Any]],
+) -> str:
+    """Build a targeted repair prompt for specific invalid cues in a batch."""
+    prompt = (
+        "You are an autonomous Visual Director repairing invalid decisions for specific timeline cues.\n"
+        "Return strict JSON with a top-level `cues` array containing corrected decisions for the requested cues ONLY.\n\n"
+        "REPAIR REQUIREMENTS:\n"
+        "1. Fix the specific validation error reported for each cue.\n"
+        "2. Ensure all numbers in DATA/TEXT headlines and payload data are strictly grounded in the cue narration.\n"
+        "3. Provide the full valid structured props for the requested template (e.g. comparison items, threshold values, number value).\n"
+        f"\nProject title: {project.project.title}"
+        f"\nCues to repair: {json.dumps(invalid_items, ensure_ascii=False, indent=2)}"
+    )
     return prompt
 
 
@@ -345,14 +307,24 @@ def classify_narration(narration: str) -> VisualType:
     text = narration.strip()
     if _DOCUMENT_RE.search(text):
         return VisualType.document
+
+    numeric_facts = extract_canonical_numeric_facts(text)
+    if numeric_facts:
+        return VisualType.data
+
     if text.isupper() or (
         len(text.split()) <= 3
-        and not _NUMBER_RE.search(text)
         and not _COMPARISON_RE.search(text)
     ):
         return VisualType.text
-    if _NUMBER_RE.search(text) or _COMPARISON_RE.search(text):
+
+    if _COMPARISON_RE.search(text):
         return VisualType.data
+
+    t_lower = text.lower()
+    if any(k in t_lower for k in ("deductible vs", "premium vs", "policy limit vs", "cost breakdown", "versus")):
+        return VisualType.data
+
     return VisualType.broll
 
 
@@ -360,38 +332,42 @@ def _extract_intent_concepts(text: str) -> tuple[list[str], list[str], str, str,
     """Extract must-show concepts, reject keywords, and core subject/action/object from narration."""
     t_lower = text.lower()
     must_show: list[str] = []
-    reject: list[str] = ["windshield", "wipers", "interior", "bokeh", "blurry"]
-
-    # Detect entity keywords
-    if any(w in t_lower for w in ("car", "vehicle", "automobile", "truck")):
-        must_show.append("car")
-    if any(w in t_lower for w in ("tree", "branch", "limb", "trunk")):
-        must_show.append("tree branch")
-    if any(w in t_lower for w in ("storm", "rain", "wind", "weather", "tempest")):
-        must_show.append("storm")
-    if any(w in t_lower for w in ("damage", "fall", "crush", "hit", "struck", "collision", "accident")):
-        must_show.append("damage")
-    if any(w in t_lower for w in ("policy", "paperwork", "insurance", "document", "contract", "review")):
-        must_show.append("insurance paperwork")
-    if any(w in t_lower for w in ("repair", "mechanic", "shop", "body shop")):
-        must_show.append("repair shop")
-
-    # If tree + car + storm detected
-    if "tree branch" in must_show and "car" in must_show:
-        reject.extend(["highway driving", "traffic jam", "commute", "sunny highway", "generic road"])
-
-    subject = "vehicle" if "car" in must_show else "subject"
+    reject_keywords: list[str] = ["windshield", "wipers", "interior", "bokeh", "blurry"]
+    subject = "vehicle"
     action = "event"
     obj = "scene"
-    return must_show, reject, subject, action, obj
+
+    if any(w in t_lower for w in ("car", "vehicle", "auto", "automobile", "truck")):
+        must_show.append("car")
+        subject = "car"
+    if any(w in t_lower for w in ("tree", "branch", "limb", "falling object", "falls")):
+        must_show.append("tree branch")
+        action = "tree branch falls on"
+    if any(w in t_lower for w in ("storm", "rain", "hurricane", "wind")):
+        must_show.append("storm")
+    if any(w in t_lower for w in ("damage", "damaged", "crush", "crushed", "broken", "dent", "repair", "falls", "branch")):
+        must_show.append("damage")
+    if any(w in t_lower for w in ("accident", "crash", "collision", "hit", "impact")):
+        must_show.append("collision")
+        action = "side impact collision"
+    if any(w in t_lower for w in ("paperwork", "document", "policy", "review", "bill", "claim")):
+        must_show.append("document")
+        subject = "driver"
+        action = "reviews paperwork"
+
+    if not must_show:
+        words = [w for w in re.findall(r"\b[a-zA-Z]{4,}\b", t_lower) if w not in ("your", "this", "that", "with", "from", "have", "what")]
+        must_show = words[:3]
+
+    return must_show, reject_keywords, subject, action, obj
 
 
-def _fallback_payload(kind: VisualType, project: ProjectSpec, cue: TimelineCue) -> dict[str, Any]:
-    text = cue.narration.strip()
+def _fallback_payload(kind: VisualType, narration: str, project: ProjectSpec) -> dict[str, Any]:
+    text = narration.strip()
     if kind == VisualType.document:
         return DocumentPayload(
-            search_query=text,
-            source_hint="official evidence source",
+            search_query=text[:80],
+            source_hint="Official Documentation",
             highlight_target=None,
             evidence_required=True,
         ).model_dump(mode="json")
@@ -400,49 +376,44 @@ def _fallback_payload(kind: VisualType, project: ProjectSpec, cue: TimelineCue) 
         return TextPayload(headline=text[:120]).model_dump(mode="json")
 
     if kind == VisualType.data:
-        raw_tokens = _NUMBER_RE.findall(text)
-        tokens = [t.strip().rstrip(".,;:") for t in raw_tokens if t.strip().rstrip(".,;:")]
+        facts = extract_canonical_numeric_facts(text)
         t_lower = text.lower()
 
         # 1. Threshold / Limit Detection (e.g. $25K limit vs $40K damage)
         if (
             re.search(r"\b(?:limit|threshold|exceed|exceeds|exceeded|exceeding|above limit|policy limit|coverage limit|cap|capped)\b", t_lower)
-            and len(tokens) >= 2
+            and len(facts) >= 2
         ):
-            n1 = _parse_single_numeric_fact(tokens[0])
-            n2 = _parse_single_numeric_fact(tokens[1])
-            if n1 and n2:
-                # Typically smaller is limit, larger is damage/current
-                thresh_val = min(n1.value, n2.value)
-                curr_val = max(n1.value, n2.value)
-                thresh_disp = tokens[0] if n1.value <= n2.value else tokens[1]
-                curr_disp = tokens[1] if n1.value <= n2.value else tokens[0]
-                return DataPayload(
-                    template=DataTemplate.threshold,
-                    headline=text[:120],
-                    data={
-                        "current_value": curr_val,
-                        "current_display": curr_disp,
-                        "threshold_value": thresh_val,
-                        "threshold_display": thresh_disp,
-                        "threshold_label": "Coverage Limit",
-                        "subtext": "Above Policy Limit",
-                    },
-                ).model_dump(mode="json")
+            n1 = facts[0]
+            n2 = facts[1]
+            thresh_val = min(n1.value, n2.value)
+            curr_val = max(n1.value, n2.value)
+            thresh_disp = n1.display if n1.value <= n2.value else n2.display
+            curr_disp = n2.display if n1.value <= n2.value else n1.display
+            return DataPayload(
+                template=DataTemplate.threshold,
+                headline=text[:120],
+                data={
+                    "current_value": curr_val,
+                    "current_display": curr_disp,
+                    "threshold_value": thresh_val,
+                    "threshold_display": thresh_disp,
+                    "threshold_label": "Coverage Limit",
+                    "subtext": "Above Policy Limit",
+                },
+            ).model_dump(mode="json")
 
         # 2. Comparison / Cost Breakdown (e.g. $1,000 deductible vs $5,000 insurance)
-        if len(tokens) >= 2 or _COMPARISON_RE.search(text):
+        if len(facts) >= 2 or _COMPARISON_RE.search(text):
             items = []
-            for i, tok in enumerate(tokens[:4]):
-                fact = _parse_single_numeric_fact(tok)
-                num_val = fact.value if fact else None
+            for i, fact in enumerate(facts[:4]):
+                tok = fact.display
                 label = f"Item {i + 1}"
-                # Derive grounded label from nearby keywords if available
-                if "deductible" in t_lower and ("1000" in tok or "1,000" in tok or (len(tokens) == 3 and i == 1)):
+                if "deductible" in t_lower and ("1000" in tok or (len(facts) == 3 and i == 1)):
                     label = "Deductible"
-                elif ("insurance" in t_lower or "insurer" in t_lower or "covers" in t_lower) and ("5000" in tok or "5,000" in tok or (len(tokens) == 3 and i == 2)):
+                elif ("insurance" in t_lower or "insurer" in t_lower or "cover" in t_lower) and ("5000" in tok or (len(facts) == 3 and i == 2)):
                     label = "Insurance Portion"
-                elif ("repair" in t_lower or "cost" in t_lower) and ("6000" in tok or "6,000" in tok or (len(tokens) == 3 and i == 0)):
+                elif ("repair" in t_lower or "cost" in t_lower) and ("6000" in tok or (len(facts) == 3 and i == 0)):
                     label = "Repair Cost"
                 elif "deductible" in t_lower and i == 0:
                     label = "Deductible"
@@ -457,8 +428,8 @@ def _fallback_payload(kind: VisualType, project: ProjectSpec, cue: TimelineCue) 
                     {
                         "label": label,
                         "value": tok,
-                        "numeric_value": num_val,
-                        "highlight": (i == 1),
+                        "numeric_value": fact.value,
+                        "highlight": (i == 1 or i == 2),
                     }
                 )
             if len(items) >= 2:
@@ -468,81 +439,88 @@ def _fallback_payload(kind: VisualType, project: ProjectSpec, cue: TimelineCue) 
                     data={"items": items},
                 ).model_dump(mode="json")
 
-        # 3. Age Marker Detection
-        if "age" in t_lower:
-            for tok in tokens:
-                fact = _parse_single_numeric_fact(tok)
-                if fact and 0 <= fact.value <= 120:
-                    return DataPayload(
-                        template=DataTemplate.age_marker,
-                        headline=text[:120],
-                        data={"markers": [{"age": int(fact.value), "label": f"Age {int(fact.value)}", "highlight": True}]},
-                    ).model_dump(mode="json")
+        # 3. Single Number
+        if len(facts) >= 1:
+            fact = facts[0]
+            label = "Key Metric"
+            if "repair" in t_lower or "cost" in t_lower:
+                label = "Repair Cost"
+            elif "deductible" in t_lower:
+                label = "Deductible"
+            elif "limit" in t_lower or "coverage" in t_lower:
+                label = "Coverage Limit"
+            elif "insurance" in t_lower or "cover" in t_lower:
+                label = "Insurance Coverage"
 
-        # 4. Timeline Detection
-        if any(w in t_lower for w in ("from", "until", "between", "step", "phase")):
-            milestones = [
-                {"time_label": f"Phase {i + 1}", "title": tok, "is_active": (i == 0)}
-                for i, tok in enumerate(tokens[:3])
-            ]
-            if len(milestones) >= 2:
-                return DataPayload(
-                    template=DataTemplate.timeline,
-                    headline=text[:120],
-                    data={"milestones": milestones},
-                ).model_dump(mode="json")
-
-        # 5. Single Number / Statistic
-        if tokens:
-            fact = _parse_single_numeric_fact(tokens[0])
             return DataPayload(
                 template=DataTemplate.number,
                 headline=text[:120],
                 data={
-                    "value": tokens[0],
-                    "numeric_value": fact.value if fact else None,
-                    "label": "Key Figure",
+                    "value": fact.display,
+                    "numeric_value": fact.value,
+                    "label": label,
+                    "prefix": "$" if fact.is_currency and not fact.display.startswith("$") else "",
+                    "suffix": "%" if fact.is_percent and not fact.display.endswith("%") else "",
                 },
             ).model_dump(mode="json")
 
-        # 6. Fallback to Callout
+        # 4. Conceptual comparison without numbers (e.g. Premium vs Deductible)
+        if "premium" in t_lower and "deductible" in t_lower:
+            return DataPayload(
+                template=DataTemplate.comparison,
+                headline="Insurance Premium vs. Deductible",
+                data={
+                    "items": [
+                        {"label": "Premium", "value": "Recurring Cost to Maintain Policy", "highlight": False},
+                        {"label": "Deductible", "value": "Out-of-Pocket Cost When Claiming", "highlight": True},
+                    ]
+                },
+            ).model_dump(mode="json")
+
         return DataPayload(
             template=DataTemplate.callout,
             headline=text[:120],
-            data={"emphasis": text[:60]},
+            data={"text": text[:180], "style": "card"},
         ).model_dump(mode="json")
 
     # VisualType.broll
-    must_show, reject_vis, subj, act, obj = _extract_intent_concepts(text)
-    clean_words = re.findall(r"[A-Za-z0-9]+", text)
-    base_query = " ".join(clean_words[:8]) or "real world context"
+    must_show, reject_keywords, subj, act, obj = _extract_intent_concepts(text)
+    words = re.findall(r"\b[a-zA-Z]{3,}\b", text)
+    primary_query = " ".join(words[:MAX_SEARCH_QUERY_WORDS]) if words else project.script.subject
 
-    tier1 = f"{base_query}"
-    tier2 = f"{base_query} aftermath damage" if "damage" in must_show else f"{base_query} context"
-    tier3 = f"{project.script.subject} {base_query}"[:80].strip()
-    tier4 = f"{project.script.subject}"[:60].strip()
+    search_terms = project.script.search_terms if hasattr(project.script, "search_terms") and project.script.search_terms else []
+    seed_pool = " ".join(search_terms[:2]) if search_terms else project.script.subject
+
+    tier1 = primary_query
+    tier2 = f"{primary_query} aftermath damage" if "damage" in must_show else f"{primary_query} action"
+    tier3 = f"{seed_pool} {primary_query}"[:80].strip()
+    tier4 = seed_pool
+
+    fallback_queries = [tier2, tier3, tier4]
+    semantic_intent = BrollSemanticIntent(
+        subject=subj,
+        action=act,
+        object=obj,
+        setting="real world",
+        outcome="scene narrative",
+        must_show_concepts=must_show,
+        preferred_visuals=[primary_query, tier2],
+        acceptable_alternatives=[tier3],
+        reject_visuals=reject_keywords,
+    )
 
     return BrollPayload(
-        search_query=tier1,
-        fallback_queries=[tier2, tier3, tier4],
+        search_query=primary_query,
+        fallback_queries=fallback_queries,
+        avoid=reject_keywords,
+        source_priority=["pexels", "pixabay", "coverr"],
+        semantic_intent=semantic_intent,
         query_tiers={
             "tier1": tier1,
             "tier2": tier2,
             "tier3": tier3,
             "tier4": tier4,
         },
-        semantic_intent={
-            "subject": subj,
-            "action": act,
-            "object": obj,
-            "setting": "real world",
-            "outcome": "scene narrative",
-            "must_show_concepts": must_show,
-            "preferred_visuals": [tier1, tier2],
-            "acceptable_alternatives": [tier3],
-            "reject_visuals": reject_vis,
-        },
-        avoid=reject_vis,
     ).model_dump(mode="json")
 
 
@@ -551,282 +529,237 @@ def fallback_visual(project: ProjectSpec, cue: TimelineCue) -> VisualCue:
     return VisualCue(
         id=cue.id,
         order=cue.order,
+        visual_type=kind,
+        purpose=_purpose_for(kind, cue.narration),
         start=cue.start,
         end=cue.end,
         narration=cue.narration,
-        visual_type=kind,
-        purpose=_purpose_for(kind, cue.narration),
-        payload=_fallback_payload(kind, project, cue),
+        payload=_fallback_payload(kind, cue.narration, project),
+        visual_group_id=None,
     )
 
 
 def _canonical_visual(
     decision: PlannerDecision,
-    timeline_cue: TimelineCue,
+    cue: TimelineCue,
     local_context: str,
 ) -> VisualCue:
-    """Validate and canonicalize a planner decision against local grounding context.
-
-    local_context must be limited to current + adjacent cues (NOT the full script).
-    """
-    _validate_grounded_data(decision, timeline_cue, local_context)
-    _validate_grounded_text(decision, timeline_cue, local_context)
+    if decision.id != cue.id or decision.order != cue.order:
+        raise PlannerError(
+            f"decision id/order mismatch: got ({decision.id}, {decision.order}), expected ({cue.id}, {cue.order})"
+        )
+    _validate_grounded_data(decision, cue, local_context)
+    _validate_grounded_text(decision, cue, local_context)
     return VisualCue(
-        id=timeline_cue.id,
-        order=timeline_cue.order,
-        start=timeline_cue.start,
-        end=timeline_cue.end,
-        narration=timeline_cue.narration,
+        id=cue.id,
+        order=cue.order,
         visual_type=decision.visual_type,
         purpose=decision.purpose,
+        start=cue.start,
+        end=cue.end,
+        narration=cue.narration,
         payload=decision.payload,
         visual_group_id=decision.visual_group_id,
     )
 
 
-def _normalize_groups(cues: list[VisualCue]) -> list[VisualCue]:
-    result: list[VisualCue] = []
-    group_number = 0
-    index = 0
-    while index < len(cues):
-        current = cues[index]
-        raw_group = current.visual_group_id
-        end = index + 1
-        while (
-            end < len(cues)
-            and raw_group
-            and cues[end].visual_group_id == raw_group
-            and cues[end].visual_type == current.visual_type
-        ):
-            end += 1
-        if end - index > 1:
-            group_number += 1
-            group_id = f"VG{group_number:03d}"
-            result.extend(
-                cue.model_copy(update={"visual_group_id": group_id}) for cue in cues[index:end]
-            )
-        else:
-            result.append(current.model_copy(update={"visual_group_id": None}))
-        index = end
-    return result
-
-
 def _apply_diversity(
     project: ProjectSpec,
-    timeline: list[TimelineCue],
-    planned: list[VisualCue],
+    cues: list[TimelineCue],
+    decisions: list[VisualCue],
 ) -> list[VisualCue]:
-    result: list[VisualCue] = []
-    recent_queries: set[str] = set()
-    broll_streak = 0
-    for timeline_cue, visual in zip(timeline, planned):
-        replacement = visual
-        if visual.visual_type == VisualType.broll:
-            broll_streak += 1
-            query = str(visual.payload.get("search_query", "")).lower()
-            if query in recent_queries:
-                replacement = fallback_visual(project, timeline_cue)
-            elif broll_streak > 2 and classify_narration(timeline_cue.narration) in {
-                VisualType.data,
-                VisualType.document,
-            }:
-                replacement = fallback_visual(project, timeline_cue)
-            recent_queries.add(query)
+    # Canonicalize visual groups (VG001, VG002...) for contiguous groups
+    group_counter = 1
+    current_raw_group = None
+    current_canonical_group = None
+
+    for cue in decisions:
+        raw_gid = cue.visual_group_id
+        if raw_gid and str(raw_gid).strip():
+            raw_gid_clean = str(raw_gid).strip()
+            if raw_gid_clean != current_raw_group:
+                current_raw_group = raw_gid_clean
+                current_canonical_group = f"VG{group_counter:03d}"
+                group_counter += 1
+            cue.visual_group_id = current_canonical_group
         else:
-            broll_streak = 0
-        result.append(replacement)
-    for index in range(len(result) - 1):
-        current = result[index]
-        following = result[index + 1]
-        if (
-            (current.visual_group_id is None or current.visual_group_id == "auto-data")
-            and (following.visual_group_id is None or following.visual_group_id == "auto-data")
-            and current.visual_type == VisualType.data
-            and following.visual_type == VisualType.data
-            and (
-                _COMPARISON_RE.search(current.narration)
-                or _COMPARISON_RE.search(following.narration)
-            )
-        ):
-            result[index] = current.model_copy(update={"visual_group_id": "auto-data"})
-            result[index + 1] = following.model_copy(update={"visual_group_id": "auto-data"})
-    return _normalize_groups(result)
+            current_raw_group = None
+            current_canonical_group = None
+            cue.visual_group_id = None
+
+    for idx, (cue, decision) in enumerate(zip(cues, decisions)):
+        if decision.visual_type == VisualType.broll:
+            q = (decision.payload.get("search_query") or "").strip()
+            if not q:
+                decision.payload["search_query"] = project.script.subject
+        elif decision.visual_type == VisualType.text:
+            text = (decision.payload.get("headline") or "").strip()
+            if not text:
+                decision.payload["headline"] = cue.narration[:120]
+    return decisions
 
 
 def normalize_visual_cue_boundaries(
     cues: list[VisualCue],
+    *,
     fps: int = 30,
     total_duration_seconds: float | None = None,
     total_duration_frames: int | None = None,
 ) -> list[VisualCue]:
-    """Normalize visual cue boundaries to guarantee full, contiguous frame coverage.
-
-    Invariants enforced:
-    1. First cue starts at frame 0 (cue[0].start_frame == 0, cue[0].start == 0.0).
-    2. Adjacent cues are contiguous without gaps or overlaps (cue[i].end_frame == cue[i+1].start_frame).
-    3. Last cue extends through canonical timeline end (cue[-1].end_frame == timeline_end_frame).
-    4. Every cue has duration_frames >= 1.
-    5. Float start/end times are derived directly from canonical frames (start = start_frame / fps, end = end_frame / fps).
-    6. Narration text, payload, purpose, visual_type, and cue order are strictly preserved.
-    """
     if not cues:
         return []
 
-    fps = max(1, fps)
-    n = len(cues)
-
-    # 1. Determine target end frame
-    if total_duration_frames is not None and total_duration_frames > 0:
-        target_end_frame = total_duration_frames
-    elif total_duration_seconds is not None and total_duration_seconds > 0:
-        target_end_frame = max(n, round(total_duration_seconds * fps))
-    else:
-        raw_last_end = cues[-1].end if cues[-1].end is not None else 0.0
-        target_end_frame = max(n, round(raw_last_end * fps))
-
-    target_end_frame = max(n, target_end_frame)
-
-    # 2. Extract raw start frames
-    raw_starts = [round((c.start or 0.0) * fps) for c in cues]
-
-    # 3. Deterministically assign contiguous frame boundaries
-    start_frames: list[int] = [0] * n
-    end_frames: list[int] = [0] * n
-
-    start_frames[0] = 0
-    for i in range(1, n):
-        # min allowed to guarantee cue[i-1] has duration >= 1
-        min_allowed = start_frames[i - 1] + 1
-        # max allowed to guarantee remaining cues i..n-1 have duration >= 1
-        max_allowed = max(min_allowed, target_end_frame - (n - i))
-        desired = raw_starts[i]
-        start_frames[i] = max(min_allowed, min(desired, max_allowed))
-        end_frames[i - 1] = start_frames[i]
-
-    end_frames[n - 1] = max(start_frames[n - 1] + 1, target_end_frame)
-
-    # 4. Construct normalized visual cues
+    sorted_cues = sorted(cues, key=lambda cue: cue.order)
     normalized: list[VisualCue] = []
-    for i, cue in enumerate(cues):
-        s_frame = start_frames[i]
-        e_frame = end_frames[i]
-        s_time = round(s_frame / fps, 4)
-        e_time = round(e_frame / fps, 4)
+    current_frame = 0
+    min_duration_frames = max(1, round(MIN_DURATION_SECONDS * fps))
+
+    for index, cue in enumerate(sorted_cues):
+        if index < len(sorted_cues) - 1:
+            next_cue = sorted_cues[index + 1]
+            raw_next_frame = round(next_cue.start * fps)
+            end_frame = max(current_frame + min_duration_frames, raw_next_frame)
+        else:
+            raw_cue_end_frame = round(cue.end * fps)
+            end_frame = max(current_frame + min_duration_frames, raw_cue_end_frame)
+
+        start_sec = current_frame / float(fps)
+        end_sec = end_frame / float(fps)
 
         normalized.append(
-            cue.model_copy(
-                update={
-                    "start": s_time,
-                    "end": e_time,
-                }
+            VisualCue(
+                id=cue.id,
+                order=cue.order,
+                visual_type=cue.visual_type,
+                purpose=cue.purpose,
+                start=start_sec,
+                end=end_sec,
+                narration=cue.narration,
+                payload=cue.payload,
+                visual_group_id=cue.visual_group_id,
             )
+        )
+        current_frame = end_frame
+
+    if total_duration_frames is not None and normalized:
+        last = normalized[-1]
+        last_start_frame = round(last.start * fps)
+        target_end_frame = max(last_start_frame + min_duration_frames, total_duration_frames)
+        normalized[-1] = VisualCue(
+            id=last.id,
+            order=last.order,
+            visual_type=last.visual_type,
+            purpose=last.purpose,
+            start=last.start,
+            end=target_end_frame / float(fps),
+            narration=last.narration,
+            payload=last.payload,
+            visual_group_id=last.visual_group_id,
+        )
+    elif total_duration_seconds is not None and normalized:
+        last = normalized[-1]
+        target_end = max(last.start + MIN_DURATION_SECONDS, total_duration_seconds)
+        normalized[-1] = VisualCue(
+            id=last.id,
+            order=last.order,
+            visual_type=last.visual_type,
+            purpose=last.purpose,
+            start=last.start,
+            end=target_end,
+            narration=last.narration,
+            payload=last.payload,
+            visual_group_id=last.visual_group_id,
         )
 
     return normalized
 
 
 def validate_scene_timeline_coverage(
-    scenes: list[Any],
-    expected_duration_frames: int | None = None,
+    cues: list[Any],
+    expected_duration_frames: int,
     fps: int = 30,
 ) -> tuple[bool, list[str]]:
-    """Validate that scenes form an unbroken, contiguous timeline covering all frames.
+    """Validate that visual cues form contiguous, non-overlapping coverage matching expected_duration_frames."""
+    if not cues:
+        return False, ["No visual cues provided"]
 
-    Returns:
-        (is_valid: bool, errors: list[str])
-    """
     errors: list[str] = []
-    if not scenes:
-        return False, ["No scenes provided in timeline"]
+    sorted_cues = sorted(cues, key=lambda c: (getattr(c, "order", 0) if getattr(c, "order", 0) is not None else 0))
 
-    fps = max(1, fps)
+    first_cue = sorted_cues[0]
+    if hasattr(first_cue, "start_frame") and first_cue.start_frame is not None:
+        first_start_frame = first_cue.start_frame
+    else:
+        first_start = getattr(first_cue, "start", 0.0) or 0.0
+        first_start_frame = round(first_start * fps)
 
-    # Check ordering and duplicate orders
-    seen_orders: set[int] = set()
-    for sc in scenes:
-        order = getattr(sc, "order", None)
-        if order is not None:
-            if order in seen_orders:
-                errors.append(f"Duplicate scene order {order} found in timeline")
-            seen_orders.add(order)
+    if first_start_frame != 0:
+        errors.append(f"First scene does not start at frame 0 (starts at frame {first_start_frame})")
 
-    # First scene must start at frame 0
-    first_sc = scenes[0]
-    first_start = getattr(first_sc, "start_frame", None)
-    if first_start is None:
-        first_start = round((getattr(first_sc, "start", 0.0) or 0.0) * fps)
+    prev_end_frame = first_start_frame
+    for idx, cue in enumerate(sorted_cues):
+        if hasattr(cue, "start_frame") and cue.start_frame is not None:
+            curr_start_frame = cue.start_frame
+            curr_end_frame = (
+                cue.end_frame
+                if cue.end_frame is not None
+                else (curr_start_frame + getattr(cue, "duration_frames", 1))
+            )
+        else:
+            c_start = getattr(cue, "start", None)
+            c_end = getattr(cue, "end", None)
+            if c_start is not None:
+                curr_start_frame = round(c_start * fps)
+            else:
+                curr_start_frame = prev_end_frame
 
-    if first_start != 0:
-        s_id = getattr(first_sc, "scene_id", getattr(first_sc, "id", "first"))
-        errors.append(f"First scene {s_id} does not start at frame 0 (starts at frame {first_start})")
-
-    # Contiguity check across adjacent scenes
-    total_frames = 0
-    for i in range(len(scenes)):
-        curr_sc = scenes[i]
-        curr_id = getattr(curr_sc, "scene_id", getattr(curr_sc, "id", f"S{i+1:03d}"))
-        curr_start = getattr(curr_sc, "start_frame", None)
-        if curr_start is None:
-            curr_start = round((getattr(curr_sc, "start", 0.0) or 0.0) * fps)
-        curr_end = getattr(curr_sc, "end_frame", None)
-        if curr_end is None:
-            curr_end = round((getattr(curr_sc, "end", 0.0) or 0.0) * fps)
-        curr_dur = getattr(curr_sc, "duration_frames", None)
-        if curr_dur is None:
-            curr_dur = curr_end - curr_start
-
-        if curr_dur < 1:
-            errors.append(f"Scene {curr_id} has invalid duration of {curr_dur} frames (must be >= 1)")
-
-        if curr_end - curr_start != curr_dur:
-            errors.append(f"Scene {curr_id} duration_frames ({curr_dur}) does not match end_frame - start_frame ({curr_end - curr_start})")
-
-        total_frames += curr_dur
-
-        if i < len(scenes) - 1:
-            next_sc = scenes[i + 1]
-            next_id = getattr(next_sc, "scene_id", getattr(next_sc, "id", f"S{i+2:03d}"))
-            next_start = getattr(next_sc, "start_frame", None)
-            if next_start is None:
-                next_start = round((getattr(next_sc, "start", 0.0) or 0.0) * fps)
-
-            if curr_end != next_start:
-                if next_start > curr_end:
-                    gap = next_start - curr_end
-                    errors.append(
-                        f"Timeline gap of {gap} frames between scene {curr_id} (ends at frame {curr_end}) and scene {next_id} (starts at frame {next_start})"
-                    )
+            if c_end is not None:
+                curr_end_frame = round(c_end * fps)
+            else:
+                dur_f = getattr(cue, "duration_frames", None)
+                if dur_f is not None:
+                    curr_end_frame = curr_start_frame + dur_f
                 else:
-                    overlap = curr_end - next_start
-                    errors.append(
-                        f"Timeline overlap of {overlap} frames between scene {curr_id} (ends at frame {curr_end}) and scene {next_id} (starts at frame {next_start})"
-                    )
+                    curr_end_frame = curr_start_frame + round(1.0 * fps)
 
-    # Check last scene end frame and total duration match
-    if expected_duration_frames is not None and expected_duration_frames > 0:
-        last_sc = scenes[-1]
-        last_id = getattr(last_sc, "scene_id", getattr(last_sc, "id", "last"))
-        last_end = getattr(last_sc, "end_frame", None)
-        if last_end is None:
-            last_end = round((getattr(last_sc, "end", 0.0) or 0.0) * fps)
+        cue_id = getattr(cue, "scene_id", getattr(cue, "id", f"scene_{idx+1}"))
+        prev_id = getattr(sorted_cues[idx - 1], "scene_id", getattr(sorted_cues[idx - 1], "id", f"scene_{idx}"))
 
-        if last_end != expected_duration_frames:
+        if idx > 0 and curr_start_frame != prev_end_frame:
             errors.append(
-                f"Last scene {last_id} ends at frame {last_end}, expected timeline end frame {expected_duration_frames}"
+                f"Gap or overlap between scene {prev_id} (end frame {prev_end_frame}) and scene {cue_id} (start frame {curr_start_frame})"
             )
 
-        if total_frames != expected_duration_frames:
-            missing = expected_duration_frames - total_frames
-            if missing > 0:
-                errors.append(
-                    f"Editor scene timeline contains {missing} uncovered frames (scene frames sum to {total_frames}, expected {expected_duration_frames})"
-                )
-            else:
-                errors.append(
-                    f"Editor scene timeline contains {-missing} excess frames (scene frames sum to {total_frames}, expected {expected_duration_frames})"
-                )
+        if curr_end_frame <= curr_start_frame:
+            errors.append(f"Scene {cue_id} has non-positive frame duration ({curr_start_frame}..{curr_end_frame})")
 
-    return (len(errors) == 0, errors)
+        prev_end_frame = curr_end_frame
+
+    last_end_frame = prev_end_frame
+    total_scene_frames = sum(
+        (
+            cue.duration_frames
+            if hasattr(cue, "duration_frames") and cue.duration_frames is not None
+            else (
+                round((cue.end - cue.start) * fps)
+                if getattr(cue, "start", None) is not None and getattr(cue, "end", None) is not None
+                else 0
+            )
+        )
+        for cue in sorted_cues
+    )
+    if total_scene_frames != expected_duration_frames:
+        uncovered = expected_duration_frames - total_scene_frames
+        errors.append(
+            f"Timeline coverage mismatch: {total_scene_frames} scene frames vs {expected_duration_frames} expected ({uncovered} uncovered frames)"
+        )
+    elif last_end_frame != expected_duration_frames:
+        uncovered = expected_duration_frames - last_end_frame
+        errors.append(
+            f"Timeline coverage mismatch: {last_end_frame} scene frames vs {expected_duration_frames} expected ({uncovered} uncovered frames)"
+        )
+
+    return len(errors) == 0, errors
 
 
 def plan_visuals(
@@ -838,50 +771,119 @@ def plan_visuals(
     total_duration_seconds: float | None = None,
     total_duration_frames: int | None = None,
 ) -> list[VisualCue]:
+    """Autonomous Visual Director planner with independent per-cue validation and targeted repair."""
     response_fn = response_fn or llm.generate_response
     planned: list[VisualCue] = []
-    # Pre-compute index positions for O(1) adjacency lookup
     timeline_index_by_id = {cue.id: idx for idx, cue in enumerate(timeline_cues)}
+
     for start in range(0, len(timeline_cues), batch_size):
         batch = timeline_cues[start : start + batch_size]
         previous = planned[-3:]
-        decisions: list[PlannerDecision] | None = None
-        error = None
-        for _attempt in range(REPAIR_ATTEMPTS + 1):
+
+        valid_decisions: dict[str, VisualCue] = {}
+        invalid_cues: dict[str, tuple[TimelineCue, PlannerDecision | None, str]] = {}
+
+        # 1. Initial Batch Call
+        raw_response: PlannerBatch | None = None
+        batch_parse_error = None
+        for _batch_attempt in range(2):
             try:
-                parsed = _parse_batch_response(
-                    response_fn(_build_prompt(project, batch, previous, error))
-                )
-                expected = {(cue.id, cue.order) for cue in batch}
-                actual = {(cue.id, cue.order) for cue in parsed.cues}
-                if actual != expected or len(parsed.cues) != len(batch):
-                    raise PlannerError(
-                        "planner must return exactly one decision per requested cue"
-                    )
-                # Build decisions with LOCAL grounding context per cue.
-                # Context is limited to current + immediately adjacent cues only.
-                # The full project script is NOT included to prevent values from
-                # distant scenes being treated as valid grounding here.
-                cue_by_id = {cue.id: cue for cue in batch}
-                decisions = [
-                    _canonical_visual(
-                        decision,
-                        cue_by_id[decision.id],
-                        _build_local_context(
-                            timeline_cues,
-                            timeline_index_by_id[decision.id],
-                            visual_group_id=decision.visual_group_id,
-                            all_decisions=parsed.cues,
-                        ),
-                    )
-                    for decision in parsed.cues
-                ]
+                raw_text = response_fn(_build_prompt(project, batch, previous, batch_parse_error))
+                raw_response = _parse_batch_response(raw_text)
                 break
-            except (ValueError, TypeError, ValidationError, PlannerError) as exc:
-                error = str(exc)
-        if decisions is None:
-            decisions = [fallback_visual(project, cue) for cue in batch]
-        planned.extend(decisions)
+            except Exception as exc:
+                batch_parse_error = str(exc)
+
+        # 2. Per-Cue Independent Validation
+        if raw_response and raw_response.cues:
+            decision_by_id = {d.id: d for d in raw_response.cues}
+            for cue in batch:
+                dec = decision_by_id.get(cue.id)
+                if not dec:
+                    invalid_cues[cue.id] = (cue, None, "Missing decision in planner response")
+                    continue
+                try:
+                    local_ctx = _build_local_context(
+                        timeline_cues,
+                        timeline_index_by_id[cue.id],
+                        visual_group_id=dec.visual_group_id,
+                        all_decisions=raw_response.cues,
+                    )
+                    vis = _canonical_visual(dec, cue, local_ctx)
+                    valid_decisions[cue.id] = vis
+                except (ValueError, TypeError, ValidationError, PlannerError) as exc:
+                    invalid_cues[cue.id] = (cue, dec, str(exc))
+        else:
+            for cue in batch:
+                invalid_cues[cue.id] = (cue, None, batch_parse_error or "Batch JSON parse failure")
+
+        # 3. Targeted Per-Cue Repair Loop (only for invalid cues)
+        for _repair_attempt in range(REPAIR_ATTEMPTS):
+            if not invalid_cues:
+                break
+
+            repair_items = [
+                {
+                    "id": cue.id,
+                    "order": cue.order,
+                    "narration": cue.narration,
+                    "previous_invalid_payload": dec.payload if dec else None,
+                    "error": err,
+                }
+                for cue, dec, err in invalid_cues.values()
+            ]
+
+            try:
+                repair_text = response_fn(_build_cue_repair_prompt(project, repair_items))
+                repaired_batch = _parse_batch_response(repair_text)
+                repaired_decision_by_id = {d.id: d for d in repaired_batch.cues}
+
+                still_invalid: dict[str, tuple[TimelineCue, PlannerDecision | None, str]] = {}
+                for cid, (cue, prev_dec, _) in list(invalid_cues.items()):
+                    rep_dec = repaired_decision_by_id.get(cid)
+                    if not rep_dec:
+                        still_invalid[cid] = (cue, prev_dec, "Missing decision in repair response")
+                        continue
+                    try:
+                        local_ctx = _build_local_context(
+                            timeline_cues,
+                            timeline_index_by_id[cid],
+                            visual_group_id=rep_dec.visual_group_id,
+                            all_decisions=repaired_batch.cues,
+                        )
+                        vis = _canonical_visual(rep_dec, cue, local_ctx)
+                        valid_decisions[cid] = vis
+                    except (ValueError, TypeError, ValidationError, PlannerError) as exc:
+                        still_invalid[cid] = (cue, rep_dec, str(exc))
+
+                invalid_cues = still_invalid
+            except Exception as repair_exc:
+                logger.warning(f"Repair attempt failed: {repair_exc}")
+                break
+
+        # 4. Fallback ONLY for remaining invalid cues
+        batch_decisions: list[VisualCue] = []
+        for cue in batch:
+            if cue.id in valid_decisions:
+                batch_decisions.append(valid_decisions[cue.id])
+            else:
+                fb = fallback_visual(project, cue)
+                batch_decisions.append(fb)
+
+        planned.extend(batch_decisions)
+
+    # 5. Post-Plan Semantic Opportunity Audit
+    for idx, cue in enumerate(planned):
+        if cue.visual_type == VisualType.broll:
+            t_cue = timeline_cues[timeline_index_by_id[cue.id]]
+            facts = extract_canonical_numeric_facts(t_cue.narration)
+            t_lower = t_cue.narration.lower()
+            if len(facts) >= 2 or (len(facts) >= 1 and any(w in t_lower for w in ("cost", "deductible", "limit", "coverage", "repair", "percent", "dollar"))):
+                fb_data = fallback_visual(project, t_cue)
+                if fb_data.visual_type == VisualType.data:
+                    logger.info(f"Post-plan semantic audit upgraded cue {cue.id} from generic BROLL to structured DATA ({fb_data.payload.get('template')})")
+                    planned[idx] = fb_data
+
     diverse = _apply_diversity(project, timeline_cues, planned)
     fps = project.project.fps or 30
     return normalize_visual_cue_boundaries(

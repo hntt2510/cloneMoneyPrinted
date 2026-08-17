@@ -217,9 +217,13 @@ def _render_text_fallback_scene(
     cue: VisualCue,
     project: ProjectSpec,
     task_dir: Path,
-    existing_doc_job: RenderJob | None = None,
+    fallback_from: str = "document",
+    fallback_reason: str = "optional evidence unavailable",
+    existing_job_id: str | None = None,
+    existing_job_status: str | None = None,
+    original_error: str | None = None,
 ) -> tuple[RenderJob, RenderedMotionAsset | None, str | None]:
-    """Deterministically render G06 TEXT motion fallback for an optional DOCUMENT cue."""
+    """Deterministically render Remotion TEXT motion fallback for a failed or optional cue."""
     motion_dir = task_dir / "motion"
     motion_dir.mkdir(parents=True, exist_ok=True)
 
@@ -227,10 +231,12 @@ def _render_text_fallback_scene(
     highlight_target = payload.get("highlight_target")
     if highlight_target and str(highlight_target).strip():
         headline = " ".join(str(highlight_target).strip().split())
+    elif payload.get("search_query") and str(payload.get("search_query")).strip() and fallback_from == "broll":
+        headline = " ".join(str(payload.get("search_query")).strip().split())
     elif cue.narration and cue.narration.strip():
         headline = " ".join(cue.narration.strip().split())
     else:
-        headline = "Key Evidence"
+        headline = "Key Point"
 
     headline = headline[:100].strip()
 
@@ -250,19 +256,25 @@ def _render_text_fallback_scene(
         payload={"headline": headline, "subheadline": None},
     )
 
-    doc_job_id = existing_doc_job.id if existing_doc_job else None
-    doc_job_status = (
-        existing_doc_job.status.value
-        if (existing_doc_job and hasattr(existing_doc_job.status, "value"))
-        else (str(existing_doc_job.status) if existing_doc_job else None)
-    )
-    doc_job_err = sanitize_error_message(existing_doc_job.error) if existing_doc_job else None
-
     fallback_job_id = f"RF{cue.order:03d}"
 
     try:
         scene_spec = normalize_motion_spec(fallback_cue, project)
         rendered_asset = render_scene_motion(scene_spec, task_directory=task_dir)
+        ready_meta: dict[str, Any] = {
+            "fallback_from": fallback_from,
+            "fallback_reason": fallback_reason,
+            "original_job_id": existing_job_id,
+            "original_job_status": existing_job_status,
+            "original_error": original_error,
+            "spec_fingerprint": rendered_asset.metadata.get("spec_fingerprint"),
+            "status_history": ["planned", "processing", "ready"],
+        }
+        if fallback_from == "document":
+            ready_meta["original_document_render_job_id"] = existing_job_id
+            ready_meta["original_document_render_job_status"] = existing_job_status
+            ready_meta["original_document_error"] = original_error
+
         render_job = RenderJob(
             id=fallback_job_id,
             scene_id=cue.id,
@@ -270,34 +282,32 @@ def _render_text_fallback_scene(
             status=JobStatus.ready,
             output=rendered_asset.output_file,
             duration=rendered_asset.duration_frames / float(rendered_asset.fps),
-            metadata={
-                "fallback_from": "document",
-                "fallback_reason": "optional evidence unavailable",
-                "original_document_render_job_id": doc_job_id,
-                "original_document_render_job_status": doc_job_status,
-                "original_document_error": doc_job_err,
-                "spec_fingerprint": rendered_asset.metadata.get("spec_fingerprint"),
-                "status_history": ["planned", "processing", "ready"],
-            },
+            metadata=ready_meta,
         )
         return render_job, rendered_asset, None
     except Exception as exc:
         err_msg = f"TEXT fallback rendering failed for scene {cue.id}: {exc}"
         logger.error(err_msg)
+        fail_meta: dict[str, Any] = {
+            "fallback_from": fallback_from,
+            "fallback_reason": fallback_reason,
+            "original_job_id": existing_job_id,
+            "original_job_status": existing_job_status,
+            "original_error": original_error,
+            "status_history": ["planned", "processing", "failed"],
+        }
+        if fallback_from == "document":
+            fail_meta["original_document_render_job_id"] = existing_job_id
+            fail_meta["original_document_render_job_status"] = existing_job_status
+            fail_meta["original_document_error"] = original_error
+
         render_job = RenderJob(
             id=fallback_job_id,
             scene_id=cue.id,
             kind="text_fallback",
             status=JobStatus.failed,
             error=err_msg,
-            metadata={
-                "fallback_from": "document",
-                "fallback_reason": "optional evidence unavailable",
-                "original_document_render_job_id": doc_job_id,
-                "original_document_render_job_status": doc_job_status,
-                "original_document_error": doc_job_err,
-                "status_history": ["planned", "processing", "failed"],
-            },
+            metadata=fail_meta,
         )
         return render_job, None, err_msg
 
@@ -975,10 +985,23 @@ def run_all_project(
 
                 if not has_valid_evidence:
                     logger.info(f"Rendering TEXT fallback for optional DOCUMENT scene {cue.id}")
-                    fb_job, fb_asset, fb_err = _render_text_fallback_scene(
-                        cue, working_project, task_dir, existing_doc_job=existing_doc_job
+                    doc_id = existing_doc_job.id if existing_doc_job else None
+                    doc_st = (
+                        existing_doc_job.status.value
+                        if (existing_doc_job and hasattr(existing_doc_job.status, "value"))
+                        else (str(existing_doc_job.status) if existing_doc_job else None)
                     )
-                    # Preserve original DOCUMENT RenderJob and append fallback RenderJob
+                    doc_err = sanitize_error_message(existing_doc_job.error) if existing_doc_job else None
+                    fb_job, fb_asset, fb_err = _render_text_fallback_scene(
+                        cue=cue,
+                        project=working_project,
+                        task_dir=task_dir,
+                        fallback_from="document",
+                        fallback_reason="optional evidence unavailable",
+                        existing_job_id=doc_id,
+                        existing_job_status=doc_st,
+                        original_error=doc_err,
+                    )
                     working_project.render_jobs = [
                         j for j in working_project.render_jobs if j.id != fb_job.id
                     ] + [fb_job]
@@ -987,6 +1010,50 @@ def run_all_project(
                         fallback_ready_count += 1
                     else:
                         fallback_failed_count += 1
+
+        elif cue.visual_type == VisualType.broll:
+            existing_broll_job = next(
+                (j for j in working_project.asset_jobs if j.scene_id == cue.id),
+                None,
+            )
+            has_valid_broll = (
+                existing_broll_job is not None
+                and existing_broll_job.status == JobStatus.ready
+                and existing_broll_job.output
+                and Path(existing_broll_job.output).exists()
+            )
+
+            if not has_valid_broll:
+                logger.info(f"Rendering TEXT fallback for failed/rejected BROLL scene {cue.id}")
+                broll_id = existing_broll_job.id if existing_broll_job else None
+                broll_st = (
+                    existing_broll_job.status.value
+                    if (existing_broll_job and hasattr(existing_broll_job.status, "value"))
+                    else (str(existing_broll_job.status) if existing_broll_job else None)
+                )
+                broll_err = sanitize_error_message(existing_broll_job.error) if existing_broll_job else "B-roll acquisition failed"
+                fb_reason = "all_candidates_failed"
+                if existing_broll_job and existing_broll_job.metadata and existing_broll_job.metadata.get("semantic_confidence") == "LOW":
+                    fb_reason = "low_semantic_confidence"
+
+                fb_job, fb_asset, fb_err = _render_text_fallback_scene(
+                    cue=cue,
+                    project=working_project,
+                    task_dir=task_dir,
+                    fallback_from="broll",
+                    fallback_reason=fb_reason,
+                    existing_job_id=broll_id,
+                    existing_job_status=broll_st,
+                    original_error=broll_err,
+                )
+                working_project.render_jobs = [
+                    j for j in working_project.render_jobs if j.id != fb_job.id
+                ] + [fb_job]
+
+                if fb_job.status == JobStatus.ready:
+                    fallback_ready_count += 1
+                else:
+                    fallback_failed_count += 1
 
     stages_records.append(
         StageExecutionRecord(
@@ -1042,12 +1109,22 @@ def run_all_project(
         scene_error = None
 
         if cue.visual_type == VisualType.broll:
-            source_stage = "broll"
-            broll_job = next((j for j in working_project.asset_jobs if j.scene_id == cue.id), None)
-            if broll_job:
-                asset_job_id = broll_job.id
-                if broll_job.status == JobStatus.ready and broll_job.output:
-                    output_file = broll_job.output
+            resolved_job = resolve_final_render_job(cue.id, working_project.render_jobs)
+            if resolved_job and resolved_job.kind == "text_fallback":
+                source_stage = "fallback"
+                resolved_type = VisualType.text
+                fallback_from = VisualType.broll
+                fallback_reason = resolved_job.metadata.get("fallback_reason", "all_candidates_failed")
+                render_job_id = resolved_job.id
+                if resolved_job.status == JobStatus.ready and resolved_job.output:
+                    output_file = resolved_job.output
+            else:
+                source_stage = "broll"
+                broll_job = next((j for j in working_project.asset_jobs if j.scene_id == cue.id), None)
+                if broll_job:
+                    asset_job_id = broll_job.id
+                    if broll_job.status == JobStatus.ready and broll_job.output:
+                        output_file = broll_job.output
 
         elif cue.visual_type in (VisualType.data, VisualType.text):
             source_stage = "motion"
