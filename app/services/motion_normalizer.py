@@ -182,6 +182,12 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
 
     elif requested_template == "comparison":
         raw_items = data.get("items") or data.get("options") or data.get("comparison")
+        if not raw_items and isinstance(data.get("values"), list) and len(data["values"]) >= 2:
+            raw_items = [
+                {"label": f"Option {i + 1}" if not isinstance(v, dict) else v.get("label", f"Option {i+1}"),
+                 "value": v if not isinstance(v, dict) else v.get("value", "")}
+                for i, v in enumerate(data["values"])
+            ]
         items: list[ComparisonItem] = []
         if isinstance(raw_items, list) and len(raw_items) >= 2:
             for it in raw_items:
@@ -206,6 +212,11 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
 
     elif requested_template == "timeline":
         raw_milestones = data.get("milestones") or data.get("events") or data.get("timeline")
+        if not raw_milestones and isinstance(data.get("values"), list) and len(data["values"]) >= 2:
+            raw_milestones = [
+                {"time_label": f"Step {i + 1}", "title": str(v)}
+                for i, v in enumerate(data["values"])
+            ]
         milestones: list[TimelineItem] = []
         if isinstance(raw_milestones, list) and len(raw_milestones) >= 2:
             for m in raw_milestones:
@@ -230,6 +241,12 @@ def normalize_motion_spec(cue: VisualCue, project: ProjectSpec) -> MotionSceneSp
 
     elif requested_template == "bar_chart":
         raw_items = data.get("items") or data.get("bars") or data.get("series")
+        if not raw_items and isinstance(data.get("values"), list) and len(data["values"]) >= 2:
+            raw_items = [
+                {"label": f"Item {i + 1}" if not isinstance(v, dict) else v.get("label", f"Item {i+1}"),
+                 "value": v if not isinstance(v, dict) else v.get("value", 0)}
+                for i, v in enumerate(data["values"])
+            ]
         bar_items: list[BarChartItem] = []
         if isinstance(raw_items, list) and len(raw_items) >= 2:
             for it in raw_items:

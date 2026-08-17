@@ -177,6 +177,18 @@ class ProjectStatus(str, Enum):
     failed = "failed"
 
 
+class BrollSemanticIntent(ProjectModel):
+    subject: str = ""
+    action: str = ""
+    object: str = ""
+    setting: str = ""
+    outcome: str = ""
+    must_show_concepts: list[str] = Field(default_factory=list)
+    preferred_visuals: list[str] = Field(default_factory=list)
+    acceptable_alternatives: list[str] = Field(default_factory=list)
+    reject_visuals: list[str] = Field(default_factory=list)
+
+
 class BrollPayload(ProjectModel):
     search_query: str
     fallback_queries: list[str] = Field(default_factory=list)
@@ -184,6 +196,8 @@ class BrollPayload(ProjectModel):
     source_priority: list[Literal["pexels", "pixabay", "coverr"]] = Field(
         default_factory=lambda: ["pexels", "pixabay", "coverr"]
     )
+    semantic_intent: BrollSemanticIntent | None = None
+    query_tiers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("search_query")
     @classmethod

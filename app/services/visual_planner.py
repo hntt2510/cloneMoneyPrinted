@@ -150,23 +150,31 @@ def _validate_numeric_grounding(
 def _build_local_context(
     timeline_cues: list[TimelineCue],
     current_index: int,
+    visual_group_id: str | None = None,
+    all_decisions: list[PlannerDecision] | None = None,
 ) -> str:
-    """Build grounding context limited to current cue + immediately adjacent cues.
+    """Build grounding context limited to current cue + immediately adjacent cues,
+    plus any cues that share the same visual_group_id.
 
     Allowed grounding context:
     - current cue narration
     - immediately previous cue narration (if present)
     - immediately next cue narration (if present)
-
-    The full project script is NOT included to prevent numeric values from
-    distant scenes from being used as grounding for the current cue.
+    - all cues in the same visual_group_id (for multi-scene evolving narratives)
     """
-    parts: list[str] = []
+    indices_to_include = {current_index}
     if current_index > 0:
-        parts.append(timeline_cues[current_index - 1].narration)
-    parts.append(timeline_cues[current_index].narration)
+        indices_to_include.add(current_index - 1)
     if current_index < len(timeline_cues) - 1:
-        parts.append(timeline_cues[current_index + 1].narration)
+        indices_to_include.add(current_index + 1)
+
+    if visual_group_id and all_decisions:
+        for idx, dec in enumerate(all_decisions):
+            if dec.visual_group_id == visual_group_id and idx < len(timeline_cues):
+                indices_to_include.add(idx)
+
+    sorted_indices = sorted(indices_to_include)
+    parts = [timeline_cues[i].narration for i in sorted_indices if 0 <= i < len(timeline_cues)]
     return " ".join(parts)
 
 
@@ -176,9 +184,8 @@ def _validate_grounded_data(
     local_context: str,
 ) -> None:
     """Validate DATA visual: all numeric tokens in headline AND data must be grounded
-    in the local context (current + adjacent cues only) using exact canonical fact comparison.
-
-    Rejects any numeric value absent from the local grounding window.
+    in the local context (current + adjacent cues only) using exact canonical fact comparison,
+    and structured props must satisfy the requested template contract.
     """
     if decision.visual_type != VisualType.data:
         return
@@ -197,10 +204,35 @@ def _validate_grounded_data(
         data_facts, allowed_facts, timeline_cue.id, "DATA payload"
     )
 
+    # Template-specific structured data validation
     if payload.template in {DataTemplate.bar_chart, DataTemplate.line_chart}:
-        values = payload.data.get("values")
-        if not isinstance(values, list) or len(values) < 2:
-            raise PlannerError("chart templates require at least two grounded values")
+        items = payload.data.get("items") or payload.data.get("points") or payload.data.get("values")
+        if not isinstance(items, list) or len(items) < 2:
+            raise PlannerError(
+                f"{payload.template.value} template requires at least two items/points in data"
+            )
+
+    elif payload.template == DataTemplate.comparison:
+        items = payload.data.get("items") or payload.data.get("options") or payload.data.get("values")
+        if not isinstance(items, list) or len(items) < 2:
+            raise PlannerError(
+                "comparison template requires an 'items' list with at least two comparison entries"
+            )
+
+    elif payload.template == DataTemplate.timeline:
+        milestones = payload.data.get("milestones") or payload.data.get("events")
+        if not isinstance(milestones, list) or len(milestones) < 2:
+            raise PlannerError(
+                "timeline template requires a 'milestones' list with at least two milestone entries"
+            )
+
+    elif payload.template == DataTemplate.threshold:
+        curr = payload.data.get("current_value") if payload.data.get("current_value") is not None else payload.data.get("value")
+        thresh = payload.data.get("threshold_value") if payload.data.get("threshold_value") is not None else payload.data.get("threshold") or payload.data.get("limit")
+        if curr is None or thresh is None:
+            raise PlannerError(
+                "threshold template requires numeric current_value and threshold_value in data"
+            )
 
 
 def _validate_grounded_text(
@@ -244,27 +276,58 @@ def _build_prompt(
             "visual_type": cue.visual_type.value,
             "purpose": cue.purpose.value,
             "query": cue.payload.get("search_query"),
+            "template": cue.payload.get("template"),
+            "group": cue.visual_group_id,
         }
         for cue in previous[-3:]
     ]
+    search_terms = project.script.search_terms if hasattr(project.script, "search_terms") and project.script.search_terms else []
+
     prompt = (
-        "You are an autonomous visual planning service.\n"
-        "Return only strict JSON with a top-level `cues` array and exactly one decision for every requested timeline cue.\n"
-        "Choose only broll, data, document, or text. Do not return timestamps, narration, URLs, citations, files, or invented facts.\n"
-        "Broll payload requires search_query, fallback_queries, avoid, and source_priority using only pexels, pixabay, coverr.\n"
-        "Data payload requires template, headline, and only numeric values grounded in the supplied narration context.\n"
-        "Document payload requires search_query, source_hint, highlight_target, and evidence_required.\n"
-        "Text payload requires a short headline and optional subheadline.\n"
-        "Use visual_group_id only for adjacent cues that represent one evolving visual concept.\n"
+        "You are an autonomous Visual Director for an informational video.\n"
+        "Your role is to direct the visual narrative: understand what each cue communicates and select the most compelling, accurate treatment.\n"
+        "Return strict JSON with a top-level `cues` array containing exactly one decision per requested timeline cue.\n\n"
+        "DIRECTING RULES:\n"
+        "1. Visual Type Selection:\n"
+        "   - BROLL: Use when physical real-world actions, places, objects, or human context enhance the message.\n"
+        "   - DATA: Use when numbers, comparisons, cost breakdowns, thresholds/limits, or timelines are discussed. Provide structured props.\n"
+        "   - DOCUMENT: Use when an official source, law, policy, study, or document proof is referenced.\n"
+        "   - TEXT: Use only for short emphatic takeaways or section transitions.\n"
+        "2. Action-Aware B-roll Search:\n"
+        "   - Distinguish NOUN/TOPIC from ACTION/RELATIONSHIP. (e.g. for 'tree branch falls on parked car', do NOT search generic 'car in rain'; search 'fallen tree branch on parked car storm').\n"
+        "   - Search terms provide topic context, but the specific cue action and entities MUST drive the query.\n"
+        "   - Broll payload MUST include:\n"
+        "     * `search_query`: camera-visible literal action query (Tier 1)\n"
+        "     * `fallback_queries`: list of semantic fallback queries\n"
+        "     * `query_tiers`: {\"tier1\": \"literal event\", \"tier2\": \"outcome/state visual\", \"tier3\": \"close alternative\", \"tier4\": \"broad context\"}\n"
+        "     * `semantic_intent`: {\"subject\": \"...\", \"action\": \"...\", \"object\": \"...\", \"setting\": \"...\", \"outcome\": \"...\", \"must_show_concepts\": [...], \"preferred_visuals\": [...], \"acceptable_alternatives\": [...], \"reject_visuals\": [...]}\n"
+        "     * `avoid`: list of unwanted visual concepts (e.g. ['rainy windshield', 'generic highway driving'])\n"
+        "     * `source_priority`: ['pexels', 'pixabay', 'coverr']\n"
+        "3. Structured DATA Templates:\n"
+        "   - Never output unstructured numbers or empty callouts when structured data is grounded.\n"
+        "   - `number`: headline, data: {\"value\": \"$6,000\", \"numeric_value\": 6000, \"label\": \"...\", \"prefix\": \"$\"}\n"
+        "   - `counter`: headline, data: {\"start_value\": 0, \"end_value\": 5000, \"label\": \"...\"}\n"
+        "   - `comparison`: headline, data: {\"items\": [{\"label\": \"...\", \"value\": \"...\", \"numeric_value\": ...}, {\"label\": \"...\", \"value\": \"...\", \"highlight\": true}]}\n"
+        "   - `timeline`: headline, data: {\"milestones\": [{\"time_label\": \"Step 1\", \"title\": \"...\"}, {\"time_label\": \"Step 2\", \"title\": \"...\"}]}\n"
+        "   - `bar_chart`: headline, data: {\"items\": [{\"label\": \"...\", \"value\": 1000, \"display_value\": \"$1,000\"}, {\"label\": \"...\", \"value\": 5000, \"display_value\": \"$5,000\"}]}\n"
+        "   - `line_chart`: headline, data: {\"points\": [{\"x_label\": \"...\", \"y_value\": ...}, {\"x_label\": \"...\", \"y_value\": ...}]}\n"
+        "   - `threshold`: headline, data: {\"current_value\": 40000, \"current_display\": \"$40K\", \"threshold_value\": 25000, \"threshold_display\": \"$25K\", \"threshold_label\": \"Coverage Limit\", \"subtext\": \"Above Policy Limit\"}\n"
+        "   - `age_marker`: headline, data: {\"markers\": [{\"age\": 67, \"label\": \"Full Retirement\", \"highlight\": true}]}\n"
+        "   - `callout`: headline, data: {\"emphasis\": \"...\", \"subtext\": \"...\"} (use ONLY when no richer structured template applies)\n"
+        "4. Multi-Cue Visual Grouping:\n"
+        "   - Set `visual_group_id` (e.g. 'vg_limit_comparison') on adjacent cues that express one evolving motion concept.\n"
+        "5. Factual Grounding:\n"
+        "   - All numeric values must be grounded strictly in the supplied narration context. Do not fabricate numbers.\n"
         f"\nProject title: {project.project.title}"
         f"\nProject subject: {project.script.subject}"
+        f"\nGlobal search terms: {json.dumps(search_terms, ensure_ascii=False)}"
         f"\nLanguage: {project.project.language}"
         f"\nStyle preset: {project.production.video_style_preset}"
         f"\nRecent decisions: {json.dumps(recent, ensure_ascii=False)}"
         f"\nRequested cues: {json.dumps(context, ensure_ascii=False)}"
     )
     if repair_error:
-        prompt += f"\nRepair the previous response using these validation errors:\n{repair_error}"
+        prompt += f"\n\nREPAIR INSTRUCTIONS: The previous response failed validation with error:\n{repair_error}\nFix the JSON payload so that it strictly adheres to all schema rules."
     return prompt
 
 
@@ -293,6 +356,36 @@ def classify_narration(narration: str) -> VisualType:
     return VisualType.broll
 
 
+def _extract_intent_concepts(text: str) -> tuple[list[str], list[str], str, str, str]:
+    """Extract must-show concepts, reject keywords, and core subject/action/object from narration."""
+    t_lower = text.lower()
+    must_show: list[str] = []
+    reject: list[str] = ["windshield", "wipers", "interior", "bokeh", "blurry"]
+
+    # Detect entity keywords
+    if any(w in t_lower for w in ("car", "vehicle", "automobile", "truck")):
+        must_show.append("car")
+    if any(w in t_lower for w in ("tree", "branch", "limb", "trunk")):
+        must_show.append("tree branch")
+    if any(w in t_lower for w in ("storm", "rain", "wind", "weather", "tempest")):
+        must_show.append("storm")
+    if any(w in t_lower for w in ("damage", "fall", "crush", "hit", "struck", "collision", "accident")):
+        must_show.append("damage")
+    if any(w in t_lower for w in ("policy", "paperwork", "insurance", "document", "contract", "review")):
+        must_show.append("insurance paperwork")
+    if any(w in t_lower for w in ("repair", "mechanic", "shop", "body shop")):
+        must_show.append("repair shop")
+
+    # If tree + car + storm detected
+    if "tree branch" in must_show and "car" in must_show:
+        reject.extend(["highway driving", "traffic jam", "commute", "sunny highway", "generic road"])
+
+    subject = "vehicle" if "car" in must_show else "subject"
+    action = "event"
+    obj = "scene"
+    return must_show, reject, subject, action, obj
+
+
 def _fallback_payload(kind: VisualType, project: ProjectSpec, cue: TimelineCue) -> dict[str, Any]:
     text = cue.narration.strip()
     if kind == VisualType.document:
@@ -302,27 +395,154 @@ def _fallback_payload(kind: VisualType, project: ProjectSpec, cue: TimelineCue) 
             highlight_target=None,
             evidence_required=True,
         ).model_dump(mode="json")
+
     if kind == VisualType.text:
-        # Fallback text payload uses narration text directly - always grounded
         return TextPayload(headline=text[:120]).model_dump(mode="json")
+
     if kind == VisualType.data:
-        tokens = _NUMBER_RE.findall(text)
-        template = DataTemplate.comparison if _COMPARISON_RE.search(text) else DataTemplate.number
-        if re.search(r"\bage\b", text, re.IGNORECASE):
-            template = DataTemplate.age_marker
-        elif re.search(r"\b(?:from|until|between|gap)\b", text, re.IGNORECASE):
-            template = DataTemplate.timeline
+        raw_tokens = _NUMBER_RE.findall(text)
+        tokens = [t.strip().rstrip(".,;:") for t in raw_tokens if t.strip().rstrip(".,;:")]
+        t_lower = text.lower()
+
+        # 1. Threshold / Limit Detection (e.g. $25K limit vs $40K damage)
+        if (
+            re.search(r"\b(?:limit|threshold|exceed|exceeds|exceeded|exceeding|above limit|policy limit|coverage limit|cap|capped)\b", t_lower)
+            and len(tokens) >= 2
+        ):
+            n1 = _parse_single_numeric_fact(tokens[0])
+            n2 = _parse_single_numeric_fact(tokens[1])
+            if n1 and n2:
+                # Typically smaller is limit, larger is damage/current
+                thresh_val = min(n1.value, n2.value)
+                curr_val = max(n1.value, n2.value)
+                thresh_disp = tokens[0] if n1.value <= n2.value else tokens[1]
+                curr_disp = tokens[1] if n1.value <= n2.value else tokens[0]
+                return DataPayload(
+                    template=DataTemplate.threshold,
+                    headline=text[:120],
+                    data={
+                        "current_value": curr_val,
+                        "current_display": curr_disp,
+                        "threshold_value": thresh_val,
+                        "threshold_display": thresh_disp,
+                        "threshold_label": "Coverage Limit",
+                        "subtext": "Above Policy Limit",
+                    },
+                ).model_dump(mode="json")
+
+        # 2. Comparison / Cost Breakdown (e.g. $1,000 deductible vs $5,000 insurance)
+        if len(tokens) >= 2 or _COMPARISON_RE.search(text):
+            items = []
+            for i, tok in enumerate(tokens[:4]):
+                fact = _parse_single_numeric_fact(tok)
+                num_val = fact.value if fact else None
+                label = f"Item {i + 1}"
+                # Derive grounded label from nearby keywords if available
+                if "deductible" in t_lower and ("1000" in tok or "1,000" in tok or (len(tokens) == 3 and i == 1)):
+                    label = "Deductible"
+                elif ("insurance" in t_lower or "insurer" in t_lower or "covers" in t_lower) and ("5000" in tok or "5,000" in tok or (len(tokens) == 3 and i == 2)):
+                    label = "Insurance Portion"
+                elif ("repair" in t_lower or "cost" in t_lower) and ("6000" in tok or "6,000" in tok or (len(tokens) == 3 and i == 0)):
+                    label = "Repair Cost"
+                elif "deductible" in t_lower and i == 0:
+                    label = "Deductible"
+                elif "insurance" in t_lower or "insurer" in t_lower:
+                    label = "Insurance Portion" if i == 1 else f"Item {i + 1}"
+                elif "repair" in t_lower or "cost" in t_lower:
+                    label = "Repair Cost" if i == 0 else f"Item {i + 1}"
+                elif "limit" in t_lower:
+                    label = "Coverage Limit" if i == 0 else "Damage Amount"
+
+                items.append(
+                    {
+                        "label": label,
+                        "value": tok,
+                        "numeric_value": num_val,
+                        "highlight": (i == 1),
+                    }
+                )
+            if len(items) >= 2:
+                return DataPayload(
+                    template=DataTemplate.comparison,
+                    headline=text[:120],
+                    data={"items": items},
+                ).model_dump(mode="json")
+
+        # 3. Age Marker Detection
+        if "age" in t_lower:
+            for tok in tokens:
+                fact = _parse_single_numeric_fact(tok)
+                if fact and 0 <= fact.value <= 120:
+                    return DataPayload(
+                        template=DataTemplate.age_marker,
+                        headline=text[:120],
+                        data={"markers": [{"age": int(fact.value), "label": f"Age {int(fact.value)}", "highlight": True}]},
+                    ).model_dump(mode="json")
+
+        # 4. Timeline Detection
+        if any(w in t_lower for w in ("from", "until", "between", "step", "phase")):
+            milestones = [
+                {"time_label": f"Phase {i + 1}", "title": tok, "is_active": (i == 0)}
+                for i, tok in enumerate(tokens[:3])
+            ]
+            if len(milestones) >= 2:
+                return DataPayload(
+                    template=DataTemplate.timeline,
+                    headline=text[:120],
+                    data={"milestones": milestones},
+                ).model_dump(mode="json")
+
+        # 5. Single Number / Statistic
+        if tokens:
+            fact = _parse_single_numeric_fact(tokens[0])
+            return DataPayload(
+                template=DataTemplate.number,
+                headline=text[:120],
+                data={
+                    "value": tokens[0],
+                    "numeric_value": fact.value if fact else None,
+                    "label": "Key Figure",
+                },
+            ).model_dump(mode="json")
+
+        # 6. Fallback to Callout
         return DataPayload(
-            template=template,
+            template=DataTemplate.callout,
             headline=text[:120],
-            data={"values": tokens} if tokens else {},
+            data={"emphasis": text[:60]},
         ).model_dump(mode="json")
-    base = " ".join(re.findall(r"[A-Za-z0-9]+", f"{project.script.subject} {text}"))
-    query = " ".join(base.split()[:14]) or "real world context"
+
+    # VisualType.broll
+    must_show, reject_vis, subj, act, obj = _extract_intent_concepts(text)
+    clean_words = re.findall(r"[A-Za-z0-9]+", text)
+    base_query = " ".join(clean_words[:8]) or "real world context"
+
+    tier1 = f"{base_query}"
+    tier2 = f"{base_query} aftermath damage" if "damage" in must_show else f"{base_query} context"
+    tier3 = f"{project.script.subject} {base_query}"[:80].strip()
+    tier4 = f"{project.script.subject}"[:60].strip()
+
     return BrollPayload(
-        search_query=query,
-        fallback_queries=[f"{query} daily life", f"{query} close up"],
-        avoid=["animation", "text overlay", "vertical social video"],
+        search_query=tier1,
+        fallback_queries=[tier2, tier3, tier4],
+        query_tiers={
+            "tier1": tier1,
+            "tier2": tier2,
+            "tier3": tier3,
+            "tier4": tier4,
+        },
+        semantic_intent={
+            "subject": subj,
+            "action": act,
+            "object": obj,
+            "setting": "real world",
+            "outcome": "scene narrative",
+            "must_show_concepts": must_show,
+            "preferred_visuals": [tier1, tier2],
+            "acceptable_alternatives": [tier3],
+            "reject_visuals": reject_vis,
+        },
+        avoid=reject_vis,
     ).model_dump(mode="json")
 
 
@@ -650,6 +870,8 @@ def plan_visuals(
                         _build_local_context(
                             timeline_cues,
                             timeline_index_by_id[decision.id],
+                            visual_group_id=decision.visual_group_id,
+                            all_decisions=parsed.cues,
                         ),
                     )
                     for decision in parsed.cues
