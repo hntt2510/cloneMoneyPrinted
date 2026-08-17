@@ -516,6 +516,7 @@ class ProjectSpec(ProjectModel):
     visual_cues: list[VisualCue] = Field(default_factory=list)
     asset_jobs: list[AssetJob] = Field(default_factory=list)
     render_jobs: list[RenderJob] = Field(default_factory=list)
+    timing_source: str = "estimated"
 
     @model_validator(mode="after")
     def validate_timeline(self) -> ProjectSpec:

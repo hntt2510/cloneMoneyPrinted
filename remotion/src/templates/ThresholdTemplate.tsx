@@ -34,31 +34,47 @@ export const ThresholdTemplate: React.FC<ThresholdProps> = ({
 
   if (isContinuous) {
     animatedCurrentPct = currentPct;
-  } else if (animation_plan?.beats && animation_plan.beats.some(b => b.kind === 'threshold')) {
-    const tBeat = animation_plan.beats.find(b => b.kind === 'threshold')!;
-    const phase1Duration = Math.max(1, tBeat.end_frame - tBeat.start_frame) * 0.5;
-    const phase2Start = tBeat.start_frame + phase1Duration;
-    
+  } else if (animation_plan?.beats && animation_plan.beats.length > 0) {
+    const tBeat = animation_plan.beats.find((b) => b.kind === 'threshold');
+    const numBeat = animation_plan.beats.find((b) => b.kind === 'number' || b.data_ref === 'current_value');
+
+    let p1Start = 0;
+    let p1End = Math.max(15, Math.round(tBeat ? tBeat.end_frame : 25));
+    let p2Start = p1End;
+    let p2End = Math.max(p2Start + 15, Math.round(numBeat ? numBeat.end_frame : 50));
+
+    if (tBeat && numBeat) {
+      p1Start = tBeat.start_frame;
+      p1End = tBeat.end_frame;
+      p2Start = numBeat.start_frame;
+      p2End = numBeat.end_frame;
+    } else if (tBeat) {
+      p1Start = tBeat.start_frame;
+      const span = Math.max(10, tBeat.end_frame - tBeat.start_frame);
+      p1End = tBeat.start_frame + Math.round(span * 0.5);
+      p2Start = p1End;
+      p2End = tBeat.end_frame;
+    }
+
     // Phase 1: 0 to threshold (or current if current < threshold)
     const target1 = Math.min(currentPct, thresholdPct);
-    const p1 = interpolate(frame, [tBeat.start_frame, tBeat.start_frame + phase1Duration], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+    const p1 = interpolate(frame, [p1Start, p1End], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
     const ease1 = spring({ frame: p1 * fps, fps, config: { damping: 14, stiffness: 60 } });
-    
+
     // Phase 2: threshold to current (only if current > threshold)
-    let p2 = 0;
     let ease2 = 0;
     if (currentPct > thresholdPct) {
-      p2 = interpolate(frame, [phase2Start, tBeat.end_frame], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+      const p2 = interpolate(frame, [p2Start, p2End], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
       ease2 = spring({ frame: p2 * fps, fps, config: { damping: 14, stiffness: 60 } });
-      
+
       const pulseSpr = spring({
-        frame: Math.max(0, frame - phase2Start),
+        frame: Math.max(0, frame - p2Start),
         fps,
-        config: { damping: 10, stiffness: 120 }
+        config: { damping: 10, stiffness: 120 },
       });
-      pulseScale = 1 + interpolate(pulseSpr, [0, 1], [0, 0.15]) - interpolate(pulseSpr, [0, 1], [0, 0.15]);
+      pulseScale = interpolate(pulseSpr, [0, 0.5, 1], [1, 1.25, 1]);
     }
-    
+
     animatedCurrentPct = (target1 * ease1) + ((currentPct - target1) * ease2);
   } else {
     const spr = spring({

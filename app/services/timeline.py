@@ -127,6 +127,59 @@ def _match_ratio(seq_a: list[str], seq_b: list[str]) -> float:
     return difflib.SequenceMatcher(None, seq_a, seq_b).ratio()
 
 
+def validate_script_srt_alignment(
+    cues: list[SrtCue],
+    script: str,
+    threshold: float = 0.20,
+) -> float:
+    """Validate that SRT cue text and canonical script are talking about the same subject.
+
+    Rejects gross content mismatches (e.g. car insurance script vs cooking cake SRT).
+    Tolerates minor transcription, punctuation, case, and contraction differences.
+    Returns the calculated alignment confidence score (0.0 to 1.0).
+    Raises TimelineError if alignment confidence is below threshold.
+    """
+    if not script or not script.strip() or not cues:
+        return 1.0
+
+    script_tokens = _normalize_tokens(script)
+    if not script_tokens:
+        return 1.0
+
+    srt_full_text = " ".join(cue.text for cue in cues)
+    srt_tokens = _normalize_tokens(srt_full_text)
+    if not srt_tokens:
+        raise TimelineError("SRT contains no usable text tokens")
+
+    # Token set intersection and sequence ratio
+    script_set = set(script_tokens)
+    srt_set = set(srt_tokens)
+    intersection = script_set & srt_set
+
+    coverage_script = len(intersection) / len(script_set)
+    coverage_srt = len(intersection) / len(srt_set)
+    seq_ratio = _match_ratio(script_tokens, srt_tokens)
+
+    # Combined confidence metric
+    confidence = (coverage_script * 0.4) + (coverage_srt * 0.3) + (seq_ratio * 0.3)
+
+    logger.debug(
+        "Script/SRT alignment validation: coverage_script=%.2f, coverage_srt=%.2f, seq_ratio=%.2f => confidence=%.2f (threshold=%.2f)",
+        coverage_script,
+        coverage_srt,
+        seq_ratio,
+        confidence,
+        threshold,
+    )
+
+    if confidence < threshold:
+        raise TimelineError(
+            "Uploaded SRT narration does not sufficiently match the configured script."
+        )
+
+    return confidence
+
+
 def _canonicalize_narration(cues: list[SrtCue], script: str) -> list[SrtCue]:
     """Align SRT cues to canonical script text using monotonic text-aware matching.
 
@@ -334,6 +387,8 @@ def _validate_audio_bounds(cues: list[SrtCue], duration: float) -> None:
 
 
 def build_timeline_cues(cues: list[SrtCue], script: str) -> list[TimelineCue]:
+    if script and script.strip():
+        validate_script_srt_alignment(cues, script)
     canonical = _canonicalize_narration(cues, script)
     fragments = [fragment for cue in canonical for fragment in _split_long_cue(cue)]
     fragments = _merge_short_cues(fragments)

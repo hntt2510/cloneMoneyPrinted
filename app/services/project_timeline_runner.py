@@ -125,6 +125,7 @@ def run_timeline_plan(
             update={
                 "script": project.script.model_copy(update={"script": script}),
                 "timeline_cues": timeline_cues,
+                "timing_source": timing_source,
             }
         )
         planned_project = type(project).model_validate(
