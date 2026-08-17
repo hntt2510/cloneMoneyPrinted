@@ -70,6 +70,19 @@ def run_timeline_plan(
             audio_file = str(resolve_project_path(source.parent, raw_file))
             if not Path(audio_file).exists():
                 raise ProjectRunError(f"External narration audio file not found: {audio_file}")
+
+            timing_file_raw = project.narration.timing_file
+            if timing_file_raw and str(timing_file_raw).lower().endswith(".srt"):
+                timing_file_resolved = str(resolve_project_path(source.parent, timing_file_raw))
+                from app.services.external_narration_preflight import preflight_external_narration
+                preflight = preflight_external_narration(
+                    audio_path=audio_file,
+                    srt_path=timing_file_resolved,
+                    script=project.script.script,
+                )
+                if not preflight.is_valid:
+                    raise ProjectRunError(f"External narration preflight failed: {'; '.join(preflight.errors)}")
+
             duration = voice.get_audio_duration(audio_file) or 0.0
             if duration <= 0:
                 raise ProjectRunError("External narration audio has zero or invalid duration.")

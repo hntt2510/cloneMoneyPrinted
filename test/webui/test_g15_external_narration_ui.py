@@ -3,11 +3,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app.models.project import NarrationMode, ProjectSpec
+from app.services.external_narration_preflight import ExternalNarrationPreflightResult, TimingQuality
 from app.services.project_builder import build_project_spec_from_ui
-from webui.production import resolve_task_project_path, save_uploaded_file
+from webui.production import render_production_workspace, resolve_task_project_path, save_uploaded_file
 
 
 class DummyUploadedFile:
@@ -90,6 +91,94 @@ class TestG15ExternalNarrationUI(unittest.TestCase):
             self.assertEqual(loaded_spec.narration.mode, NarrationMode.file)
             self.assertEqual(loaded_spec.narration.file, "audio.wav")
             self.assertEqual(loaded_spec.narration.timing_file, "timing.srt")
+
+    @patch("webui.production.run_production_workflow")
+    @patch("webui.production.st")
+    def test_ui_start_gate_blocks_temporally_invalid_external_narration(self, mock_st, mock_run_workflow):
+        """When External Audio + SRT is selected and preflight is invalid, start is blocked (zero workflow runs)."""
+        mock_st.session_state = {
+            "external_narration_preflight": ExternalNarrationPreflightResult(
+                audio_duration_seconds=183.3,
+                srt_end_seconds=220.5,
+                duration_delta_seconds=37.2,
+                timing_quality=TimingQuality.INVALID,
+                errors=["External narration timing mismatch: Audio duration: 183.30s, SRT final timestamp: 220.54s"],
+                is_valid=False,
+            ),
+            "narration_audio_path": "/path/to/narration.wav",
+            "narration_srt_path": "/path/to/narration.srt",
+        }
+
+        # Radio returns External Audio + SRT
+        def radio_side_effect(label, options, *args, **kwargs):
+            if "Configuration" in label:
+                return "Mode A: Form Builder (Interactive)"
+            if "Target Production" in label:
+                return "Final Video (G08 → G09 → G10 Assembly)"
+            if "Narration Source" in label:
+                return "External Audio + SRT"
+            return options[0]
+
+        mock_st.radio.side_effect = radio_side_effect
+        mock_st.columns.side_effect = lambda n: [MagicMock() for _ in range(n if isinstance(n, int) else len(n))]
+        mock_st.button.return_value = True  # Click Start Production
+        mock_st.selectbox.return_value = "16:9"
+        mock_st.number_input.return_value = 30
+        mock_st.text_input.return_value = "Test Title"
+        mock_st.text_area.return_value = "Test Subject"
+        mock_st.checkbox.return_value = True
+        mock_st.file_uploader.return_value = None
+
+        render_production_workspace()
+
+        # Workflow runner must NOT be called
+        self.assertEqual(mock_run_workflow.call_count, 0)
+        # Error must be shown
+        error_calls = [c[0][0] for c in mock_st.error.call_args_list]
+        self.assertTrue(any("Cannot start production" in str(e) for e in error_calls))
+
+    @patch("webui.production.run_production_workflow")
+    @patch("webui.production.st")
+    def test_ui_start_gate_blocks_coarse_srt(self, mock_st, mock_run_workflow):
+        """When External Audio + SRT has coarse single-cue timing, start is blocked."""
+        mock_st.session_state = {
+            "external_narration_preflight": ExternalNarrationPreflightResult(
+                audio_duration_seconds=180.0,
+                srt_end_seconds=180.0,
+                duration_delta_seconds=0.0,
+                cue_count=1,
+                timing_quality=TimingQuality.COARSE,
+                errors=["SRT timing is too coarse for synchronized production: 1 cue covers 180.0 seconds."],
+                is_valid=False,
+            ),
+            "narration_audio_path": "/path/to/narration.wav",
+            "narration_srt_path": "/path/to/coarse.srt",
+        }
+
+        def radio_side_effect(label, options, *args, **kwargs):
+            if "Configuration" in label:
+                return "Mode A: Form Builder (Interactive)"
+            if "Target Production" in label:
+                return "Final Video (G08 → G09 → G10 Assembly)"
+            if "Narration Source" in label:
+                return "External Audio + SRT"
+            return options[0]
+
+        mock_st.radio.side_effect = radio_side_effect
+        mock_st.columns.side_effect = lambda n: [MagicMock() for _ in range(n if isinstance(n, int) else len(n))]
+        mock_st.button.return_value = True
+        mock_st.selectbox.return_value = "16:9"
+        mock_st.number_input.return_value = 30
+        mock_st.text_input.return_value = "Test Title"
+        mock_st.text_area.return_value = "Test Subject"
+        mock_st.checkbox.return_value = True
+        mock_st.file_uploader.return_value = None
+
+        render_production_workspace()
+
+        self.assertEqual(mock_run_workflow.call_count, 0)
+        error_calls = [c[0][0] for c in mock_st.error.call_args_list]
+        self.assertTrue(any("Cannot start production" in str(e) for e in error_calls))
 
 
 if __name__ == "__main__":
