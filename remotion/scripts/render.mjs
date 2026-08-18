@@ -19,6 +19,15 @@ const ALLOWED_TEMPLATES = new Set([
   'callout',
   'text',
   'breakdown',
+  'pie',
+  'donut',
+  'gauge',
+  'waterfall',
+  'ranked_list',
+  'area',
+  'area_chart',
+  'before_after',
+  'stacked_bar',
 ]);
 
 function isPlainObject(obj) {

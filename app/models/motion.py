@@ -49,6 +49,14 @@ class KineticBeatKind(str, Enum):
     split = "split"
     highlight = "highlight"
     resolve = "resolve"
+    segment = "segment"
+    arc = "arc"
+    delta = "delta"
+    rank = "rank"
+    before = "before"
+    after = "after"
+    draw = "draw"
+    step = "step"
 
 
 class KineticBeat(BaseModel):
@@ -298,6 +306,257 @@ class TextProps(MotionModel):
         return val
 
 
+# --- G17 Semantic Data Visualization Models ---
+
+class SemanticDataIntent(str, Enum):
+    single_metric = "single_metric"
+    part_to_whole = "part_to_whole"
+    category_comparison = "category_comparison"
+    ranked_categories = "ranked_categories"
+    trend_over_time = "trend_over_time"
+    change_over_time = "change_over_time"
+    composition_over_time = "composition_over_time"
+    threshold = "threshold"
+    progress = "progress"
+    breakdown = "breakdown"
+    before_after = "before_after"
+    sequence = "sequence"
+    distribution = "distribution"
+    positive_negative_change = "positive_negative_change"
+    two_dimension_relationship = "two_dimension_relationship"
+    takeaway = "takeaway"
+
+
+class VisualGrammar(str, Enum):
+    metric = "metric"
+    comparison = "comparison"
+    breakdown = "breakdown"
+    bar = "bar"
+    stacked_bar = "stacked_bar"
+    line = "line"
+    area = "area"
+    pie = "pie"
+    donut = "donut"
+    threshold = "threshold"
+    gauge = "gauge"
+    timeline = "timeline"
+    waterfall = "waterfall"
+    ranked_list = "ranked_list"
+    before_after = "before_after"
+    kinetic_statement = "kinetic_statement"
+
+
+class PieSliceItem(MotionModel):
+    label: str
+    value: float
+    display_value: str | None = None
+    percentage: float | None = None
+    highlight: bool = False
+    color: str | None = None
+
+    @field_validator("label")
+    @classmethod
+    def require_label(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("label must not be empty")
+        return val
+
+
+class PieProps(MotionModel):
+    headline: str
+    items: list[PieSliceItem] = Field(min_length=2, max_length=8)
+    total: float | None = None
+    focus_label: str | None = None
+    subtext: str | None = None
+    variant: str = "donut_center_stat"
+    eyebrow: str | None = None
+
+    @field_validator("headline")
+    @classmethod
+    def require_headline(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("headline must not be empty")
+        return val
+
+
+DonutProps = PieProps
+
+
+class GaugeProps(MotionModel):
+    headline: str
+    current_value: float
+    max_value: float = 100.0
+    min_value: float = 0.0
+    display_value: str | None = None
+    unit: str | None = None
+    label: str | None = None
+    subtext: str | None = None
+    variant: str = "radial_gauge"
+    eyebrow: str | None = None
+
+    @field_validator("headline")
+    @classmethod
+    def require_headline(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("headline must not be empty")
+        return val
+
+
+class WaterfallStep(MotionModel):
+    label: str
+    delta: float
+    display_value: str | None = None
+    is_total: bool = False
+
+    @field_validator("label")
+    @classmethod
+    def require_label(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("label must not be empty")
+        return val
+
+
+class WaterfallProps(MotionModel):
+    headline: str
+    start_value: float
+    start_label: str = "Starting"
+    steps: list[WaterfallStep] = Field(min_length=1)
+    end_value: float
+    end_label: str = "Final"
+    unit: str | None = None
+    variant: str = "waterfall_steps"
+    eyebrow: str | None = None
+
+    @field_validator("headline")
+    @classmethod
+    def require_headline(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("headline must not be empty")
+        return val
+
+
+class RankedListItem(MotionModel):
+    rank: int = Field(ge=1)
+    label: str
+    value: float | None = None
+    display_value: str | None = None
+    highlight: bool = False
+
+    @field_validator("label")
+    @classmethod
+    def require_label(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("label must not be empty")
+        return val
+
+
+class RankedListProps(MotionModel):
+    headline: str
+    items: list[RankedListItem] = Field(min_length=2, max_length=7)
+    subtext: str | None = None
+    variant: str = "ranked_horizontal_bars"
+    eyebrow: str | None = None
+
+    @field_validator("headline")
+    @classmethod
+    def require_headline(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("headline must not be empty")
+        return val
+
+
+class AreaChartProps(MotionModel):
+    headline: str
+    points: list[LineChartPoint] = Field(min_length=2)
+    unit: str | None = None
+    variant: str = "area_trend"
+    eyebrow: str | None = None
+
+    @field_validator("headline")
+    @classmethod
+    def require_headline(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("headline must not be empty")
+        return val
+
+
+class BeforeAfterProps(MotionModel):
+    headline: str
+    before_label: str = "Before"
+    before_value: str
+    before_numeric: float | None = None
+    after_label: str = "After"
+    after_value: str
+    after_numeric: float | None = None
+    delta_display: str | None = None
+    subtext: str | None = None
+    variant: str = "split_screen"
+    eyebrow: str | None = None
+
+    @field_validator("headline", "before_value", "after_value")
+    @classmethod
+    def require_non_empty(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("must not be empty")
+        return val
+
+
+class StackedBarSegment(MotionModel):
+    label: str
+    value: float
+    display_value: str | None = None
+    highlight: bool = False
+    color: str | None = None
+
+    @field_validator("label")
+    @classmethod
+    def require_label(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("label must not be empty")
+        return val
+
+
+class StackedBarProps(MotionModel):
+    headline: str
+    total: float
+    total_display: str | None = None
+    segments: list[StackedBarSegment] = Field(min_length=2)
+    variant: str = "stacked_bar_reveal"
+    eyebrow: str | None = None
+
+    @field_validator("headline")
+    @classmethod
+    def require_headline(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("headline must not be empty")
+        return val
+
+
+class DataVisualizationSpec(MotionModel):
+    intent: SemanticDataIntent
+    grammar: VisualGrammar
+    variant: str
+    headline: str
+    eyebrow: str | None = None
+    props: dict[str, Any] = Field(default_factory=dict)
+    grounded_values: list[float] = Field(default_factory=list)
+    grounded_labels: list[str] = Field(default_factory=list)
+    source_cue_ids: list[str] = Field(default_factory=list)
+    provenance: str = "narration_extracted"
+    confidence: float = 1.0
+
+
 # --- Spec & Manifest Models ---
 
 class MotionSceneSpec(MotionModel):
@@ -322,6 +581,9 @@ class MotionSceneSpec(MotionModel):
     storyboard_actions: list[str] = Field(default_factory=list)
     motion_style: str = "standard"
     motion_copy: dict[str, Any] = Field(default_factory=dict)
+    data_intent: SemanticDataIntent | None = None
+    visual_grammar: VisualGrammar | None = None
+    grounded_facts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class MotionGroupSpec(MotionModel):

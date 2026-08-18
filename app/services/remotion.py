@@ -26,9 +26,13 @@ class MotionRenderValidationError(ValueError):
 def compute_scene_fingerprint(scene_spec: MotionSceneSpec) -> str:
     """Compute deterministic SHA-256 fingerprint of a single MotionSceneSpec."""
     canonical = {
+        "motion_engine_version": "4",
         "scene_id": scene_spec.scene_id,
         "visual_type": scene_spec.visual_type,
         "rendered_template": scene_spec.rendered_template,
+        "layout_archetype": scene_spec.layout_archetype,
+        "data_intent": scene_spec.data_intent.value if scene_spec.data_intent else None,
+        "visual_grammar": scene_spec.visual_grammar.value if scene_spec.visual_grammar else None,
         "props": scene_spec.props,
         "duration_frames": scene_spec.duration_frames,
         "fps": scene_spec.fps,
@@ -45,6 +49,7 @@ def compute_group_fingerprint(group_spec: MotionGroupSpec) -> str:
     """Compute deterministic SHA-256 fingerprint of a MotionGroupSpec."""
     base_start = group_spec.start_frame
     canonical = {
+        "motion_engine_version": "4",
         "group_id": group_spec.group_id,
         "duration_frames": group_spec.duration_frames,
         "fps": group_spec.fps,
@@ -54,6 +59,7 @@ def compute_group_fingerprint(group_spec: MotionGroupSpec) -> str:
             {
                 "scene_id": s.scene_id,
                 "rendered_template": s.rendered_template,
+                "layout_archetype": s.layout_archetype,
                 "props": s.props,
                 "rel_start_frame": s.start_frame - base_start,
                 "rel_end_frame": s.end_frame - base_start,

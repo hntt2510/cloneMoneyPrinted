@@ -1,15 +1,22 @@
 import React from 'react';
 import { AgeMarkerTemplate } from './AgeMarkerTemplate';
+import { AreaChartTemplate } from './AreaChartTemplate';
 import { BarChartTemplate } from './BarChartTemplate';
+import { BeforeAfterTemplate } from './BeforeAfterTemplate';
+import { BreakdownTemplate } from './BreakdownTemplate';
 import { CalloutTemplate } from './CalloutTemplate';
 import { ComparisonTemplate } from './ComparisonTemplate';
 import { CounterTemplate } from './CounterTemplate';
+import { GaugeTemplate } from './GaugeTemplate';
 import { LineChartTemplate } from './LineChartTemplate';
 import { NumberTemplate } from './NumberTemplate';
+import { PieTemplate } from './PieTemplate';
+import { RankedListTemplate } from './RankedListTemplate';
+import { StackedBarTemplate } from './StackedBarTemplate';
 import { TextTemplate } from './TextTemplate';
 import { ThresholdTemplate } from './ThresholdTemplate';
 import { TimelineTemplate } from './TimelineTemplate';
-import { BreakdownTemplate } from './BreakdownTemplate';
+import { WaterfallTemplate } from './WaterfallTemplate';
 
 export const templateRegistry: Record<string, React.FC<any>> = {
   number: NumberTemplate,
@@ -23,6 +30,15 @@ export const templateRegistry: Record<string, React.FC<any>> = {
   callout: CalloutTemplate,
   text: TextTemplate,
   breakdown: BreakdownTemplate,
+  pie: PieTemplate,
+  donut: PieTemplate,
+  gauge: GaugeTemplate,
+  waterfall: WaterfallTemplate,
+  ranked_list: RankedListTemplate,
+  area: AreaChartTemplate,
+  area_chart: AreaChartTemplate,
+  before_after: BeforeAfterTemplate,
+  stacked_bar: StackedBarTemplate,
 };
 
 export function getTemplateComponent(templateName: string, layoutArchetype?: string): React.FC<any> {
@@ -32,6 +48,61 @@ export function getTemplateComponent(templateName: string, layoutArchetype?: str
   // Layout-first resolution for editorial components
   if (normalizedLayout === 'stacked_breakdown' || normalizedLayout === 'breakdown' || normalizedTpl === 'breakdown') {
     return BreakdownTemplate;
+  }
+  if (
+    normalizedTpl === 'pie' ||
+    normalizedTpl === 'donut' ||
+    normalizedLayout === 'donut_center_stat' ||
+    normalizedLayout === 'donut_reveal' ||
+    normalizedLayout === 'pie_focus' ||
+    normalizedLayout === 'segmented_ring'
+  ) {
+    return PieTemplate;
+  }
+  if (
+    normalizedTpl === 'gauge' ||
+    normalizedLayout === 'radial_gauge' ||
+    normalizedLayout === 'progress_ring' ||
+    normalizedLayout === 'linear_meter'
+  ) {
+    return GaugeTemplate;
+  }
+  if (
+    normalizedTpl === 'waterfall' ||
+    normalizedLayout === 'waterfall_steps' ||
+    normalizedLayout === 'waterfall_variance'
+  ) {
+    return WaterfallTemplate;
+  }
+  if (
+    normalizedTpl === 'ranked_list' ||
+    normalizedLayout === 'ranked_horizontal_bars' ||
+    normalizedLayout === 'leaderboard_reveal'
+  ) {
+    return RankedListTemplate;
+  }
+  if (
+    normalizedTpl === 'area' ||
+    normalizedTpl === 'area_chart' ||
+    normalizedLayout === 'area_trend' ||
+    normalizedLayout === 'stacked_area'
+  ) {
+    return AreaChartTemplate;
+  }
+  if (
+    normalizedTpl === 'before_after' ||
+    normalizedLayout === 'split_screen' ||
+    normalizedLayout === 'value_shift' ||
+    normalizedLayout === 'side_by_side'
+  ) {
+    return BeforeAfterTemplate;
+  }
+  if (
+    normalizedTpl === 'stacked_bar' ||
+    normalizedLayout === 'stacked_bar_reveal' ||
+    normalizedLayout === 'stacked_bar_composition'
+  ) {
+    return StackedBarTemplate;
   }
   if (normalizedLayout === 'split_compare') {
     return ComparisonTemplate;
