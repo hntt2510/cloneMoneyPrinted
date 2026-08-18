@@ -7,6 +7,7 @@ export const SceneComposition: React.FC<SceneCompositionProps> = ({
   props,
   theme,
 }) => {
-  const Component = getTemplateComponent(template);
+  const layoutArchetype = props?.layout_archetype;
+  const Component = getTemplateComponent(template, layoutArchetype);
   return <Component {...(props || {})} theme={theme} />;
 };

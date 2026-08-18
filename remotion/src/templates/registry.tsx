@@ -25,7 +25,38 @@ export const templateRegistry: Record<string, React.FC<any>> = {
   breakdown: BreakdownTemplate,
 };
 
-export function getTemplateComponent(templateName: string): React.FC<any> {
-  const normalized = (templateName || '').trim().toLowerCase();
-  return templateRegistry[normalized] || CalloutTemplate;
+export function getTemplateComponent(templateName: string, layoutArchetype?: string): React.FC<any> {
+  const normalizedTpl = (templateName || '').trim().toLowerCase();
+  const normalizedLayout = (layoutArchetype || '').trim().toLowerCase();
+
+  // Layout-first resolution for editorial components
+  if (normalizedLayout === 'stacked_breakdown' || normalizedLayout === 'breakdown' || normalizedTpl === 'breakdown') {
+    return BreakdownTemplate;
+  }
+  if (normalizedLayout === 'split_compare') {
+    return ComparisonTemplate;
+  }
+  if (normalizedLayout === 'metric_hero') {
+    return NumberTemplate;
+  }
+  if (normalizedLayout === 'bar_chart_v2' || normalizedTpl === 'bar_chart') {
+    return BarChartTemplate;
+  }
+  if (normalizedLayout === 'line_chart_v2' || normalizedTpl === 'line_chart') {
+    return LineChartTemplate;
+  }
+  if (normalizedLayout === 'threshold_v2' || normalizedTpl === 'threshold') {
+    return ThresholdTemplate;
+  }
+  if (normalizedLayout === 'timeline_v2' || normalizedTpl === 'timeline') {
+    return TimelineTemplate;
+  }
+  if (normalizedLayout === 'kinetic_statement' || normalizedTpl === 'text') {
+    return TextTemplate;
+  }
+  if (normalizedLayout === 'statement_reveal' || normalizedTpl === 'callout') {
+    return CalloutTemplate;
+  }
+
+  return templateRegistry[normalizedTpl] || CalloutTemplate;
 }
