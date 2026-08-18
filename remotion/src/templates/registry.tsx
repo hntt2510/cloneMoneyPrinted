@@ -9,6 +9,7 @@ import { NumberTemplate } from './NumberTemplate';
 import { TextTemplate } from './TextTemplate';
 import { ThresholdTemplate } from './ThresholdTemplate';
 import { TimelineTemplate } from './TimelineTemplate';
+import { BreakdownTemplate } from './BreakdownTemplate';
 
 export const templateRegistry: Record<string, React.FC<any>> = {
   number: NumberTemplate,
@@ -21,6 +22,7 @@ export const templateRegistry: Record<string, React.FC<any>> = {
   age_marker: AgeMarkerTemplate,
   callout: CalloutTemplate,
   text: TextTemplate,
+  breakdown: BreakdownTemplate,
 };
 
 export function getTemplateComponent(templateName: string): React.FC<any> {

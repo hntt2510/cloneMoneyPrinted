@@ -92,7 +92,27 @@ def derive_kinetic_beats(
         items = props.get("items", [])
         num_items = len(items)
 
-        if num_items >= 2:
+        if num_items == 2:
+            item_0_end = round(available_frames * 0.35)
+            divider_end = round(available_frames * 0.50)
+            item_1_end = round(available_frames * 0.82)
+            takeaway_end = round(available_frames * 0.92)
+
+            beats = [
+                KineticBeat(id=f"{scene_id}_item0", start_frame=0, end_frame=item_0_end,
+                            kind=KineticBeatKind.comparison_item, text=items[0].get("label",""), 
+                            emphasis=bool(items[0].get("highlight")), data_ref="item_0"),
+                KineticBeat(id=f"{scene_id}_divider", start_frame=item_0_end, end_frame=divider_end,
+                            kind=KineticBeatKind.split, text="divider",
+                            emphasis=False, data_ref="divider"),
+                KineticBeat(id=f"{scene_id}_item1", start_frame=divider_end, end_frame=item_1_end,
+                            kind=KineticBeatKind.comparison_item, text=items[1].get("label",""),
+                            emphasis=bool(items[1].get("highlight")), data_ref="item_1"),
+                KineticBeat(id=f"{scene_id}_takeaway", start_frame=item_1_end, end_frame=takeaway_end,
+                            kind=KineticBeatKind.takeaway, text="relationship", 
+                            emphasis=True, data_ref=None),
+            ]
+        elif num_items > 2:
             # If we have multiple structured items, ensure each item gets a comparison_item beat
             if len(clauses) >= num_items:
                 # Try matching clauses to items via numeric facts first
@@ -397,144 +417,50 @@ def derive_kinetic_beats(
     # 5. THRESHOLD TEMPLATE
     # -------------------------------------------------------------------------
     elif template == "threshold":
-        thresh_val = props.get("threshold_value")
-        curr_val = props.get("current_value")
+        limit_end = round(available_frames * 0.25)
+        grow_end = round(available_frames * 0.75)
+        cross_end = round(available_frames * 0.87)
 
-        if len(clauses) >= 2:
-            # Check if clauses mention threshold and current/damage values
-            thresh_clause_idx = 0
-            curr_clause_idx = 1
-
-            for c_idx, clause in enumerate(clauses):
-                c_facts = extract_canonical_numeric_facts(clause)
-                if thresh_val is not None and any(abs(f.value - thresh_val) < 1e-3 for f in c_facts):
-                    thresh_clause_idx = c_idx
-                elif curr_val is not None and any(abs(f.value - curr_val) < 1e-3 for f in c_facts):
-                    curr_clause_idx = c_idx
-
-            for i, clause in enumerate(clauses):
-                start_f, end_f = clause_slices[i]
-                if i == thresh_clause_idx:
-                    beats.append(
-                        KineticBeat(
-                            id=f"{scene_id}_b{i}",
-                            start_frame=start_f,
-                            end_frame=end_f,
-                            kind=KineticBeatKind.threshold,
-                            text=clause,
-                            emphasis=False,
-                            data_ref="threshold",
-                        )
-                    )
-                elif i == curr_clause_idx:
-                    beats.append(
-                        KineticBeat(
-                            id=f"{scene_id}_b{i}",
-                            start_frame=start_f,
-                            end_frame=end_f,
-                            kind=KineticBeatKind.number,
-                            text=clause,
-                            emphasis=True,
-                            data_ref="current_value",
-                        )
-                    )
-                else:
-                    is_last = i == len(clauses) - 1
-                    beats.append(
-                        KineticBeat(
-                            id=f"{scene_id}_b{i}",
-                            start_frame=start_f,
-                            end_frame=end_f,
-                            kind=KineticBeatKind.takeaway if is_last else KineticBeatKind.phrase,
-                            text=clause,
-                            emphasis=is_last,
-                            data_ref=None,
-                        )
-                    )
-        else:
-            # 1 clause: split into Phase 1 (Threshold intro) and Phase 2 (Growth & crossing)
-            half_f = max(1, available_frames // 2)
-            beats.append(
-                KineticBeat(
-                    id=f"{scene_id}_b0",
-                    start_frame=0,
-                    end_frame=half_f,
-                    kind=KineticBeatKind.threshold,
-                    text=f"{props.get('threshold_label', 'Threshold')}: {props.get('threshold_display', thresh_val or '')}".strip(),
-                    emphasis=False,
-                    data_ref="threshold",
-                )
-            )
-            beats.append(
-                KineticBeat(
-                    id=f"{scene_id}_b1",
-                    start_frame=half_f,
-                    end_frame=available_frames,
-                    kind=KineticBeatKind.number,
-                    text=f"Current: {props.get('current_display', curr_val or '')}".strip(),
-                    emphasis=True,
-                    data_ref="current_value",
-                )
-            )
+        beats = [
+            KineticBeat(id=f"{scene_id}_limit", start_frame=0, end_frame=limit_end,
+                        kind=KineticBeatKind.threshold, text=f"{props.get('threshold_label','Limit')}: {props.get('threshold_display','')}",
+                        emphasis=False, data_ref="threshold"),
+            KineticBeat(id=f"{scene_id}_grow", start_frame=limit_end, end_frame=grow_end,
+                        kind=KineticBeatKind.number, text=f"Current: {props.get('current_display','')}",
+                        emphasis=True, data_ref="current_value"),
+            KineticBeat(id=f"{scene_id}_cross", start_frame=grow_end, end_frame=cross_end,
+                        kind=KineticBeatKind.highlight, text="crossing",
+                        emphasis=True, data_ref="current_value"),
+            KineticBeat(id=f"{scene_id}_resolve", start_frame=cross_end, end_frame=available_frames,
+                        kind=KineticBeatKind.resolve, text="OVER LIMIT",
+                        emphasis=True, data_ref="resolve"),
+        ]
 
     # -------------------------------------------------------------------------
     # 6. NUMBER & COUNTER TEMPLATES
     # -------------------------------------------------------------------------
     elif template in ("number", "counter"):
         target_val = props.get("numeric_value") if template == "number" else props.get("end_value")
-        num_clause_idx = 0
+        headline = str(props.get("headline", ""))
+        setup_end = max(3, round(available_frames * 0.15))
+        reveal_end = max(setup_end + 2, round(available_frames * 0.20))
+        count_end = max(reveal_end + 5, round(available_frames * 0.75))
+        highlight_end = max(count_end + 2, round(available_frames * 0.83))
+        context_end = max(highlight_end + 2, round(available_frames * 0.90))
 
-        # Find clause that mentions the target value
-        if target_val is not None:
-            for c_idx, clause in enumerate(clauses):
-                c_facts = extract_canonical_numeric_facts(clause)
-                if any(abs(f.value - target_val) < 1e-3 for f in c_facts):
-                    num_clause_idx = c_idx
-                    break
-        else:
-            for c_idx, clause in enumerate(clauses):
-                if extract_canonical_numeric_facts(clause):
-                    num_clause_idx = c_idx
-                    break
-
-        for i, clause in enumerate(clauses):
-            start_f, end_f = clause_slices[i]
-            if i == num_clause_idx:
-                beats.append(
-                    KineticBeat(
-                        id=f"{scene_id}_b{i}",
-                        start_frame=start_f,
-                        end_frame=end_f,
-                        kind=KineticBeatKind.number,
-                        text=clause,
-                        emphasis=True,
-                        data_ref="number",
-                    )
-                )
-            elif i > num_clause_idx and any(kw in clause.lower() for kw in ["best", "worst", "remember", "key", "important", "recommend"]):
-                beats.append(
-                    KineticBeat(
-                        id=f"{scene_id}_b{i}",
-                        start_frame=start_f,
-                        end_frame=end_f,
-                        kind=KineticBeatKind.takeaway,
-                        text=clause,
-                        emphasis=True,
-                        data_ref=None,
-                    )
-                )
-            else:
-                beats.append(
-                    KineticBeat(
-                        id=f"{scene_id}_b{i}",
-                        start_frame=start_f,
-                        end_frame=end_f,
-                        kind=KineticBeatKind.phrase,
-                        text=clause,
-                        emphasis=False,
-                        data_ref=None,
-                    )
-                )
+        beats = [
+            KineticBeat(id=f"{scene_id}_setup", start_frame=0, end_frame=setup_end, 
+                        kind=KineticBeatKind.setup, text=props.get("eyebrow") or "Label", emphasis=False, data_ref="eyebrow"),
+            KineticBeat(id=f"{scene_id}_reveal", start_frame=setup_end, end_frame=reveal_end,
+                        kind=KineticBeatKind.reveal, text=headline, emphasis=False, data_ref="headline"),
+            KineticBeat(id=f"{scene_id}_number", start_frame=reveal_end, end_frame=count_end,
+                        kind=KineticBeatKind.number, text=str(target_val or ""), emphasis=True, data_ref="number"),
+            KineticBeat(id=f"{scene_id}_highlight", start_frame=count_end, end_frame=highlight_end,
+                        kind=KineticBeatKind.highlight, text="settle", emphasis=True, data_ref="number"),
+            KineticBeat(id=f"{scene_id}_context", start_frame=highlight_end, end_frame=context_end,
+                        kind=KineticBeatKind.phrase, text=props.get("context_label") or props.get("label") or "", 
+                        emphasis=False, data_ref="context"),
+        ]
 
     # -------------------------------------------------------------------------
     # 7. TEXT, CALLOUT, & OTHER TEMPLATES

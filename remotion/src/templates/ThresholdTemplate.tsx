@@ -1,10 +1,9 @@
 import React from 'react';
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
-import { Card } from '../components/Card';
-import { Header } from '../components/Header';
+import { Background } from '../components/Background';
 import { Layout } from '../components/Layout';
 import { resolveTheme } from '../theme/theme';
-import { Theme, ThresholdProps } from '../types';
+import { ThresholdProps } from '../types';
 
 export const ThresholdTemplate: React.FC<ThresholdProps> = ({
   headline,
@@ -13,7 +12,6 @@ export const ThresholdTemplate: React.FC<ThresholdProps> = ({
   threshold_value,
   threshold_display,
   threshold_label = 'Threshold',
-  subtext,
   theme: customTheme,
   isGrouped = false,
   isFirstInGroup = true,
@@ -28,143 +26,141 @@ export const ThresholdTemplate: React.FC<ThresholdProps> = ({
   const maxVal = Math.max(current_value, threshold_value, 1) * 1.25;
   const currentPct = Math.min(100, Math.max(5, (current_value / maxVal) * 100));
   const thresholdPct = Math.min(95, Math.max(5, (threshold_value / maxVal) * 100));
+  
+  // Phase beats
+  const limitBeat = animation_plan?.beats?.find(b => b.kind === 'threshold');
+  const growBeat = animation_plan?.beats?.find(b => b.kind === 'number');
+  const crossBeat = animation_plan?.beats?.find(b => b.kind === 'highlight');
+  const resolveBeat = animation_plan?.beats?.find(b => b.kind === 'resolve');
 
-  let animatedCurrentPct = currentPct;
-  let pulseScale = 1;
+  const limitStart = isContinuous ? 0 : (limitBeat?.start_frame ?? 0);
+  const limitEnd = isContinuous ? 5 : (limitBeat?.end_frame ?? 20);
+  const growStart = isContinuous ? 0 : (growBeat?.start_frame ?? limitEnd);
+  const growEnd = isContinuous ? 5 : (growBeat?.end_frame ?? growStart + 30);
+  const crossStart = isContinuous ? 0 : (crossBeat?.start_frame ?? growEnd);
+  const resolveStart = isContinuous ? 0 : (resolveBeat?.start_frame ?? crossStart + 10);
 
-  if (isContinuous) {
-    animatedCurrentPct = currentPct;
-  } else if (animation_plan?.beats && animation_plan.beats.length > 0) {
-    const tBeat = animation_plan.beats.find((b) => b.kind === 'threshold');
-    const numBeat = animation_plan.beats.find((b) => b.kind === 'number' || b.data_ref === 'current_value');
+  // 1. Limit marker slide-in
+  const limitSpr = spring({ frame: Math.max(0, frame - limitStart), fps, config: { damping: 14, stiffness: 90 } });
+  const limitY = isContinuous ? 0 : interpolate(limitSpr, [0, 1], [-20, 0]);
+  const limitOp = isContinuous ? 1 : interpolate(limitSpr, [0, 1], [0, 1]);
 
-    let p1Start = 0;
-    let p1End = Math.max(15, Math.round(tBeat ? tBeat.end_frame : 25));
-    let p2Start = p1End;
-    let p2End = Math.max(p2Start + 15, Math.round(numBeat ? numBeat.end_frame : 50));
+  // 2. Bar grow (pre-threshold and post-threshold)
+  const growPct = isContinuous ? 1 : interpolate(frame, [growStart, growEnd], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  const growEased = spring({ frame: growPct * fps, fps, config: { damping: 16, stiffness: 60 } });
+  
+  const animatedCurrentPct = growEased * currentPct;
+  const baseFillPct = Math.min(animatedCurrentPct, thresholdPct);
+  const overflowFillPct = Math.max(0, animatedCurrentPct - thresholdPct);
 
-    if (tBeat && numBeat) {
-      p1Start = tBeat.start_frame;
-      p1End = tBeat.end_frame;
-      p2Start = numBeat.start_frame;
-      p2End = numBeat.end_frame;
-    } else if (tBeat) {
-      p1Start = tBeat.start_frame;
-      const span = Math.max(10, tBeat.end_frame - tBeat.start_frame);
-      p1End = tBeat.start_frame + Math.round(span * 0.5);
-      p2Start = p1End;
-      p2End = tBeat.end_frame;
-    }
+  // 3. Crossing pulse
+  const crossSpr = spring({ frame: Math.max(0, frame - crossStart), fps, config: { damping: 10, stiffness: 120 } });
+  const markerPulse = interpolate(crossSpr, [0, 0.4, 1], [1, 1.4, 1]);
+  const overflowColorSpr = interpolate(crossSpr, [0, 1], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
 
-    // Phase 1: 0 to threshold (or current if current < threshold)
-    const target1 = Math.min(currentPct, thresholdPct);
-    const p1 = interpolate(frame, [p1Start, p1End], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
-    const ease1 = spring({ frame: p1 * fps, fps, config: { damping: 14, stiffness: 60 } });
+  // 4. Resolve labels
+  const resolveSpr = spring({ frame: Math.max(0, frame - resolveStart), fps, config: { damping: 14, stiffness: 90 } });
+  const resolveOp = isContinuous ? 1 : interpolate(resolveSpr, [0, 1], [0, 1]);
+  const resolveY = isContinuous ? 0 : interpolate(resolveSpr, [0, 1], [10, 0]);
 
-    // Phase 2: threshold to current (only if current > threshold)
-    let ease2 = 0;
-    if (currentPct > thresholdPct) {
-      const p2 = interpolate(frame, [p2Start, p2End], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
-      ease2 = spring({ frame: p2 * fps, fps, config: { damping: 14, stiffness: 60 } });
-
-      const pulseSpr = spring({
-        frame: Math.max(0, frame - p2Start),
-        fps,
-        config: { damping: 10, stiffness: 120 },
-      });
-      pulseScale = interpolate(pulseSpr, [0, 0.5, 1], [1, 1.25, 1]);
-    }
-
-    animatedCurrentPct = (target1 * ease1) + ((currentPct - target1) * ease2);
-  } else {
-    const spr = spring({
-      frame: Math.max(0, frame - 8),
-      fps,
-      config: { damping: 14, stiffness: 90, mass: 0.9 },
-    });
-    animatedCurrentPct = currentPct * interpolate(spr, [0, 1], [0, 1]);
-  }
-
-  const meetsThreshold = current_value >= threshold_value;
-  const statusColor = meetsThreshold ? theme.positive : theme.warning;
+  const hasOverflow = current_value > threshold_value;
+  const overflowColor = hasOverflow ? theme.warning : theme.positive;
 
   return (
     <Layout theme={theme} isGrouped={isGrouped}>
-      <Header
-        headline={headline}
-        subheadline={subtext}
-        theme={theme}
-        isGrouped={isGrouped}
-        isFirstInGroup={isFirstInGroup}
-      />
-      <Card
-        theme={theme}
-        isGrouped={isGrouped}
-        isFirstInGroup={isFirstInGroup}
-        style={{ width: isPortrait ? '92%' : '75%', padding: '36px 32px' }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            width: '100%',
-            marginBottom: 28,
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: theme.muted, textTransform: 'uppercase' }}>
-              Current Value
-            </div>
-            <div style={{ fontSize: isPortrait ? 36 : 48, fontWeight: 900, color: statusColor, marginTop: 4 }}>
-              {current_display || current_value}
-            </div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: theme.muted, textTransform: 'uppercase' }}>
-              {threshold_label}
-            </div>
-            <div style={{ fontSize: isPortrait ? 36 : 48, fontWeight: 900, color: theme.text, marginTop: 4 }}>
-              {threshold_display || threshold_value}
-            </div>
-          </div>
+      <Background variant="radial_light" theme={theme} subtle_motion />
+      
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        padding: '0 5%',
+      }}>
+        {/* Headline */}
+        <div style={{
+          position: 'absolute', top: '15%',
+          fontSize: isPortrait ? 32 : 48, fontWeight: 800, color: theme.text,
+          opacity: limitOp, transform: `translateY(${limitY}px)`,
+        }}>
+          {headline}
         </div>
 
-        <div
-          style={{
-            position: 'relative',
-            width: '100%',
-            height: 32,
-            backgroundColor: theme.surfaceBorder,
-            borderRadius: 16,
-            overflow: 'visible',
-          }}
-        >
-          <div
-            style={{
-              width: `${animatedCurrentPct}%`,
-              height: '100%',
-              backgroundColor: statusColor,
-              borderRadius: 16,
-              boxShadow: `0 0 20px ${statusColor}60`,
-            }}
-          />
+        {/* Track Area */}
+        <div style={{
+          position: 'relative',
+          width: isPortrait ? '90%' : '70%',
+          height: 24,
+          backgroundColor: theme.surfaceBorder,
+          borderRadius: 12,
+          marginTop: '10%',
+        }}>
+          {/* Base Fill */}
+          <div style={{
+            position: 'absolute', top: 0, left: 0, height: '100%',
+            width: `${baseFillPct}%`,
+            backgroundColor: theme.primary,
+            borderRadius: 12,
+          }} />
 
-          <div
-            style={{
-              position: 'absolute',
-              left: `${thresholdPct}%`,
-              top: -10,
-              bottom: -10,
-              width: 4,
-              backgroundColor: theme.text,
-              borderRadius: 2,
-              transform: `scale(${pulseScale})`,
-              boxShadow: '0 0 10px rgba(255,255,255,0.8)',
-              zIndex: 2,
-            }}
-          />
+          {/* Overflow Fill */}
+          {hasOverflow && overflowFillPct > 0 && (
+            <div style={{
+              position: 'absolute', top: 0, left: `${thresholdPct}%`, height: '100%',
+              width: `${overflowFillPct}%`,
+              backgroundColor: overflowColor,
+              opacity: overflowColorSpr,
+              borderRadius: '0 12px 12px 0',
+              boxShadow: `0 0 12px ${overflowColor}80`,
+            }} />
+          )}
+
+          {/* Threshold Marker */}
+          <div style={{
+            position: 'absolute', top: -16, bottom: -16, left: `${thresholdPct}%`,
+            width: 4, backgroundColor: theme.text,
+            transform: `translateX(-50%) scale(${markerPulse})`,
+            opacity: limitOp,
+            boxShadow: '0 0 8px rgba(255,255,255,0.5)',
+          }}>
+            {/* Limit Label Above Marker */}
+            <div style={{
+              position: 'absolute', bottom: '100%', left: '50%',
+              transform: 'translateX(-50%)', marginBottom: 12,
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              whiteSpace: 'nowrap',
+            }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: theme.muted, textTransform: 'uppercase' }}>{threshold_label}</span>
+              <span style={{ fontSize: 24, fontWeight: 900, color: theme.text }}>{threshold_display || threshold_value}</span>
+            </div>
+          </div>
+          
+          {/* Current Value Label (follows the bar) */}
+          {animatedCurrentPct > 0 && (
+            <div style={{
+              position: 'absolute', bottom: '100%', left: `${animatedCurrentPct}%`,
+              transform: 'translateX(-50%)', marginBottom: 12,
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              whiteSpace: 'nowrap',
+            }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: hasOverflow ? overflowColor : theme.positive, textTransform: 'uppercase' }}>DAMAGE</span>
+              <span style={{ fontSize: 28, fontWeight: 900, color: hasOverflow ? overflowColor : theme.positive }}>{current_display || current_value}</span>
+            </div>
+          )}
         </div>
-      </Card>
+
+        {/* Resolve Label (OVER LIMIT) */}
+        {hasOverflow && (
+          <div style={{
+            position: 'absolute', bottom: '25%',
+            opacity: resolveOp, transform: `translateY(${resolveY}px)`,
+            fontSize: isPortrait ? 28 : 36, fontWeight: 900,
+            color: theme.warning, letterSpacing: '0.05em',
+            backgroundColor: `${theme.warning}20`, padding: '8px 24px', borderRadius: 8,
+            border: `2px solid ${theme.warning}50`,
+          }}>
+            OVER LIMIT
+          </div>
+        )}
+      </div>
     </Layout>
   );
 };

@@ -16,7 +16,7 @@ export interface KineticBeat {
   id: string;
   start_frame: number;
   end_frame: number;
-  kind: "number" | "comparison_item" | "chart_item" | "milestone" | "threshold" | "takeaway" | "phrase";
+  kind: "number" | "comparison_item" | "chart_item" | "milestone" | "threshold" | "takeaway" | "phrase" | "setup" | "reveal" | "grow" | "split" | "highlight" | "resolve";
   text: string;
   emphasis?: boolean;
   data_ref?: string | null;
@@ -39,6 +39,10 @@ export interface BaseTemplateProps {
   isFirstInGroup?: boolean;
   groupSceneIndex?: number;
   animation_plan?: MotionAnimationPlan | null;
+  layout_archetype?: string | null;
+  storyboard_actions?: string[] | null;
+  motion_style?: 'subtle' | 'standard' | 'energetic';
+  motion_copy?: Record<string, string | null> | null;
 }
 
 export interface NumberProps extends BaseTemplateProps {
@@ -49,6 +53,8 @@ export interface NumberProps extends BaseTemplateProps {
   suffix?: string | null;
   label?: string | null;
   subtext?: string | null;
+  eyebrow?: string | null;
+  context_label?: string | null;
 }
 
 export interface CounterProps extends BaseTemplateProps {
@@ -60,6 +66,8 @@ export interface CounterProps extends BaseTemplateProps {
   suffix?: string | null;
   decimals?: number;
   label?: string | null;
+  eyebrow?: string | null;
+  context_label?: string | null;
 }
 
 export interface ComparisonItem {
@@ -170,6 +178,7 @@ export interface GroupScene {
   end_frame: number;
   duration_frames: number;
   animation_plan?: MotionAnimationPlan | null;
+  group_scene_index?: number;
 }
 
 export interface GroupCompositionProps {
