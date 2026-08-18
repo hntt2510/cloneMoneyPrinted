@@ -35,10 +35,10 @@ from app.services.numeric_parser import CanonicalNumericFact, extract_canonical_
 # Regular expression patterns for intent classification
 _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(19\d\d|20\d\d)\b")
-_TOP_RANK_RE = re.compile(r"\b(?:top\s*\d+|most\s+common|ranked|ranking|largest|smallest|leaders?|causes?)\b", re.IGNORECASE)
+_TOP_RANK_RE = re.compile(r"\b(?:top\s*\d+|most\s+common|ranked|ranking|rankings|largest|smallest|leaders?|main\s+causes?|top\s+causes?|leading\s+causes?)\b", re.IGNORECASE)
 _PROGRESS_RE = re.compile(r"\b(?:progress|complete|completed|done|finished|steps?|fraction|goal|quota)\b", re.IGNORECASE)
 _THRESHOLD_RE = re.compile(r"\b(?:limit|threshold|maximum|cap|excess|exceed|over\s*limit|damage|ceiling)\b", re.IGNORECASE)
-_WATERFALL_RE = re.compile(r"\b(?:start(?:ed|ing)?|fees?|discount|deduction|final|net|balance|adjust(?:ment)?)\b", re.IGNORECASE)
+_WATERFALL_RE = re.compile(r"\b(?:start(?:ed|ing)?|begin(?:ning)?|began|initial|fees?|discount|deduct(?:ion)?|final|finish(?:ed|ing)?|net|balance|adjust(?:ment)?|ending|ended)\b", re.IGNORECASE)
 _BEFORE_AFTER_RE = re.compile(r"\b(?:before|after|previously|now|old|new|prior|shifted|transition)\b", re.IGNORECASE)
 _BREAKDOWN_RE = re.compile(r"\b(?:breakdown|total|deductible|insurance\s*covers|out\s*of\s*pocket|you\s*pay)\b", re.IGNORECASE)
 
@@ -114,7 +114,12 @@ class DataVisualizationDirector:
             return SemanticDataIntent.ranked_categories
 
         # 3. Check for Waterfall intent (start -> delta -> end)
-        if _WATERFALL_RE.search(t_lower) and len(facts) >= 3 and ("start" in t_lower or "starting" in t_lower) and ("final" in t_lower or "net" in t_lower):
+        if (
+            _WATERFALL_RE.search(t_lower)
+            and len(facts) >= 3
+            and any(w in t_lower for w in ("start", "started", "starting", "begin", "began", "initial"))
+            and any(w in t_lower for w in ("final", "finish", "finished", "net", "end", "ending", "ended", "balance", "total"))
+        ):
             return SemanticDataIntent.positive_negative_change
 
         # 4. Check for Threshold intent (limit vs damage / actual)
@@ -154,11 +159,11 @@ class DataVisualizationDirector:
         if _BEFORE_AFTER_RE.search(t_lower) and ("before" in t_lower or "previously" in t_lower or "old" in t_lower) and ("after" in t_lower or "now" in t_lower or "new" in t_lower) and len(facts) >= 2:
             return SemanticDataIntent.before_after
 
-        # 10. Multi-category comparison
-        if len(facts) >= 2:
+        # 11. Multi-category comparison or conceptual comparison
+        if len(facts) >= 2 or any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to "]):
             return SemanticDataIntent.category_comparison
 
-        # 11. Single metric fallback
+        # 12. Single metric fallback
         if len(facts) == 1:
             return SemanticDataIntent.single_metric
 
@@ -218,6 +223,10 @@ class DataVisualizationDirector:
             return VisualGrammar.breakdown, "stacked_breakdown"
 
         if intent == SemanticDataIntent.category_comparison:
+            if any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to ", "deductible", "covers"]):
+                variants = ["split_compare", "compare_two"]
+                variant = self.memory.choose_diverse_variant("comparison", variants)
+                return VisualGrammar.comparison, variant
             if len(facts) == 2:
                 variants = ["compare_two", "split_compare"]
             else:
@@ -285,7 +294,7 @@ class DataVisualizationDirector:
                 for i, f in enumerate(facts[:6]):
                     pct = round((f.value / total_val) * 100, 1)
                     items.append({
-                        "label": f.context_hint or f"Part {i + 1}",
+                        "label": f"Part {i + 1}",
                         "value": f.value,
                         "display_value": f.display,
                         "percentage": pct,
@@ -542,7 +551,79 @@ class DataVisualizationDirector:
             }
             return True, props, None
 
-        # 10. BAR CHART / COMPARISON VALIDATION
+        # 10. COMPARISON VALIDATION
+        if grammar == VisualGrammar.comparison:
+            if len(facts) >= 2:
+                items = []
+                for i, f in enumerate(facts[:4]):
+                    lbl = f"Option {i + 1}"
+                    if "deductible" in narration.lower() and i == 0:
+                        lbl = "Deductible"
+                    elif "insurer" in narration.lower() and i == 1:
+                        lbl = "Insurer Covers"
+                    items.append({
+                        "label": lbl,
+                        "value": f.display,
+                        "numeric_value": f.value,
+                        "highlight": (i == 0),
+                    })
+                props = {
+                    "headline": headline,
+                    "eyebrow": eyebrow or "COMPARISON",
+                    "items": items,
+                    "variant": variant,
+                    "layout_archetype": variant,
+                }
+                return True, props, None
+            elif any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to "]):
+                # Conceptual comparison without raw numeric facts
+                parts = re.split(r"\b(?:versus|vs\.?|compared\s+to)\b", narration, flags=re.IGNORECASE)
+                left_lbl = "Option A"
+                right_lbl = "Option B"
+                if len(parts) >= 2:
+                    p0 = parts[0].strip()
+                    p1 = parts[1].strip()
+                    if "premium" in p0.lower():
+                        left_lbl = "Premium"
+                    if "deductible" in p1.lower():
+                        right_lbl = "Deductible"
+                props = {
+                    "headline": headline,
+                    "eyebrow": eyebrow or "COMPARISON",
+                    "items": [
+                        {"label": left_lbl, "value": left_lbl, "highlight": True},
+                        {"label": right_lbl, "value": right_lbl, "highlight": False},
+                    ],
+                    "variant": variant,
+                    "layout_archetype": variant,
+                }
+                return True, props, None
+            return False, {}, "Comparison rejected: requires at least 2 comparison items or explicit comparison relation."
+
+        # 11. BREAKDOWN VALIDATION
+        if grammar == VisualGrammar.breakdown:
+            if len(facts) < 3:
+                return False, {}, "Breakdown rejected: requires total and at least 2 parts."
+            v0 = facts[0].value
+            v1 = facts[1].value
+            v2 = facts[2].value
+            if abs(v0 - (v1 + v2)) > 1.0:
+                return False, {}, f"Breakdown rejected: math mismatch ({v0} != {v1} + {v2})."
+            items = [
+                {"label": "Total Repair", "value": facts[0].display, "numeric_value": facts[0].value},
+                {"label": "Deductible", "value": facts[1].display, "numeric_value": facts[1].value},
+                {"label": "Insurer Covers", "value": facts[2].display, "numeric_value": facts[2].value},
+            ]
+            props = {
+                "headline": headline,
+                "eyebrow": eyebrow or "COST BREAKDOWN",
+                "items": items,
+                "variant": variant,
+                "layout_archetype": variant,
+            }
+            return True, props, None
+
+        # 12. BAR CHART VALIDATION
         if grammar == VisualGrammar.bar:
             if len(facts) < 2:
                 return False, {}, "Bar chart rejected: requires at least 2 items."

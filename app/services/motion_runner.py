@@ -22,6 +22,7 @@ from app.models.project import (
     VisualCue,
     VisualType,
 )
+from app.services.data_visualization_director import DataVisualizationDirector
 from app.services.motion_grouper import form_motion_groups
 from app.services.motion_normalizer import normalize_motion_spec
 from app.services.motion_runner_loader import resolve_project_workspace
@@ -116,8 +117,9 @@ def run_motion_render(
         )
         render_jobs[cue.id] = job
 
-    # Normalize specs
-    scene_specs = [normalize_motion_spec(cue, project) for cue in motion_cues]
+    # Normalize specs with single project-level DataVisualizationDirector
+    director = DataVisualizationDirector()
+    scene_specs = [normalize_motion_spec(cue, project, director=director) for cue in motion_cues]
     grouped_items = form_motion_groups(scene_specs)
 
     rendered_assets: list[RenderedMotionAsset] = []

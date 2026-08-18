@@ -60,6 +60,8 @@ def compute_group_fingerprint(group_spec: MotionGroupSpec) -> str:
                 "scene_id": s.scene_id,
                 "rendered_template": s.rendered_template,
                 "layout_archetype": s.layout_archetype,
+                "data_intent": s.data_intent.value if s.data_intent else None,
+                "visual_grammar": s.visual_grammar.value if s.visual_grammar else None,
                 "props": s.props,
                 "rel_start_frame": s.start_frame - base_start,
                 "rel_end_frame": s.end_frame - base_start,

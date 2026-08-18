@@ -8,22 +8,36 @@ from loguru import logger
 from app.models.motion import (
     AgeMarkerItem,
     AgeMarkerProps,
+    AreaChartProps,
     BarChartItem,
     BarChartProps,
+    BeforeAfterProps,
     CalloutProps,
     ComparisonItem,
     ComparisonProps,
     CounterProps,
+    GaugeProps,
     LineChartPoint,
     LineChartProps,
     MotionSceneSpec,
     NumberProps,
+    PieProps,
+    PieSliceItem,
+    RankedListItem,
+    RankedListProps,
+    SemanticDataIntent,
+    StackedBarProps,
+    StackedBarSegment,
     TextProps,
     ThresholdProps,
     TimelineItem,
     TimelineProps,
+    VisualGrammar,
+    WaterfallProps,
+    WaterfallStep,
 )
 from app.models.project import ProjectSpec, VisualCue, VisualType
+from app.services.data_visualization_director import DataVisualizationDirector
 from app.services.kinetic_beat_deriver import derive_kinetic_beats
 from app.services.motion_copy_extractor import extract_motion_copy, _truncate_motion_headline
 
@@ -91,6 +105,7 @@ def normalize_motion_spec(
     cue: VisualCue,
     project: ProjectSpec,
     timing_source: str | None = None,
+    director: DataVisualizationDirector | None = None,
 ) -> MotionSceneSpec:
     """Deterministically normalize a VisualCue (DATA or TEXT) into a typed MotionSceneSpec.
 
@@ -148,6 +163,8 @@ def normalize_motion_spec(
                 props=props_dict,
             ),
             layout_archetype="kinetic_statement",
+            data_intent=SemanticDataIntent.takeaway,
+            visual_grammar=VisualGrammar.kinetic_statement,
         )
 
     # VisualType.data
@@ -158,6 +175,24 @@ def normalize_motion_spec(
     rendered_template = requested_template
     fallback_reason = None
     props_dict: dict[str, Any] = {}
+    data_intent: SemanticDataIntent | None = None
+    visual_grammar: VisualGrammar | None = None
+
+    # If payload is generic callout/data or lacks structured fields, resolve via Director
+    if (not data or requested_template in ("callout", "data", "")) and cue.narration:
+        active_director = director or DataVisualizationDirector()
+        spec = active_director.direct_visual_specification(
+            narration=cue.narration,
+            headline=headline,
+            cue_payload=raw_payload,
+            source_cue_id=cue.id,
+        )
+        requested_template = spec.grammar.value
+        rendered_template = spec.grammar.value
+        props_dict = spec.props
+        layout_archetype = spec.variant
+        data_intent = spec.intent
+        visual_grammar = spec.grammar
 
     if requested_template == "number":
         val_raw = _get_first_present(data, ["value", "pct", "amount", "num"])
@@ -174,9 +209,13 @@ def normalize_motion_spec(
                 eyebrow=None,
                 context_label=None,
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.single_metric
+            visual_grammar = VisualGrammar.metric
         else:
             rendered_template = "callout"
             fallback_reason = "Missing value for number template"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "counter":
         end_raw = _get_first_present(data, ["end_value", "value", "target", "num"])
@@ -199,11 +238,15 @@ def normalize_motion_spec(
                 eyebrow=None,
                 context_label=None,
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.single_metric
+            visual_grammar = VisualGrammar.metric
         else:
             rendered_template = "callout"
             fallback_reason = "Missing numeric end_value for counter template"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
-    elif requested_template == "comparison":
+    elif requested_template in ("comparison", "breakdown"):
         raw_items = data.get("items") or data.get("options") or data.get("comparison")
         if not raw_items and isinstance(data.get("values"), list) and len(data["values"]) >= 2:
             raw_items = [
@@ -229,9 +272,19 @@ def normalize_motion_spec(
                 items=items,
                 subtext=data.get("subtext"),
             ).model_dump(mode="json")
+            if requested_template == "breakdown":
+                data_intent = SemanticDataIntent.breakdown
+                visual_grammar = VisualGrammar.breakdown
+                rendered_template = "breakdown"
+            else:
+                data_intent = SemanticDataIntent.category_comparison
+                visual_grammar = VisualGrammar.comparison
+                rendered_template = "comparison"
         else:
             rendered_template = "callout"
-            fallback_reason = "Comparison template requires at least 2 valid comparison items"
+            fallback_reason = f"{requested_template.capitalize()} template requires at least 2 valid items"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "timeline":
         raw_milestones = data.get("milestones") or data.get("events") or data.get("timeline")
@@ -258,9 +311,13 @@ def normalize_motion_spec(
                 milestones=milestones,
                 highlight_index=data.get("highlight_index"),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.sequence
+            visual_grammar = VisualGrammar.timeline
         else:
             rendered_template = "callout"
             fallback_reason = "Timeline template requires at least 2 valid milestones"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "bar_chart":
         raw_items = data.get("items") or data.get("bars") or data.get("series")
@@ -292,9 +349,13 @@ def normalize_motion_spec(
                 unit=data.get("unit"),
                 baseline=baseline_val if baseline_val is not None else 0.0,
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.category_comparison
+            visual_grammar = VisualGrammar.bar
         else:
             rendered_template = "callout"
             fallback_reason = "Bar chart requires at least 2 valid labeled numeric items"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "line_chart":
         raw_points = data.get("points") or data.get("data_points") or data.get("trend")
@@ -319,9 +380,13 @@ def normalize_motion_spec(
                 unit=data.get("unit"),
                 show_area=bool(data.get("show_area", True)),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.trend_over_time
+            visual_grammar = VisualGrammar.line
         else:
             rendered_template = "callout"
             fallback_reason = "Line chart requires at least 2 valid numeric points"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "threshold":
         curr = _get_first_present(data, ["current_value", "value", "current"])
@@ -338,9 +403,13 @@ def normalize_motion_spec(
                 threshold_label=str(data.get("threshold_label") or "Threshold").strip(),
                 subtext=data.get("subtext"),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.threshold
+            visual_grammar = VisualGrammar.threshold
         else:
             rendered_template = "callout"
             fallback_reason = "Threshold template requires numeric current_value and threshold_value"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "age_marker":
         raw_markers = data.get("markers") or data.get("ages")
@@ -372,9 +441,13 @@ def normalize_motion_spec(
                 markers=markers,
                 subtext=data.get("subtext"),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.sequence
+            visual_grammar = VisualGrammar.timeline
         else:
             rendered_template = "callout"
             fallback_reason = "Age marker template requires at least 1 valid age value"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template in ("pie", "donut"):
         raw_items = data.get("items") or data.get("slices") or data.get("segments")
@@ -404,31 +477,59 @@ def normalize_motion_spec(
                 variant=str(data.get("variant") or "donut_center_stat"),
                 eyebrow=data.get("eyebrow"),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.part_to_whole
+            visual_grammar = VisualGrammar.pie if requested_template == "pie" else VisualGrammar.donut
         else:
             rendered_template = "callout"
             fallback_reason = "Pie template requires at least 2 valid slices"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "gauge":
         curr = _get_first_present(data, ["current_value", "value", "current", "progress"])
         curr_val = _parse_float(curr)
-        if curr_val is not None:
-            max_val = _parse_float(data.get("max_value")) or 100.0
+        raw_display = str(data.get("display_value") or curr or "").strip()
+        unit_val = str(data.get("unit") or "").strip()
+        is_pct = "%" in raw_display or unit_val == "%" or "%" in str(curr or "")
+        explicit_max = _parse_float(data.get("max_value"))
+
+        if curr_val is not None and (is_pct or explicit_max is not None):
+            max_val = explicit_max if explicit_max is not None else 100.0
             min_val = _parse_float(data.get("min_value")) or 0.0
             props_dict = GaugeProps(
                 headline=headline,
                 current_value=curr_val,
                 max_value=max_val,
                 min_value=min_val,
-                display_value=str(data.get("display_value") if data.get("display_value") is not None else curr).strip(),
-                unit=data.get("unit"),
+                display_value=raw_display or f"{int(curr_val)}%",
+                unit="%" if is_pct else (unit_val or None),
                 label=data.get("label"),
                 subtext=data.get("subtext"),
                 variant=str(data.get("variant") or "radial_gauge"),
                 eyebrow=data.get("eyebrow"),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.progress
+            visual_grammar = VisualGrammar.gauge
+        elif curr_val is not None:
+            # Unbounded scalar like "$6,000" without max bound -> safe fallback to number
+            rendered_template = "number"
+            props_dict = NumberProps(
+                headline=headline,
+                value=raw_display or str(curr),
+                numeric_value=curr_val,
+                prefix=data.get("prefix"),
+                suffix=data.get("suffix"),
+                label=data.get("label"),
+                subtext=data.get("subtext"),
+            ).model_dump(mode="json")
+            fallback_reason = "Gauge requires percentage or explicit maximum bound"
+            data_intent = SemanticDataIntent.single_metric
+            visual_grammar = VisualGrammar.metric
         else:
             rendered_template = "callout"
             fallback_reason = "Gauge template requires numeric current_value"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "waterfall":
         raw_steps = data.get("steps")
@@ -460,9 +561,13 @@ def normalize_motion_spec(
                 variant=str(data.get("variant") or "waterfall_steps"),
                 eyebrow=data.get("eyebrow"),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.positive_negative_change
+            visual_grammar = VisualGrammar.waterfall
         else:
             rendered_template = "callout"
             fallback_reason = "Waterfall template requires valid start_value, end_value, and steps"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "ranked_list":
         raw_items = data.get("items") or data.get("rankings")
@@ -487,9 +592,13 @@ def normalize_motion_spec(
                 variant=str(data.get("variant") or "ranked_horizontal_bars"),
                 eyebrow=data.get("eyebrow"),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.ranked_categories
+            visual_grammar = VisualGrammar.ranked_list
         else:
             rendered_template = "callout"
             fallback_reason = "Ranked list template requires at least 2 valid ranked items"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template in ("area", "area_chart"):
         raw_points = data.get("points") or data.get("data_points")
@@ -515,9 +624,13 @@ def normalize_motion_spec(
                 variant=str(data.get("variant") or "area_trend"),
                 eyebrow=data.get("eyebrow"),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.trend_over_time
+            visual_grammar = VisualGrammar.area
         else:
             rendered_template = "callout"
             fallback_reason = "Area chart requires at least 2 valid numeric points"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "before_after":
         b_val = data.get("before_value") or data.get("before")
@@ -536,9 +649,13 @@ def normalize_motion_spec(
                 variant=str(data.get("variant") or "split_screen"),
                 eyebrow=data.get("eyebrow"),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.before_after
+            visual_grammar = VisualGrammar.comparison
         else:
             rendered_template = "callout"
             fallback_reason = "Before/After template requires before_value and after_value"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "stacked_bar":
         raw_segs = data.get("segments") or data.get("parts")
@@ -557,8 +674,9 @@ def normalize_motion_spec(
                                 color=s.get("color"),
                             )
                         )
-        total_val = _parse_float(data.get("total")) or (sum(s.value for s in segs) if segs else None)
-        if len(segs) >= 2 and total_val is not None:
+        total_val = _parse_float(data.get("total"))
+        # Strict stacked bar safety: require explicit total and matching sum
+        if len(segs) >= 2 and total_val is not None and abs(sum(s.value for s in segs) - total_val) <= 2.0:
             props_dict = StackedBarProps(
                 headline=headline,
                 total=total_val,
@@ -567,9 +685,23 @@ def normalize_motion_spec(
                 variant=str(data.get("variant") or "stacked_bar_reveal"),
                 eyebrow=data.get("eyebrow"),
             ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.composition_over_time
+            visual_grammar = VisualGrammar.stacked_bar
+        elif len(segs) >= 2:
+            rendered_template = "bar_chart"
+            props_dict = BarChartProps(
+                headline=headline,
+                items=[BarChartItem(label=s.label, value=s.value, display_value=s.display_value, color=s.color) for s in segs],
+                unit=data.get("unit"),
+            ).model_dump(mode="json")
+            fallback_reason = "Stacked bar without grounded total matches fell back to ordinary bar chart"
+            data_intent = SemanticDataIntent.category_comparison
+            visual_grammar = VisualGrammar.bar
         else:
             rendered_template = "callout"
             fallback_reason = "Stacked bar requires total and at least 2 valid segments"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "callout":
         emphasis = _get_first_present(data, ["emphasis", "highlight", "value", "amount", "pct"])
@@ -578,6 +710,8 @@ def normalize_motion_spec(
             emphasis=str(emphasis).strip() if emphasis is not None else None,
             subtext=str(data.get("subtext") or data.get("description") or "").strip() or None,
         ).model_dump(mode="json")
+        data_intent = SemanticDataIntent.takeaway
+        visual_grammar = VisualGrammar.kinetic_statement
 
     else:
         rendered_template = "callout"
@@ -674,4 +808,6 @@ def normalize_motion_spec(
         ),
         layout_archetype=layout_archetype,
         motion_copy=mc.__dict__,
+        data_intent=data_intent or SemanticDataIntent.single_metric,
+        visual_grammar=visual_grammar or VisualGrammar.metric,
     )

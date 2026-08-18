@@ -160,6 +160,15 @@ class DataTemplate(str, Enum):
     threshold = "threshold"
     age_marker = "age_marker"
     callout = "callout"
+    breakdown = "breakdown"
+    pie = "pie"
+    donut = "donut"
+    gauge = "gauge"
+    waterfall = "waterfall"
+    ranked_list = "ranked_list"
+    area = "area"
+    before_after = "before_after"
+    stacked_bar = "stacked_bar"
 
 
 class JobStatus(str, Enum):
