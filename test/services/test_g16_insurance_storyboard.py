@@ -128,9 +128,69 @@ class TestG16InsuranceStoryboard(unittest.TestCase):
             self.assertEqual(s.layout_archetype, "stacked_breakdown")
 
         # 3. Form motion groups
+    def test_non_uat_numbers_breakdown_group_formation_8k_2k_6k(self):
+        """Verify non-UAT numbers (8000 = 2000 + 6000) correctly form a stacked_breakdown group."""
+        project = ProjectSpec.model_validate({
+            "schema_version": "1.0",
+            "project": {"title": "Insurance Explainer", "language": "en", "aspect_ratio": "16:9", "fps": 30},
+            "script": {"subject": "Car Insurance", "script": "Suppose repairing your car costs eight thousand dollars. Your collision deductible is two thousand dollars. Your insurance company covers the remaining six thousand dollars."},
+            "narration": {"mode": "tts"},
+            "production": {"video_style_preset": "auto"}
+        })
+
+        t_cues = [
+            TimelineCue(id="T001", order=1, start=0.0, end=2.0, narration="Suppose repairing your car costs eight thousand dollars."),
+            TimelineCue(id="T002", order=2, start=2.0, end=4.0, narration="Your collision deductible is two thousand dollars."),
+            TimelineCue(id="T003", order=3, start=4.0, end=6.0, narration="Your insurance company covers the remaining six thousand dollars."),
+        ]
+
+        v_cues = [
+            VisualCue(id="V001", order=1, visual_type=VisualType.data, purpose="explain", start=0.0, end=2.0, narration=t_cues[0].narration, payload={"headline": "REPAIR COST", "template": "number", "data": {"value": "$8,000", "numeric_value": 8000}}),
+            VisualCue(id="V002", order=2, visual_type=VisualType.data, purpose="explain", start=2.0, end=4.0, narration=t_cues[1].narration, payload={"headline": "YOUR DEDUCTIBLE", "template": "number", "data": {"value": "$2,000", "numeric_value": 2000}}),
+            VisualCue(id="V003", order=3, visual_type=VisualType.data, purpose="explain", start=4.0, end=6.0, narration=t_cues[2].narration, payload={"headline": "INSURANCE COVERS", "template": "number", "data": {"value": "$6,000", "numeric_value": 6000}}),
+        ]
+
+        grouped_v_cues = _apply_diversity(project, t_cues, v_cues)
+        self.assertTrue(all(c.visual_group_id is not None for c in grouped_v_cues))
+        self.assertEqual(grouped_v_cues[0].visual_group_id, grouped_v_cues[1].visual_group_id)
+        self.assertEqual(grouped_v_cues[1].visual_group_id, grouped_v_cues[2].visual_group_id)
+
+        scene_specs = [normalize_motion_spec(c, project) for c in grouped_v_cues]
+        for s in scene_specs:
+            self.assertEqual(s.layout_archetype, "stacked_breakdown")
+
         groups = form_motion_groups(scene_specs)
         self.assertEqual(len(groups), 1)
         self.assertEqual(len(groups[0].scenes), 3)
+        self.assertEqual(groups[0].scenes[0].props["numeric_value"], 8000)
+        self.assertEqual(groups[0].scenes[1].props["numeric_value"], 2000)
+        self.assertEqual(groups[0].scenes[2].props["numeric_value"], 6000)
+
+    def test_invalid_breakdown_math_rejected_8k_2k_5k(self):
+        """Verify invalid arithmetic (8000 != 2000 + 5000) is rejected from forming a cost breakdown group."""
+        project = ProjectSpec.model_validate({
+            "schema_version": "1.0",
+            "project": {"title": "Insurance Explainer", "language": "en", "aspect_ratio": "16:9", "fps": 30},
+            "script": {"subject": "Car Insurance", "script": "Suppose repairing your car costs eight thousand dollars. Your collision deductible is two thousand dollars. Your insurance company covers five thousand dollars."},
+            "narration": {"mode": "tts"},
+            "production": {"video_style_preset": "auto"}
+        })
+
+        t_cues = [
+            TimelineCue(id="T001", order=1, start=0.0, end=2.0, narration="Suppose repairing your car costs eight thousand dollars."),
+            TimelineCue(id="T002", order=2, start=2.0, end=4.0, narration="Your collision deductible is two thousand dollars."),
+            TimelineCue(id="T003", order=3, start=4.0, end=6.0, narration="Your insurance company covers five thousand dollars."),
+        ]
+
+        v_cues = [
+            VisualCue(id="V001", order=1, visual_type=VisualType.data, purpose="explain", start=0.0, end=2.0, narration=t_cues[0].narration, payload={"headline": "REPAIR COST", "template": "number", "data": {"value": "$8,000", "numeric_value": 8000}}),
+            VisualCue(id="V002", order=2, visual_type=VisualType.data, purpose="explain", start=2.0, end=4.0, narration=t_cues[1].narration, payload={"headline": "YOUR DEDUCTIBLE", "template": "number", "data": {"value": "$2,000", "numeric_value": 2000}}),
+            VisualCue(id="V003", order=3, visual_type=VisualType.data, purpose="explain", start=4.0, end=6.0, narration=t_cues[2].narration, payload={"headline": "INSURANCE COVERS", "template": "number", "data": {"value": "$5,000", "numeric_value": 5000}}),
+        ]
+
+        # Arithmetic does not balance: 2000 + 5000 != 8000 -> must NOT group as a cost breakdown
+        grouped_v_cues = _apply_diversity(project, t_cues, v_cues)
+        self.assertTrue(all(c.visual_group_id is None for c in grouped_v_cues))
 
 
 if __name__ == "__main__":
