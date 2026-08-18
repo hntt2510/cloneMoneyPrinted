@@ -49,8 +49,14 @@ class VisualDiversityMemory:
     def __init__(self, max_history: int = 6) -> None:
         self.max_history = max_history
         self._history: list[tuple[str, str]] = []  # [(grammar, variant), ...]
+        self.total_records: int = 0
+
+    @property
+    def history(self) -> list[tuple[str, str]]:
+        return list(self._history)
 
     def record_usage(self, grammar: str, variant: str) -> None:
+        self.total_records += 1
         self._history.append((grammar, variant))
         if len(self._history) > self.max_history:
             self._history.pop(0)
@@ -102,10 +108,24 @@ class DataVisualizationDirector:
         facts = facts or extract_canonical_numeric_facts(text)
         payload = cue_payload or {}
 
-        # 1. Check for explicit payload intent override
+        # 1. Check for explicit payload intent override (validate against grounded data)
         if payload.get("data_intent"):
             try:
-                return SemanticDataIntent(payload["data_intent"])
+                candidate = SemanticDataIntent(payload["data_intent"])
+                if candidate == SemanticDataIntent.part_to_whole and len(facts) >= 2:
+                    return candidate
+                elif candidate == SemanticDataIntent.progress and facts and (facts[0].is_percent or "%" in facts[0].raw or _PROGRESS_RE.search(t_lower)):
+                    return candidate
+                elif candidate == SemanticDataIntent.trend_over_time and len(facts) >= 2:
+                    return candidate
+                elif candidate == SemanticDataIntent.positive_negative_change and len(facts) >= 3:
+                    return candidate
+                elif candidate == SemanticDataIntent.threshold and len(facts) >= 2:
+                    return candidate
+                elif candidate == SemanticDataIntent.breakdown and len(facts) >= 3:
+                    return candidate
+                elif candidate in (SemanticDataIntent.category_comparison, SemanticDataIntent.ranked_categories, SemanticDataIntent.single_metric, SemanticDataIntent.takeaway):
+                    return candidate
             except ValueError:
                 pass
 
@@ -250,9 +270,25 @@ class DataVisualizationDirector:
         facts: list[CanonicalNumericFact],
         headline: str,
         eyebrow: str | None = None,
+        cue_payload: dict[str, Any] | None = None,
     ) -> tuple[bool, dict[str, Any], str | None]:
         """Validates semantic constraints and builds grounded props. Returns (is_valid, props, error_reason)."""
         t_lower = (narration or "").lower()
+
+        payload_dict = cue_payload if isinstance(cue_payload, dict) else {}
+        payload_data = payload_dict.get("data") if isinstance(payload_dict.get("data"), dict) else payload_dict
+        payload_items = (
+            payload_data.get("items")
+            or payload_data.get("slices")
+            or payload_data.get("segments")
+            or payload_data.get("options")
+            or payload_data.get("bars")
+        )
+        payload_labels: list[str] = []
+        if isinstance(payload_items, list):
+            for it in payload_items:
+                if isinstance(it, dict) and it.get("label"):
+                    payload_labels.append(str(it["label"]).strip())
 
         # 1. PIE / DONUT VALIDATION
         if grammar in (VisualGrammar.pie, VisualGrammar.donut):
@@ -269,14 +305,17 @@ class DataVisualizationDirector:
                 assigned_tokens = set()
                 for i, p_str in enumerate(pct_matches):
                     p_val = float(p_str)
-                    label = f"Option {i + 1}"
-                    # Find category keyword nearby
-                    for tok in tokens:
-                        tok_low = tok.lower()
-                        if tok_low in ("premium", "standard", "basic", "plan a", "plan b", "plan c", "tier 1", "tier 2", "yes", "no", "first", "second", "third") and tok_low not in assigned_tokens:
-                            label = tok.upper()
-                            assigned_tokens.add(tok_low)
-                            break
+                    label = payload_labels[i] if i < len(payload_labels) else None
+                    if not label or label.lower().startswith("item ") or label.lower().startswith("option "):
+                        # Find category keyword nearby
+                        for tok in tokens:
+                            tok_low = tok.lower()
+                            if tok_low in ("premium", "standard", "basic", "plan a", "plan b", "plan c", "tier 1", "tier 2", "yes", "no", "first", "second", "third") and tok_low not in assigned_tokens:
+                                label = tok.upper()
+                                assigned_tokens.add(tok_low)
+                                break
+                    if not label:
+                        label = f"Option {i + 1}"
                     items.append({
                         "label": label,
                         "value": p_val,
@@ -538,6 +577,8 @@ class DataVisualizationDirector:
                 limit_val, act_val = f1.value, f0.value
                 limit_disp, act_disp = f1.display, f0.display
 
+            thresh_label = payload_data.get("threshold_label") or "Coverage Limit"
+            subtext_val = payload_data.get("subtext") or "Policy Limit"
             props = {
                 "headline": headline,
                 "eyebrow": eyebrow or "POLICY THRESHOLD",
@@ -545,7 +586,8 @@ class DataVisualizationDirector:
                 "current_display": act_disp,
                 "threshold_value": limit_val,
                 "threshold_display": limit_disp,
-                "threshold_label": "Coverage Limit",
+                "threshold_label": thresh_label,
+                "subtext": subtext_val,
                 "variant": variant,
                 "layout_archetype": variant,
             }
@@ -556,11 +598,13 @@ class DataVisualizationDirector:
             if len(facts) >= 2:
                 items = []
                 for i, f in enumerate(facts[:4]):
-                    lbl = f"Option {i + 1}"
-                    if "deductible" in narration.lower() and i == 0:
-                        lbl = "Deductible"
-                    elif "insurer" in narration.lower() and i == 1:
-                        lbl = "Insurer Covers"
+                    lbl = payload_labels[i] if i < len(payload_labels) else None
+                    if not lbl or lbl.lower().startswith("option ") or lbl.lower().startswith("item "):
+                        lbl = f"Option {i + 1}"
+                        if "deductible" in narration.lower() and i == 0:
+                            lbl = "Deductible"
+                        elif "insurer" in narration.lower() and i == 1:
+                            lbl = "Insurer Covers"
                     items.append({
                         "label": lbl,
                         "value": f.display,
@@ -578,9 +622,9 @@ class DataVisualizationDirector:
             elif any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to "]):
                 # Conceptual comparison without raw numeric facts
                 parts = re.split(r"\b(?:versus|vs\.?|compared\s+to)\b", narration, flags=re.IGNORECASE)
-                left_lbl = "Option A"
-                right_lbl = "Option B"
-                if len(parts) >= 2:
+                left_lbl = payload_labels[0] if len(payload_labels) > 0 else "Option A"
+                right_lbl = payload_labels[1] if len(payload_labels) > 1 else "Option B"
+                if len(parts) >= 2 and (left_lbl == "Option A" or right_lbl == "Option B"):
                     p0 = parts[0].strip()
                     p1 = parts[1].strip()
                     if "premium" in p0.lower():
@@ -609,10 +653,13 @@ class DataVisualizationDirector:
             v2 = facts[2].value
             if abs(v0 - (v1 + v2)) > 1.0:
                 return False, {}, f"Breakdown rejected: math mismatch ({v0} != {v1} + {v2})."
+            lbl0 = payload_labels[0] if len(payload_labels) > 0 else "Total Repair"
+            lbl1 = payload_labels[1] if len(payload_labels) > 1 else "Deductible"
+            lbl2 = payload_labels[2] if len(payload_labels) > 2 else "Insurer Covers"
             items = [
-                {"label": "Total Repair", "value": facts[0].display, "numeric_value": facts[0].value},
-                {"label": "Deductible", "value": facts[1].display, "numeric_value": facts[1].value},
-                {"label": "Insurer Covers", "value": facts[2].display, "numeric_value": facts[2].value},
+                {"label": lbl0, "value": facts[0].display, "numeric_value": facts[0].value},
+                {"label": lbl1, "value": facts[1].display, "numeric_value": facts[1].value},
+                {"label": lbl2, "value": facts[2].display, "numeric_value": facts[2].value},
             ]
             props = {
                 "headline": headline,
@@ -629,8 +676,9 @@ class DataVisualizationDirector:
                 return False, {}, "Bar chart rejected: requires at least 2 items."
             items = []
             for i, f in enumerate(facts[:5]):
+                lbl = payload_labels[i] if i < len(payload_labels) else f"Plan {chr(65 + i)}"
                 items.append({
-                    "label": f"Plan {chr(65 + i)}",
+                    "label": lbl,
                     "value": f.value,
                     "display_value": f.display,
                 })
@@ -646,7 +694,7 @@ class DataVisualizationDirector:
             }
             return True, props, None
 
-        # 11. METRIC HERO VALIDATION
+        # 13. METRIC HERO VALIDATION
         if grammar == VisualGrammar.metric:
             val_str = facts[0].display if facts else "$0"
             num_val = facts[0].value if facts else 0.0
@@ -656,7 +704,7 @@ class DataVisualizationDirector:
                 "value": val_str,
                 "numeric_value": num_val,
                 "prefix": "$" if (facts and facts[0].is_currency) else None,
-                "label": "Metric",
+                "label": payload_data.get("label") or "Metric",
                 "variant": variant,
                 "layout_archetype": variant,
             }
@@ -736,6 +784,7 @@ class DataVisualizationDirector:
             facts=facts,
             headline=headline,
             eyebrow=eyebrow,
+            cue_payload=cue_payload,
         )
 
         if not is_valid:

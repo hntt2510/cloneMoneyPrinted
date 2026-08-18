@@ -161,100 +161,27 @@ def _validate_grounded_data(
     local_context: str,
 ) -> None:
     """Validate DATA visual: all numeric facts in headline AND data must be grounded
-    in the local context using canonical fact comparison, and structured props must satisfy the template contract.
+    in the local context using canonical fact comparison.
     """
     if decision.visual_type != VisualType.data:
         return
-    payload = DataPayload.model_validate(decision.payload)
+    payload = decision.payload if isinstance(decision.payload, dict) else {}
     allowed_facts = extract_canonical_numeric_facts(local_context)
 
     # Validate headline numeric facts
-    headline_facts = extract_canonical_numeric_facts(payload.headline)
-    _validate_numeric_grounding(
-        headline_facts, allowed_facts, timeline_cue.id, "DATA headline"
-    )
+    headline = payload.get("headline")
+    if headline:
+        headline_facts = extract_canonical_numeric_facts(str(headline))
+        _validate_numeric_grounding(
+            headline_facts, allowed_facts, timeline_cue.id, "DATA headline"
+        )
 
     # Validate all data payload facts recursively
-    data_facts = extract_canonical_numeric_facts(payload.data)
+    data_content = payload.get("data") if "data" in payload else payload
+    data_facts = extract_canonical_numeric_facts(data_content)
     _validate_numeric_grounding(
         data_facts, allowed_facts, timeline_cue.id, "DATA payload"
     )
-
-    # Template-specific structured data validation
-    if payload.template in {DataTemplate.bar_chart, DataTemplate.line_chart, DataTemplate.area}:
-        items = payload.data.get("items") or payload.data.get("points") or payload.data.get("values")
-        if not isinstance(items, list) or len(items) < 2:
-            raise PlannerError(
-                f"{payload.template.value} template requires at least two items/points in data"
-            )
-
-    elif payload.template in {DataTemplate.pie, DataTemplate.donut}:
-        items = payload.data.get("items") or payload.data.get("slices") or payload.data.get("segments")
-        if not isinstance(items, list) or len(items) < 2:
-            raise PlannerError(
-                f"{payload.template.value} template requires an 'items' list with at least two slice entries"
-            )
-
-    elif payload.template == DataTemplate.comparison:
-        items = payload.data.get("items") or payload.data.get("options") or payload.data.get("values")
-        if not isinstance(items, list) or len(items) < 2:
-            raise PlannerError(
-                "comparison template requires an 'items' list with at least two comparison entries"
-            )
-
-    elif payload.template == DataTemplate.ranked_list:
-        items = payload.data.get("items") or payload.data.get("rankings")
-        if not isinstance(items, list) or len(items) < 2:
-            raise PlannerError(
-                "ranked_list template requires an 'items' list with at least two ranked entries"
-            )
-
-    elif payload.template == DataTemplate.timeline:
-        milestones = payload.data.get("milestones") or payload.data.get("events")
-        if not isinstance(milestones, list) or len(milestones) < 2:
-            raise PlannerError(
-                "timeline template requires a 'milestones' list with at least two milestone entries"
-            )
-
-    elif payload.template == DataTemplate.threshold:
-        curr = payload.data.get("current_value") if payload.data.get("current_value") is not None else payload.data.get("value")
-        thresh = payload.data.get("threshold_value") if payload.data.get("threshold_value") is not None else payload.data.get("threshold") or payload.data.get("limit")
-        if curr is None or thresh is None:
-            raise PlannerError(
-                "threshold template requires numeric current_value and threshold_value in data"
-            )
-
-    elif payload.template == DataTemplate.gauge:
-        curr = payload.data.get("current_value") if payload.data.get("current_value") is not None else payload.data.get("value") or payload.data.get("progress")
-        if curr is None:
-            raise PlannerError(
-                "gauge template requires numeric current_value in data"
-            )
-
-    elif payload.template == DataTemplate.waterfall:
-        start_v = payload.data.get("start_value")
-        end_v = payload.data.get("end_value")
-        steps = payload.data.get("steps")
-        if start_v is None or end_v is None or not isinstance(steps, list) or len(steps) < 1:
-            raise PlannerError(
-                "waterfall template requires start_value, end_value, and at least one step in data"
-            )
-
-    elif payload.template == DataTemplate.before_after:
-        b_val = payload.data.get("before_value") or payload.data.get("before")
-        a_val = payload.data.get("after_value") or payload.data.get("after")
-        if not b_val or not a_val:
-            raise PlannerError(
-                "before_after template requires before_value and after_value in data"
-            )
-
-    elif payload.template in {DataTemplate.stacked_bar, DataTemplate.breakdown}:
-        total = payload.data.get("total")
-        segs = payload.data.get("segments") or payload.data.get("parts")
-        if total is None or not isinstance(segs, list) or len(segs) < 2:
-            raise PlannerError(
-                f"{payload.template.value} template requires total and at least two segments/parts in data"
-            )
 
 
 def _validate_grounded_text(
@@ -312,7 +239,7 @@ def _build_prompt(
         "DIRECTING RULES:\n"
         "1. Visual Type Selection:\n"
         "   - BROLL: Use when physical real-world actions, places, objects, or human context enhance the message.\n"
-        "   - DATA: Use when numbers, comparisons, cost breakdowns, thresholds/limits, or timelines are discussed. Provide structured props.\n"
+        "   - DATA: Use when numbers, percentages, comparisons, cost breakdowns, thresholds/limits, progress, or timelines are discussed. Provide grounded structured props.\n"
         "   - DOCUMENT: Use when an official source, law, policy, study, or document proof is referenced.\n"
         "   - TEXT: Use only for short emphatic takeaways or section transitions.\n"
         "2. Action-Aware B-roll Search:\n"
@@ -324,19 +251,12 @@ def _build_prompt(
         "     * `semantic_intent`: {\"subject\": \"...\", \"action\": \"...\", \"object\": \"...\", \"setting\": \"...\", \"outcome\": \"...\", \"must_show_concepts\": [...], \"preferred_visuals\": [...], \"acceptable_alternatives\": [...], \"reject_visuals\": [...]}\n"
         "     * `avoid`: list of unwanted visual concepts\n"
         "     * `source_priority`: ['pexels', 'pixabay', 'coverr']\n"
-        "3. Structured DATA Templates:\n"
-        "   - Never output unstructured numbers or empty callouts when structured data is grounded.\n"
+        "3. Structured DATA Cues & Semantic Context:\n"
+        "   - Provide grounded structured facts, numeric values, and semantic context. The deterministic visualization director will arbitrate and choose the final chart grammar (e.g. pie/donut, gauge, waterfall, bar, line, threshold, breakdown, comparison).\n"
         "   - Headline for DATA templates MUST be a concise 1-4 word topic label. NOT the full spoken sentence.\n"
         "   - Example: narration='Suppose repairing your car costs six thousand dollars.' → headline='REPAIR COST'\n"
-        "   - `number`: headline, data: {\"value\": \"$6,000\", \"numeric_value\": 6000, \"label\": \"...\", \"prefix\": \"$\", \"eyebrow\": \"short label\", \"context_label\": \"descriptor\"}\n"
-        "   - `counter`: headline, data: {\"start_value\": 0, \"end_value\": 5000, \"label\": \"...\"}\n"
-        "   - `comparison`: headline, data: {\"items\": [{\"label\": \"...\", \"value\": \"...\", \"numeric_value\": ...}, {\"label\": \"...\", \"value\": \"...\", \"highlight\": true}]}\n"
-        "   - `timeline`: headline, data: {\"milestones\": [{\"time_label\": \"Step 1\", \"title\": \"...\"}, {\"time_label\": \"Step 2\", \"title\": \"...\"}]}\n"
-        "   - `bar_chart`: headline, data: {\"items\": [{\"label\": \"...\", \"value\": 1000, \"display_value\": \"$1,000\"}, {\"label\": \"...\", \"value\": 5000, \"display_value\": \"$5,000\"}]}\n"
-        "   - `line_chart`: headline, data: {\"points\": [{\"x_label\": \"...\", \"y_value\": ...}, {\"x_label\": \"...\", \"y_value\": ...}]}\n"
-        "   - `threshold`: headline, data: {\"current_value\": 40000, \"current_display\": \"$40K\", \"threshold_value\": 25000, \"threshold_display\": \"$25K\", \"threshold_label\": \"Coverage Limit\", \"subtext\": \"Above Policy Limit\"}\n"
-        "   - `age_marker`: headline, data: {\"markers\": [{\"age\": 67, \"label\": \"Full Retirement\", \"highlight\": true}]}\n"
-        "   - `callout`: headline, data: {\"emphasis\": \"...\", \"subtext\": \"...\"} (use ONLY when no richer structured template applies)\n"
+        "   - Supply grounded facts in payload data: `items`, `values`, `threshold_value`, `start_value`, `end_value`, `markers`, etc.\n"
+        "   - You may optionally suggest `data_intent`: 'part_to_whole', 'progress', 'positive_negative_change', 'trend_over_time', 'category_comparison', 'threshold', 'breakdown', 'ranked_categories', 'single_metric'.\n"
         "4. Multi-Cue Visual Grouping:\n"
         "   - Set `visual_group_id` (e.g. 'vg_limit_comparison') on adjacent cues that express one evolving motion concept.\n"
         "5. Factual Grounding:\n"
@@ -470,6 +390,9 @@ def _fallback_payload(
             template=template_enum,
             headline=spec.props.get("headline") or text[:120],
             data=spec.props,
+            layout_archetype=spec.variant,
+            data_intent=spec.intent.value,
+            visual_grammar=spec.grammar.value,
         ).model_dump(mode="json")
 
     # VisualType.broll
@@ -530,17 +453,51 @@ def fallback_visual(
         payload=_fallback_payload(kind, cue.narration, project, director=director),
         visual_group_id=None,
     )
-    kind = classify_narration(cue.narration)
+
+
+def adapt_data_visual_cue(
+    decision_or_cue: PlannerDecision | VisualCue,
+    cue: TimelineCue,
+    local_context: str,
+    director: DataVisualizationDirector,
+) -> VisualCue:
+    """Central adaptation function: arbitrates DATA cues through DataVisualizationDirector."""
+    raw_payload = getattr(decision_or_cue, "payload", {}) or {}
+    headline = str(raw_payload.get("headline") or "Key Data").strip()
+
+    spec = director.direct_visual_specification(
+        narration=cue.narration,
+        headline=headline,
+        cue_payload=raw_payload,
+        source_cue_id=cue.id,
+    )
+
+    template_enum = grammar_to_data_template(spec.grammar)
+    canonical_payload = DataPayload(
+        template=template_enum,
+        headline=spec.props.get("headline") or headline,
+        data=spec.props,
+        layout_archetype=spec.variant,
+        data_intent=spec.intent.value,
+        visual_grammar=spec.grammar.value,
+    ).model_dump(mode="json")
+
+    purpose = getattr(decision_or_cue, "purpose", None)
+    if not purpose or not isinstance(purpose, VisualPurpose):
+        purpose = _purpose_for(VisualType.data, cue.narration)
+
+    visual_group_id = getattr(decision_or_cue, "visual_group_id", None)
+
     return VisualCue(
         id=cue.id,
         order=cue.order,
-        visual_type=kind,
-        purpose=_purpose_for(kind, cue.narration),
+        visual_type=VisualType.data,
+        purpose=purpose,
         start=cue.start,
         end=cue.end,
         narration=cue.narration,
-        payload=_fallback_payload(kind, cue.narration, project),
-        visual_group_id=None,
+        payload=canonical_payload,
+        visual_group_id=visual_group_id,
     )
 
 
@@ -548,13 +505,31 @@ def _canonical_visual(
     decision: PlannerDecision,
     cue: TimelineCue,
     local_context: str,
+    director: DataVisualizationDirector | None = None,
 ) -> VisualCue:
     if decision.id != cue.id or decision.order != cue.order:
         raise PlannerError(
             f"decision id/order mismatch: got ({decision.id}, {decision.order}), expected ({cue.id}, {cue.order})"
         )
-    _validate_grounded_data(decision, cue, local_context)
-    _validate_grounded_text(decision, cue, local_context)
+    if decision.visual_type == VisualType.data:
+        _validate_grounded_data(decision, cue, local_context)
+        active_director = director or DataVisualizationDirector()
+        return adapt_data_visual_cue(decision, cue, local_context, active_director)
+
+    if decision.visual_type == VisualType.text:
+        _validate_grounded_text(decision, cue, local_context)
+        return VisualCue(
+            id=cue.id,
+            order=cue.order,
+            visual_type=decision.visual_type,
+            purpose=decision.purpose,
+            start=cue.start,
+            end=cue.end,
+            narration=cue.narration,
+            payload=decision.payload,
+            visual_group_id=decision.visual_group_id,
+        )
+
     return VisualCue(
         id=cue.id,
         order=cue.order,
@@ -851,12 +826,8 @@ def plan_visuals(
                         visual_group_id=dec.visual_group_id,
                         all_decisions=raw_response.cues,
                     )
-                    vis = _canonical_visual(dec, cue, local_ctx)
+                    vis = _canonical_visual(dec, cue, local_ctx, director=active_director)
                     valid_decisions[cue.id] = vis
-                    if vis.visual_type == VisualType.data:
-                        tpl = vis.payload.get("template") or "callout"
-                        var = vis.payload.get("variant") or "default"
-                        active_director.memory.record_usage(str(tpl), str(var))
                 except (ValueError, TypeError, ValidationError, PlannerError) as exc:
                     invalid_cues[cue.id] = (cue, dec, str(exc))
         else:
@@ -897,12 +868,8 @@ def plan_visuals(
                             visual_group_id=rep_dec.visual_group_id,
                             all_decisions=repaired_batch.cues,
                         )
-                        vis = _canonical_visual(rep_dec, cue, local_ctx)
+                        vis = _canonical_visual(rep_dec, cue, local_ctx, director=active_director)
                         valid_decisions[cid] = vis
-                        if vis.visual_type == VisualType.data:
-                            tpl = vis.payload.get("template") or "callout"
-                            var = vis.payload.get("variant") or "default"
-                            active_director.memory.record_usage(str(tpl), str(var))
                     except (ValueError, TypeError, ValidationError, PlannerError) as exc:
                         still_invalid[cid] = (cue, rep_dec, str(exc))
 
