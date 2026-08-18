@@ -463,7 +463,198 @@ def derive_kinetic_beats(
         ]
 
     # -------------------------------------------------------------------------
-    # 7. TEXT, CALLOUT, & OTHER TEMPLATES
+    # 7. PIE & DONUT TEMPLATES
+    # -------------------------------------------------------------------------
+    elif template in ("pie", "donut"):
+        items = props.get("items", [])
+        num_items = max(2, len(items))
+        setup_end = max(3, round(available_frames * 0.15))
+        slices_span = round(available_frames * 0.70) - setup_end
+        per_slice_f = max(2, slices_span // num_items)
+
+        beats = [
+            KineticBeat(id=f"{scene_id}_setup", start_frame=0, end_frame=setup_end,
+                        kind=KineticBeatKind.setup, text=props.get("eyebrow") or "Distribution",
+                        emphasis=False, data_ref="track"),
+        ]
+        curr_f = setup_end
+        for idx in range(num_items):
+            nxt_f = min(round(available_frames * 0.70), curr_f + per_slice_f)
+            lbl = items[idx].get("label", f"Part {idx + 1}") if idx < len(items) else f"Part {idx + 1}"
+            beats.append(
+                KineticBeat(id=f"{scene_id}_seg{idx}", start_frame=curr_f, end_frame=nxt_f,
+                            kind=KineticBeatKind.segment, text=lbl,
+                            emphasis=bool(items[idx].get("highlight")) if idx < len(items) else False,
+                            data_ref=f"segment_{idx}")
+            )
+            curr_f = nxt_f
+
+        highlight_end = min(round(available_frames * 0.85), curr_f + 8)
+        beats.append(
+            KineticBeat(id=f"{scene_id}_highlight", start_frame=curr_f, end_frame=highlight_end,
+                        kind=KineticBeatKind.highlight, text=props.get("focus_label") or "Focus",
+                        emphasis=True, data_ref="focus")
+        )
+        beats.append(
+            KineticBeat(id=f"{scene_id}_resolve", start_frame=highlight_end, end_frame=available_frames,
+                        kind=KineticBeatKind.resolve, text=props.get("headline", ""),
+                        emphasis=True, data_ref="resolve")
+        )
+
+    # -------------------------------------------------------------------------
+    # 8. GAUGE & PROGRESS TEMPLATES
+    # -------------------------------------------------------------------------
+    elif template == "gauge":
+        setup_end = max(3, round(available_frames * 0.15))
+        arc_end = round(available_frames * 0.65)
+        num_end = round(available_frames * 0.80)
+
+        beats = [
+            KineticBeat(id=f"{scene_id}_setup", start_frame=0, end_frame=setup_end,
+                        kind=KineticBeatKind.setup, text=props.get("eyebrow") or "Goal",
+                        emphasis=False, data_ref="track"),
+            KineticBeat(id=f"{scene_id}_arc", start_frame=setup_end, end_frame=arc_end,
+                        kind=KineticBeatKind.arc, text="Fill",
+                        emphasis=True, data_ref="arc"),
+            KineticBeat(id=f"{scene_id}_num", start_frame=arc_end, end_frame=num_end,
+                        kind=KineticBeatKind.number, text=props.get("display_value", ""),
+                        emphasis=True, data_ref="number"),
+            KineticBeat(id=f"{scene_id}_resolve", start_frame=num_end, end_frame=available_frames,
+                        kind=KineticBeatKind.resolve, text=props.get("label", ""),
+                        emphasis=False, data_ref="resolve"),
+        ]
+
+    # -------------------------------------------------------------------------
+    # 9. WATERFALL TEMPLATE
+    # -------------------------------------------------------------------------
+    elif template == "waterfall":
+        steps = props.get("steps", [])
+        num_steps = max(1, len(steps))
+        setup_end = max(4, round(available_frames * 0.20))
+        step_span = round(available_frames * 0.75) - setup_end
+        per_step_f = max(3, step_span // num_steps)
+
+        beats = [
+            KineticBeat(id=f"{scene_id}_start", start_frame=0, end_frame=setup_end,
+                        kind=KineticBeatKind.setup, text=f"Start: {props.get('start_value', '')}",
+                        emphasis=False, data_ref="start"),
+        ]
+        curr_f = setup_end
+        for idx, stp in enumerate(steps):
+            nxt_f = min(round(available_frames * 0.75), curr_f + per_step_f)
+            beats.append(
+                KineticBeat(id=f"{scene_id}_step{idx}", start_frame=curr_f, end_frame=nxt_f,
+                            kind=KineticBeatKind.step, text=stp.get("label", f"Step {idx + 1}"),
+                            emphasis=True, data_ref=f"step_{idx}")
+            )
+            curr_f = nxt_f
+
+        beats.append(
+            KineticBeat(id=f"{scene_id}_end", start_frame=curr_f, end_frame=available_frames,
+                        kind=KineticBeatKind.resolve, text=f"Final: {props.get('end_value', '')}",
+                        emphasis=True, data_ref="end")
+        )
+
+    # -------------------------------------------------------------------------
+    # 10. RANKED LIST TEMPLATE
+    # -------------------------------------------------------------------------
+    elif template == "ranked_list":
+        items = props.get("items", [])
+        num_items = max(2, len(items))
+        setup_end = max(3, round(available_frames * 0.15))
+        ranks_span = round(available_frames * 0.75) - setup_end
+        per_rank_f = max(3, ranks_span // num_items)
+
+        beats = [
+            KineticBeat(id=f"{scene_id}_setup", start_frame=0, end_frame=setup_end,
+                        kind=KineticBeatKind.setup, text=props.get("eyebrow") or "Rankings",
+                        emphasis=False, data_ref="header"),
+        ]
+        curr_f = setup_end
+        for idx in range(num_items):
+            nxt_f = min(round(available_frames * 0.75), curr_f + per_rank_f)
+            lbl = items[idx].get("label", f"Rank #{idx + 1}") if idx < len(items) else f"Rank #{idx + 1}"
+            beats.append(
+                KineticBeat(id=f"{scene_id}_rank{idx}", start_frame=curr_f, end_frame=nxt_f,
+                            kind=KineticBeatKind.rank, text=lbl,
+                            emphasis=(idx == 0), data_ref=f"rank_{idx}")
+            )
+            curr_f = nxt_f
+
+        beats.append(
+            KineticBeat(id=f"{scene_id}_resolve", start_frame=curr_f, end_frame=available_frames,
+                        kind=KineticBeatKind.resolve, text="Top Rank",
+                        emphasis=True, data_ref="top_rank")
+        )
+
+    # -------------------------------------------------------------------------
+    # 11. AREA & STACKED BAR & BEFORE/AFTER TEMPLATES
+    # -------------------------------------------------------------------------
+    elif template in ("area", "area_chart"):
+        setup_end = max(3, round(available_frames * 0.20))
+        draw_end = round(available_frames * 0.70)
+        points_end = round(available_frames * 0.85)
+
+        beats = [
+            KineticBeat(id=f"{scene_id}_axes", start_frame=0, end_frame=setup_end,
+                        kind=KineticBeatKind.setup, text="Axes", emphasis=False, data_ref="axes"),
+            KineticBeat(id=f"{scene_id}_draw", start_frame=setup_end, end_frame=draw_end,
+                        kind=KineticBeatKind.draw, text="Area Fill", emphasis=True, data_ref="area"),
+            KineticBeat(id=f"{scene_id}_points", start_frame=draw_end, end_frame=points_end,
+                        kind=KineticBeatKind.chart_item, text="Points", emphasis=False, data_ref="points"),
+            KineticBeat(id=f"{scene_id}_resolve", start_frame=points_end, end_frame=available_frames,
+                        kind=KineticBeatKind.resolve, text="Takeaway", emphasis=True, data_ref="resolve"),
+        ]
+
+    elif template == "before_after":
+        setup_end = max(3, round(available_frames * 0.15))
+        before_end = round(available_frames * 0.45)
+        after_end = round(available_frames * 0.75)
+
+        beats = [
+            KineticBeat(id=f"{scene_id}_setup", start_frame=0, end_frame=setup_end,
+                        kind=KineticBeatKind.setup, text="Comparison", emphasis=False, data_ref="divider"),
+            KineticBeat(id=f"{scene_id}_before", start_frame=setup_end, end_frame=before_end,
+                        kind=KineticBeatKind.before, text=props.get("before_label", "Before"),
+                        emphasis=False, data_ref="before"),
+            KineticBeat(id=f"{scene_id}_after", start_frame=before_end, end_frame=after_end,
+                        kind=KineticBeatKind.after, text=props.get("after_label", "After"),
+                        emphasis=True, data_ref="after"),
+            KineticBeat(id=f"{scene_id}_resolve", start_frame=after_end, end_frame=available_frames,
+                        kind=KineticBeatKind.resolve, text=props.get("delta_display", "Delta"),
+                        emphasis=True, data_ref="delta"),
+        ]
+
+    elif template == "stacked_bar":
+        segs = props.get("segments", [])
+        num_segs = max(2, len(segs))
+        setup_end = max(3, round(available_frames * 0.15))
+        seg_span = round(available_frames * 0.75) - setup_end
+        per_seg_f = max(3, seg_span // num_segs)
+
+        beats = [
+            KineticBeat(id=f"{scene_id}_setup", start_frame=0, end_frame=setup_end,
+                        kind=KineticBeatKind.setup, text=props.get("headline", ""),
+                        emphasis=False, data_ref="total"),
+        ]
+        curr_f = setup_end
+        for idx in range(num_segs):
+            nxt_f = min(round(available_frames * 0.75), curr_f + per_seg_f)
+            beats.append(
+                KineticBeat(id=f"{scene_id}_seg{idx}", start_frame=curr_f, end_frame=nxt_f,
+                            kind=KineticBeatKind.segment, text=segs[idx].get("label", f"Segment {idx + 1}") if idx < len(segs) else f"Segment {idx + 1}",
+                            emphasis=bool(segs[idx].get("highlight")) if idx < len(segs) else False,
+                            data_ref=f"segment_{idx}")
+            )
+            curr_f = nxt_f
+
+        beats.append(
+            KineticBeat(id=f"{scene_id}_resolve", start_frame=curr_f, end_frame=available_frames,
+                        kind=KineticBeatKind.resolve, text="Total", emphasis=True, data_ref="resolve")
+        )
+
+    # -------------------------------------------------------------------------
+    # 12. TEXT, CALLOUT, & OTHER TEMPLATES
     # -------------------------------------------------------------------------
     else:
         for i, clause in enumerate(clauses):

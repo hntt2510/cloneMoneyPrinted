@@ -16,7 +16,28 @@ export interface KineticBeat {
   id: string;
   start_frame: number;
   end_frame: number;
-  kind: "number" | "comparison_item" | "chart_item" | "milestone" | "threshold" | "takeaway" | "phrase" | "setup" | "reveal" | "grow" | "split" | "highlight" | "resolve";
+  kind:
+    | "number"
+    | "comparison_item"
+    | "chart_item"
+    | "milestone"
+    | "threshold"
+    | "takeaway"
+    | "phrase"
+    | "setup"
+    | "reveal"
+    | "grow"
+    | "split"
+    | "highlight"
+    | "resolve"
+    | "segment"
+    | "arc"
+    | "delta"
+    | "rank"
+    | "before"
+    | "after"
+    | "draw"
+    | "step";
   text: string;
   emphasis?: boolean;
   data_ref?: string | null;
@@ -170,6 +191,112 @@ export interface TextProps extends BaseTemplateProps {
   headline: string;
   subheadline?: string | null;
   style_variant?: string;
+}
+
+export interface PieSliceItem {
+  label: string;
+  value: number;
+  display_value?: string | null;
+  percentage?: number | null;
+  highlight?: boolean;
+  color?: string | null;
+}
+
+export interface PieProps extends BaseTemplateProps {
+  headline: string;
+  items: PieSliceItem[];
+  total?: number | null;
+  focus_label?: string | null;
+  subtext?: string | null;
+  variant?: "donut_reveal" | "donut_center_stat" | "pie_focus" | "segmented_ring" | string;
+  eyebrow?: string | null;
+}
+
+export interface GaugeProps extends BaseTemplateProps {
+  headline: string;
+  current_value: number;
+  max_value?: number;
+  min_value?: number;
+  display_value?: string | null;
+  unit?: string | null;
+  label?: string | null;
+  subtext?: string | null;
+  variant?: "radial_gauge" | "progress_ring" | "linear_meter" | string;
+  eyebrow?: string | null;
+}
+
+export interface WaterfallStep {
+  label: string;
+  delta: number;
+  display_value?: string | null;
+  is_total?: boolean;
+}
+
+export interface WaterfallProps extends BaseTemplateProps {
+  headline: string;
+  start_value: number;
+  start_label?: string;
+  steps: WaterfallStep[];
+  end_value: number;
+  end_label?: string;
+  unit?: string | null;
+  variant?: "waterfall_steps" | "waterfall_variance" | string;
+  eyebrow?: string | null;
+}
+
+export interface RankedListItem {
+  rank: number;
+  label: string;
+  value?: number | null;
+  display_value?: string | null;
+  highlight?: boolean;
+}
+
+export interface RankedListProps extends BaseTemplateProps {
+  headline: string;
+  items: RankedListItem[];
+  subtext?: string | null;
+  variant?: "ranked_horizontal_bars" | "leaderboard_reveal" | string;
+  eyebrow?: string | null;
+}
+
+export interface AreaChartProps extends BaseTemplateProps {
+  headline: string;
+  points: LineChartPoint[];
+  unit?: string | null;
+  variant?: "area_trend" | "stacked_area" | string;
+  eyebrow?: string | null;
+}
+
+export interface BeforeAfterProps extends BaseTemplateProps {
+  headline: string;
+  before_label?: string;
+  before_value: string;
+  before_numeric?: number | null;
+  after_label?: string;
+  after_value: string;
+  after_numeric?: number | null;
+  delta_display?: string | null;
+  subtext?: string | null;
+  variant?: "split_screen" | "value_shift" | "side_by_side" | string;
+  eyebrow?: string | null;
+}
+
+export interface StackedBarSegment {
+  label: string;
+  value: number;
+  display_value?: string | null;
+  highlight?: boolean;
+  color?: string | null;
+}
+
+export interface StackedBarProps extends BaseTemplateProps {
+  headline: string;
+  total: number;
+  total_display?: string | null;
+  segments: StackedBarSegment[];
+  variant?: "stacked_bar_reveal" | "stacked_bar_composition" | string;
+  eyebrow?: string | null;
 }
 
 export interface SceneCompositionProps {

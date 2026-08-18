@@ -123,6 +123,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="render motion graphics scene assets for DATA and TEXT cues without full assembly",
     )
     parser.add_argument(
+        "--render-motion-demo",
+        action="store_true",
+        help="render the 15 canonical G17 motion graphics demo clips into storage/demo/g17/",
+    )
+    parser.add_argument(
         "--acquire-evidence-only",
         action="store_true",
         help="acquire and render clean scene clips for DOCUMENT cues without full assembly",
@@ -460,6 +465,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--assemble-final requires --project")
     elif args.output_dir:
         parser.error("--output-dir requires --project and --export-editor-package")
+    elif args.render_motion_demo:
+        return args
     elif not args.video_subject:
         parser.error("--video-subject is required unless --project is provided")
 
@@ -549,6 +556,13 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
 
 def run_cli(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+
+    if args.render_motion_demo:
+        from app.services.motion_demo_gallery import render_all_g17_demos
+        rendered = render_all_g17_demos(output_dir=args.output_dir or "storage/demo/g17")
+        print(json.dumps({"rendered_demos": rendered, "total": len(rendered)}, ensure_ascii=False))
+        return 0
+
     if args.project:
         try:
             project = load_project_spec(args.project)

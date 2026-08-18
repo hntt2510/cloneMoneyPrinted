@@ -376,6 +376,201 @@ def normalize_motion_spec(
             rendered_template = "callout"
             fallback_reason = "Age marker template requires at least 1 valid age value"
 
+    elif requested_template in ("pie", "donut"):
+        raw_items = data.get("items") or data.get("slices") or data.get("segments")
+        pie_items: list[PieSliceItem] = []
+        if isinstance(raw_items, list) and len(raw_items) >= 2:
+            for it in raw_items:
+                if isinstance(it, dict) and it.get("label") and it.get("value") is not None:
+                    val = _parse_float(it["value"])
+                    if val is not None:
+                        pie_items.append(
+                            PieSliceItem(
+                                label=str(it["label"]).strip(),
+                                value=val,
+                                display_value=str(it.get("display_value") if it.get("display_value") is not None else it["value"]).strip(),
+                                percentage=_parse_float(it.get("percentage")),
+                                highlight=bool(it.get("highlight")),
+                                color=it.get("color"),
+                            )
+                        )
+        if len(pie_items) >= 2:
+            props_dict = PieProps(
+                headline=headline,
+                items=pie_items,
+                total=_parse_float(data.get("total")),
+                focus_label=data.get("focus_label"),
+                subtext=data.get("subtext"),
+                variant=str(data.get("variant") or "donut_center_stat"),
+                eyebrow=data.get("eyebrow"),
+            ).model_dump(mode="json")
+        else:
+            rendered_template = "callout"
+            fallback_reason = "Pie template requires at least 2 valid slices"
+
+    elif requested_template == "gauge":
+        curr = _get_first_present(data, ["current_value", "value", "current", "progress"])
+        curr_val = _parse_float(curr)
+        if curr_val is not None:
+            max_val = _parse_float(data.get("max_value")) or 100.0
+            min_val = _parse_float(data.get("min_value")) or 0.0
+            props_dict = GaugeProps(
+                headline=headline,
+                current_value=curr_val,
+                max_value=max_val,
+                min_value=min_val,
+                display_value=str(data.get("display_value") if data.get("display_value") is not None else curr).strip(),
+                unit=data.get("unit"),
+                label=data.get("label"),
+                subtext=data.get("subtext"),
+                variant=str(data.get("variant") or "radial_gauge"),
+                eyebrow=data.get("eyebrow"),
+            ).model_dump(mode="json")
+        else:
+            rendered_template = "callout"
+            fallback_reason = "Gauge template requires numeric current_value"
+
+    elif requested_template == "waterfall":
+        raw_steps = data.get("steps")
+        steps: list[WaterfallStep] = []
+        if isinstance(raw_steps, list) and len(raw_steps) >= 1:
+            for s in raw_steps:
+                if isinstance(s, dict) and s.get("label") and s.get("delta") is not None:
+                    d_val = _parse_float(s["delta"])
+                    if d_val is not None:
+                        steps.append(
+                            WaterfallStep(
+                                label=str(s["label"]).strip(),
+                                delta=d_val,
+                                display_value=str(s.get("display_value") if s.get("display_value") is not None else d_val).strip(),
+                                is_total=bool(s.get("is_total")),
+                            )
+                        )
+        start_val = _parse_float(data.get("start_value"))
+        end_val = _parse_float(data.get("end_value"))
+        if start_val is not None and end_val is not None and len(steps) >= 1:
+            props_dict = WaterfallProps(
+                headline=headline,
+                start_value=start_val,
+                start_label=str(data.get("start_label") or "Starting").strip(),
+                steps=steps,
+                end_value=end_val,
+                end_label=str(data.get("end_label") or "Final").strip(),
+                unit=data.get("unit"),
+                variant=str(data.get("variant") or "waterfall_steps"),
+                eyebrow=data.get("eyebrow"),
+            ).model_dump(mode="json")
+        else:
+            rendered_template = "callout"
+            fallback_reason = "Waterfall template requires valid start_value, end_value, and steps"
+
+    elif requested_template == "ranked_list":
+        raw_items = data.get("items") or data.get("rankings")
+        r_items: list[RankedListItem] = []
+        if isinstance(raw_items, list) and len(raw_items) >= 2:
+            for idx, it in enumerate(raw_items):
+                if isinstance(it, dict) and it.get("label"):
+                    r_items.append(
+                        RankedListItem(
+                            rank=it.get("rank", idx + 1),
+                            label=str(it["label"]).strip(),
+                            value=_parse_float(it.get("value")),
+                            display_value=str(it.get("display_value") or it.get("value") or "").strip() or None,
+                            highlight=bool(it.get("highlight")),
+                        )
+                    )
+        if len(r_items) >= 2:
+            props_dict = RankedListProps(
+                headline=headline,
+                items=r_items,
+                subtext=data.get("subtext"),
+                variant=str(data.get("variant") or "ranked_horizontal_bars"),
+                eyebrow=data.get("eyebrow"),
+            ).model_dump(mode="json")
+        else:
+            rendered_template = "callout"
+            fallback_reason = "Ranked list template requires at least 2 valid ranked items"
+
+    elif requested_template in ("area", "area_chart"):
+        raw_points = data.get("points") or data.get("data_points")
+        points: list[LineChartPoint] = []
+        if isinstance(raw_points, list) and len(raw_points) >= 2:
+            for p in raw_points:
+                if isinstance(p, dict) and (p.get("x_label") or p.get("x")) and (p.get("y_value") is not None or p.get("y") is not None):
+                    y_raw = p.get("y_value") if p.get("y_value") is not None else p.get("y")
+                    y_val = _parse_float(y_raw)
+                    if y_val is not None:
+                        points.append(
+                            LineChartPoint(
+                                x_label=str(p.get("x_label") or p.get("x")).strip(),
+                                y_value=y_val,
+                                display_value=str(p.get("display_value") if p.get("display_value") is not None else y_val).strip(),
+                            )
+                        )
+        if len(points) >= 2:
+            props_dict = AreaChartProps(
+                headline=headline,
+                points=points,
+                unit=data.get("unit"),
+                variant=str(data.get("variant") or "area_trend"),
+                eyebrow=data.get("eyebrow"),
+            ).model_dump(mode="json")
+        else:
+            rendered_template = "callout"
+            fallback_reason = "Area chart requires at least 2 valid numeric points"
+
+    elif requested_template == "before_after":
+        b_val = data.get("before_value") or data.get("before")
+        a_val = data.get("after_value") or data.get("after")
+        if b_val and a_val:
+            props_dict = BeforeAfterProps(
+                headline=headline,
+                before_label=str(data.get("before_label") or "Before").strip(),
+                before_value=str(b_val).strip(),
+                before_numeric=_parse_float(data.get("before_numeric") or b_val),
+                after_label=str(data.get("after_label") or "After").strip(),
+                after_value=str(a_val).strip(),
+                after_numeric=_parse_float(data.get("after_numeric") or a_val),
+                delta_display=data.get("delta_display"),
+                subtext=data.get("subtext"),
+                variant=str(data.get("variant") or "split_screen"),
+                eyebrow=data.get("eyebrow"),
+            ).model_dump(mode="json")
+        else:
+            rendered_template = "callout"
+            fallback_reason = "Before/After template requires before_value and after_value"
+
+    elif requested_template == "stacked_bar":
+        raw_segs = data.get("segments") or data.get("parts")
+        segs: list[StackedBarSegment] = []
+        if isinstance(raw_segs, list) and len(raw_segs) >= 2:
+            for s in raw_segs:
+                if isinstance(s, dict) and s.get("label") and s.get("value") is not None:
+                    val = _parse_float(s["value"])
+                    if val is not None:
+                        segs.append(
+                            StackedBarSegment(
+                                label=str(s["label"]).strip(),
+                                value=val,
+                                display_value=str(s.get("display_value") if s.get("display_value") is not None else val).strip(),
+                                highlight=bool(s.get("highlight")),
+                                color=s.get("color"),
+                            )
+                        )
+        total_val = _parse_float(data.get("total")) or (sum(s.value for s in segs) if segs else None)
+        if len(segs) >= 2 and total_val is not None:
+            props_dict = StackedBarProps(
+                headline=headline,
+                total=total_val,
+                total_display=str(data.get("total_display") if data.get("total_display") is not None else total_val).strip(),
+                segments=segs,
+                variant=str(data.get("variant") or "stacked_bar_reveal"),
+                eyebrow=data.get("eyebrow"),
+            ).model_dump(mode="json")
+        else:
+            rendered_template = "callout"
+            fallback_reason = "Stacked bar requires total and at least 2 valid segments"
+
     elif requested_template == "callout":
         emphasis = _get_first_present(data, ["emphasis", "highlight", "value", "amount", "pct"])
         props_dict = CalloutProps(
@@ -401,10 +596,24 @@ def normalize_motion_spec(
         props_dict["eyebrow"] = mc.eyebrow
         props_dict["context_label"] = mc.label
 
-    layout_archetype = raw_payload.get("layout_archetype")
+    layout_archetype = raw_payload.get("layout_archetype") or props_dict.get("variant")
     if not layout_archetype:
         if rendered_template in ("number", "counter"):
             layout_archetype = "metric_hero"
+        elif rendered_template in ("pie", "donut"):
+            layout_archetype = "donut_center_stat"
+        elif rendered_template == "gauge":
+            layout_archetype = "radial_gauge"
+        elif rendered_template == "waterfall":
+            layout_archetype = "waterfall_steps"
+        elif rendered_template == "ranked_list":
+            layout_archetype = "ranked_horizontal_bars"
+        elif rendered_template in ("area", "area_chart"):
+            layout_archetype = "area_trend"
+        elif rendered_template == "before_after":
+            layout_archetype = "split_screen"
+        elif rendered_template == "stacked_bar":
+            layout_archetype = "stacked_bar_reveal"
         elif rendered_template == "comparison":
             raw_items = props_dict.get("items", [])
             if len(raw_items) == 3:
