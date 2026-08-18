@@ -31,10 +31,10 @@ def _extract_frame(mp4_path: Path, timestamp_sec: float, output_png: Path) -> np
     cmd = [
         ffmpeg_bin,
         "-y",
-        "-ss",
-        f"{timestamp_sec:.3f}",
         "-i",
         str(mp4_path.resolve()),
+        "-ss",
+        f"{timestamp_sec:.3f}",
         "-vframes",
         "1",
         str(output_png.resolve()),
