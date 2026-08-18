@@ -228,6 +228,9 @@ class DataPayload(ProjectModel):
     template: DataTemplate
     headline: str
     data: dict[str, Any] = Field(default_factory=dict)
+    layout_archetype: str | None = None
+    data_intent: str | None = None
+    visual_grammar: str | None = None
 
     @field_validator("headline")
     @classmethod
