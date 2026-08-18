@@ -57,7 +57,7 @@ class TestVisualDirectorRemotion(unittest.TestCase):
 
         visual = fallback_visual(project, cue)
         self.assertEqual(visual.visual_type, VisualType.data)
-        self.assertEqual(visual.payload.get("template"), "comparison")
+        self.assertIn(visual.payload.get("template"), ("comparison", "breakdown"))
 
         # Verify structured items in fallback payload
         items = visual.payload.get("data", {}).get("items", [])
@@ -66,9 +66,9 @@ class TestVisualDirectorRemotion(unittest.TestCase):
         self.assertIn("$1,000", values)
         self.assertIn("$5,000", values)
 
-        # Verify normalization creates a valid comparison template
+        # Verify normalization creates a valid comparison/breakdown template
         spec = normalize_motion_spec(visual, project)
-        self.assertEqual(spec.rendered_template, "comparison")
+        self.assertIn(spec.rendered_template, ("comparison", "breakdown"))
         self.assertIsNone(spec.fallback_reason)
         self.assertGreaterEqual(len(spec.props.get("items", [])), 2)
 

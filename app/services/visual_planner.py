@@ -22,6 +22,7 @@ from app.models.project import (
     VisualType,
 )
 from app.services import llm
+from app.services.data_visualization_director import DataVisualizationDirector
 from app.services.numeric_parser import (
     CanonicalNumericFact,
     extract_canonical_numeric_facts,
@@ -40,6 +41,36 @@ _COMPARISON_RE = re.compile(
     r"\b(versus|vs|compare|compared|more than|less than|higher than|lower than|increase|decrease|growth|decline|cost breakdown|premium vs|deductible vs|limit vs)\b",
     re.IGNORECASE,
 )
+
+
+def grammar_to_data_template(grammar: Any) -> DataTemplate:
+    val = grammar.value if hasattr(grammar, "value") else str(grammar).lower()
+    mapping = {
+        "metric": DataTemplate.number,
+        "number": DataTemplate.number,
+        "counter": DataTemplate.counter,
+        "comparison": DataTemplate.comparison,
+        "breakdown": DataTemplate.breakdown,
+        "bar": DataTemplate.bar_chart,
+        "bar_chart": DataTemplate.bar_chart,
+        "stacked_bar": DataTemplate.stacked_bar,
+        "line": DataTemplate.line_chart,
+        "line_chart": DataTemplate.line_chart,
+        "area": DataTemplate.area,
+        "area_chart": DataTemplate.area,
+        "pie": DataTemplate.pie,
+        "donut": DataTemplate.donut,
+        "threshold": DataTemplate.threshold,
+        "gauge": DataTemplate.gauge,
+        "timeline": DataTemplate.timeline,
+        "waterfall": DataTemplate.waterfall,
+        "ranked_list": DataTemplate.ranked_list,
+        "before_after": DataTemplate.before_after,
+        "age_marker": DataTemplate.age_marker,
+        "callout": DataTemplate.callout,
+        "kinetic_statement": DataTemplate.callout,
+    }
+    return mapping.get(val, DataTemplate.callout)
 
 
 class PlannerError(ValueError):
@@ -150,11 +181,18 @@ def _validate_grounded_data(
     )
 
     # Template-specific structured data validation
-    if payload.template in {DataTemplate.bar_chart, DataTemplate.line_chart}:
+    if payload.template in {DataTemplate.bar_chart, DataTemplate.line_chart, DataTemplate.area}:
         items = payload.data.get("items") or payload.data.get("points") or payload.data.get("values")
         if not isinstance(items, list) or len(items) < 2:
             raise PlannerError(
                 f"{payload.template.value} template requires at least two items/points in data"
+            )
+
+    elif payload.template in {DataTemplate.pie, DataTemplate.donut}:
+        items = payload.data.get("items") or payload.data.get("slices") or payload.data.get("segments")
+        if not isinstance(items, list) or len(items) < 2:
+            raise PlannerError(
+                f"{payload.template.value} template requires an 'items' list with at least two slice entries"
             )
 
     elif payload.template == DataTemplate.comparison:
@@ -162,6 +200,13 @@ def _validate_grounded_data(
         if not isinstance(items, list) or len(items) < 2:
             raise PlannerError(
                 "comparison template requires an 'items' list with at least two comparison entries"
+            )
+
+    elif payload.template == DataTemplate.ranked_list:
+        items = payload.data.get("items") or payload.data.get("rankings")
+        if not isinstance(items, list) or len(items) < 2:
+            raise PlannerError(
+                "ranked_list template requires an 'items' list with at least two ranked entries"
             )
 
     elif payload.template == DataTemplate.timeline:
@@ -177,6 +222,38 @@ def _validate_grounded_data(
         if curr is None or thresh is None:
             raise PlannerError(
                 "threshold template requires numeric current_value and threshold_value in data"
+            )
+
+    elif payload.template == DataTemplate.gauge:
+        curr = payload.data.get("current_value") if payload.data.get("current_value") is not None else payload.data.get("value") or payload.data.get("progress")
+        if curr is None:
+            raise PlannerError(
+                "gauge template requires numeric current_value in data"
+            )
+
+    elif payload.template == DataTemplate.waterfall:
+        start_v = payload.data.get("start_value")
+        end_v = payload.data.get("end_value")
+        steps = payload.data.get("steps")
+        if start_v is None or end_v is None or not isinstance(steps, list) or len(steps) < 1:
+            raise PlannerError(
+                "waterfall template requires start_value, end_value, and at least one step in data"
+            )
+
+    elif payload.template == DataTemplate.before_after:
+        b_val = payload.data.get("before_value") or payload.data.get("before")
+        a_val = payload.data.get("after_value") or payload.data.get("after")
+        if not b_val or not a_val:
+            raise PlannerError(
+                "before_after template requires before_value and after_value in data"
+            )
+
+    elif payload.template in {DataTemplate.stacked_bar, DataTemplate.breakdown}:
+        total = payload.data.get("total")
+        segs = payload.data.get("segments") or payload.data.get("parts")
+        if total is None or not isinstance(segs, list) or len(segs) < 2:
+            raise PlannerError(
+                f"{payload.template.value} template requires total and at least two segments/parts in data"
             )
 
 
@@ -364,7 +441,12 @@ def _extract_intent_concepts(text: str) -> tuple[list[str], list[str], str, str,
     return must_show, reject_keywords, subject, action, obj
 
 
-def _fallback_payload(kind: VisualType, narration: str, project: ProjectSpec) -> dict[str, Any]:
+def _fallback_payload(
+    kind: VisualType,
+    narration: str,
+    project: ProjectSpec,
+    director: DataVisualizationDirector | None = None,
+) -> dict[str, Any]:
     text = narration.strip()
     if kind == VisualType.document:
         return DocumentPayload(
@@ -378,105 +460,16 @@ def _fallback_payload(kind: VisualType, narration: str, project: ProjectSpec) ->
         return TextPayload(headline=text[:120]).model_dump(mode="json")
 
     if kind == VisualType.data:
-        facts = extract_canonical_numeric_facts(text)
-        t_lower = text.lower()
-
-        # 1. Threshold / Limit Detection (e.g. $25K limit vs $40K damage)
-        if (
-            re.search(r"\b(?:limit|threshold|exceed|exceeds|exceeded|exceeding|above limit|policy limit|coverage limit|cap|capped)\b", t_lower)
-            and len(facts) >= 2
-        ):
-            n1 = facts[0]
-            n2 = facts[1]
-            thresh_val = min(n1.value, n2.value)
-            curr_val = max(n1.value, n2.value)
-            thresh_disp = n1.display if n1.value <= n2.value else n2.display
-            curr_disp = n2.display if n1.value <= n2.value else n1.display
-            return DataPayload(
-                template=DataTemplate.threshold,
-                headline=text[:120],
-                data={
-                    "current_value": curr_val,
-                    "current_display": curr_disp,
-                    "threshold_value": thresh_val,
-                    "threshold_display": thresh_disp,
-                    "threshold_label": "Coverage Limit",
-                    "subtext": "Above Policy Limit",
-                },
-            ).model_dump(mode="json")
-
-        # 2. Comparison / Cost Breakdown (e.g. $1,000 deductible vs $5,000 insurance)
-        if len(facts) >= 2 or _COMPARISON_RE.search(text):
-            items = []
-            for i, fact in enumerate(facts[:4]):
-                tok = fact.display
-                label = f"Item {i + 1}"
-                if "deductible" in t_lower:
-                    label = "Deductible"
-                elif "insurance" in t_lower or "insurer" in t_lower or "cover" in t_lower:
-                    label = "Insurance Portion"
-                elif "repair" in t_lower or "cost" in t_lower or "damage" in t_lower:
-                    label = "Repair Cost"
-                elif "limit" in t_lower:
-                    label = "Coverage Limit" if i == 0 else "Damage Amount"
-
-                items.append(
-                    {
-                        "label": label,
-                        "value": tok,
-                        "numeric_value": fact.value,
-                        "highlight": (i == 1 or i == 2),
-                    }
-                )
-            if len(items) >= 2:
-                return DataPayload(
-                    template=DataTemplate.comparison,
-                    headline=text[:120],
-                    data={"items": items},
-                ).model_dump(mode="json")
-
-        # 3. Single Number
-        if len(facts) >= 1:
-            fact = facts[0]
-            label = "Key Metric"
-            if "repair" in t_lower or "cost" in t_lower:
-                label = "Repair Cost"
-            elif "deductible" in t_lower:
-                label = "Deductible"
-            elif "limit" in t_lower or "coverage" in t_lower:
-                label = "Coverage Limit"
-            elif "insurance" in t_lower or "cover" in t_lower:
-                label = "Insurance Coverage"
-
-            return DataPayload(
-                template=DataTemplate.number,
-                headline=text[:120],
-                data={
-                    "value": fact.display,
-                    "numeric_value": fact.value,
-                    "label": label,
-                    "prefix": "$" if fact.is_currency and not fact.display.startswith("$") else "",
-                    "suffix": "%" if fact.is_percent and not fact.display.endswith("%") else "",
-                },
-            ).model_dump(mode="json")
-
-        # 4. Conceptual comparison without numbers (e.g. Premium vs Deductible)
-        if "premium" in t_lower and "deductible" in t_lower:
-            return DataPayload(
-                template=DataTemplate.comparison,
-                headline="Insurance Premium vs. Deductible",
-                data={
-                    "items": [
-                        {"label": "Premium", "value": "Recurring Cost to Maintain Policy", "highlight": False},
-                        {"label": "Deductible", "value": "Out-of-Pocket Cost When Claiming", "highlight": True},
-                    ]
-                },
-            ).model_dump(mode="json")
-
-        return DataPayload(
-            template=DataTemplate.callout,
+        active_director = director or DataVisualizationDirector()
+        spec = active_director.direct_visual_specification(
+            narration=text,
             headline=text[:120],
-            data={"text": text[:180], "style": "card"},
+        )
+        template_enum = grammar_to_data_template(spec.grammar)
+        return DataPayload(
+            template=template_enum,
+            headline=spec.props.get("headline") or text[:120],
+            data=spec.props,
         ).model_dump(mode="json")
 
     # VisualType.broll
@@ -520,7 +513,23 @@ def _fallback_payload(kind: VisualType, narration: str, project: ProjectSpec) ->
     ).model_dump(mode="json")
 
 
-def fallback_visual(project: ProjectSpec, cue: TimelineCue) -> VisualCue:
+def fallback_visual(
+    project: ProjectSpec,
+    cue: TimelineCue,
+    director: DataVisualizationDirector | None = None,
+) -> VisualCue:
+    kind = classify_narration(cue.narration)
+    return VisualCue(
+        id=cue.id,
+        order=cue.order,
+        visual_type=kind,
+        purpose=_purpose_for(kind, cue.narration),
+        start=cue.start,
+        end=cue.end,
+        narration=cue.narration,
+        payload=_fallback_payload(kind, cue.narration, project, director=director),
+        visual_group_id=None,
+    )
     kind = classify_narration(cue.narration)
     return VisualCue(
         id=cue.id,
@@ -801,8 +810,10 @@ def plan_visuals(
     batch_size: int = BATCH_SIZE,
     total_duration_seconds: float | None = None,
     total_duration_frames: int | None = None,
+    director: DataVisualizationDirector | None = None,
 ) -> list[VisualCue]:
     """Autonomous Visual Director planner with independent per-cue validation and targeted repair."""
+    active_director = director or DataVisualizationDirector()
     response_fn = response_fn or llm.generate_response
     planned: list[VisualCue] = []
     timeline_index_by_id = {cue.id: idx for idx, cue in enumerate(timeline_cues)}
@@ -842,6 +853,10 @@ def plan_visuals(
                     )
                     vis = _canonical_visual(dec, cue, local_ctx)
                     valid_decisions[cue.id] = vis
+                    if vis.visual_type == VisualType.data:
+                        tpl = vis.payload.get("template") or "callout"
+                        var = vis.payload.get("variant") or "default"
+                        active_director.memory.record_usage(str(tpl), str(var))
                 except (ValueError, TypeError, ValidationError, PlannerError) as exc:
                     invalid_cues[cue.id] = (cue, dec, str(exc))
         else:
@@ -884,6 +899,10 @@ def plan_visuals(
                         )
                         vis = _canonical_visual(rep_dec, cue, local_ctx)
                         valid_decisions[cid] = vis
+                        if vis.visual_type == VisualType.data:
+                            tpl = vis.payload.get("template") or "callout"
+                            var = vis.payload.get("variant") or "default"
+                            active_director.memory.record_usage(str(tpl), str(var))
                     except (ValueError, TypeError, ValidationError, PlannerError) as exc:
                         still_invalid[cid] = (cue, rep_dec, str(exc))
 
@@ -898,7 +917,7 @@ def plan_visuals(
             if cue.id in valid_decisions:
                 batch_decisions.append(valid_decisions[cue.id])
             else:
-                fb = fallback_visual(project, cue)
+                fb = fallback_visual(project, cue, director=active_director)
                 batch_decisions.append(fb)
 
         planned.extend(batch_decisions)
@@ -910,7 +929,7 @@ def plan_visuals(
             facts = extract_canonical_numeric_facts(t_cue.narration)
             t_lower = t_cue.narration.lower()
             if len(facts) >= 2 or (len(facts) >= 1 and any(w in t_lower for w in ("cost", "deductible", "limit", "coverage", "repair", "percent", "dollar"))):
-                fb_data = fallback_visual(project, t_cue)
+                fb_data = fallback_visual(project, t_cue, director=active_director)
                 if fb_data.visual_type == VisualType.data:
                     logger.info(f"Post-plan semantic audit upgraded cue {cue.id} from generic BROLL to structured DATA ({fb_data.payload.get('template')})")
                     planned[idx] = fb_data
