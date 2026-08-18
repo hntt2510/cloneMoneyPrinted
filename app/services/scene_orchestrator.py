@@ -105,6 +105,10 @@ def compute_project_input_fingerprint(project_spec: ProjectSpec) -> str:
             "timing_file": project_spec.narration.timing_file,
         },
         "production": project_spec.production.model_dump(mode="json"),
+        "motion_engine": {
+            "version": "3",
+            "engine": "g16_editorial",
+        },
     }
     if project_spec.timeline_cues:
         canonical["timeline_cues"] = [

@@ -43,6 +43,12 @@ class KineticBeatKind(str, Enum):
     threshold = "threshold"
     takeaway = "takeaway"
     phrase = "phrase"
+    setup = "setup"
+    reveal = "reveal"
+    grow = "grow"
+    split = "split"
+    highlight = "highlight"
+    resolve = "resolve"
 
 
 class KineticBeat(BaseModel):
@@ -63,7 +69,7 @@ class MotionAnimationPlan(BaseModel):
     final_hold_frames: int = 15
     timing_source: str = "auto"
     kinetic_timing_source: str = "auto"
-    motion_engine_version: str = "2"
+    motion_engine_version: str = "3"
 
 
 # --- Template Prop Models ---
@@ -76,6 +82,8 @@ class NumberProps(MotionModel):
     suffix: str | None = None
     label: str | None = None
     subtext: str | None = None
+    eyebrow: str | None = None
+    context_label: str | None = None
 
     @field_validator("headline", "value")
     @classmethod
@@ -95,6 +103,8 @@ class CounterProps(MotionModel):
     suffix: str | None = None
     decimals: int = Field(default=0, ge=0, le=5)
     label: str | None = None
+    eyebrow: str | None = None
+    context_label: str | None = None
 
     @field_validator("headline")
     @classmethod
@@ -308,6 +318,10 @@ class MotionSceneSpec(MotionModel):
     height: int = Field(ge=1)
     visual_group_id: str | None = None
     animation_plan: MotionAnimationPlan | None = None
+    layout_archetype: str = "default"
+    storyboard_actions: list[str] = Field(default_factory=list)
+    motion_style: str = "standard"
+    motion_copy: dict[str, Any] = Field(default_factory=dict)
 
 
 class MotionGroupSpec(MotionModel):

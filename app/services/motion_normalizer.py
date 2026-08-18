@@ -25,6 +25,8 @@ from app.models.motion import (
 )
 from app.models.project import ProjectSpec, VisualCue, VisualType
 from app.services.kinetic_beat_deriver import derive_kinetic_beats
+from app.services.motion_copy_extractor import extract_motion_copy, _truncate_motion_headline
+
 
 
 def _parse_float(val: Any) -> float | None:
@@ -108,7 +110,7 @@ def normalize_motion_spec(
     raw_payload = cue.payload or {}
 
     if cue.visual_type == VisualType.text:
-        headline = str(raw_payload.get("headline") or cue.narration or "Summary").strip()
+        headline = _truncate_motion_headline(str(raw_payload.get("headline") or cue.narration or "Summary").strip())
         subheadline = raw_payload.get("subheadline")
         if subheadline:
             subheadline = str(subheadline).strip()
@@ -145,11 +147,12 @@ def normalize_motion_spec(
                 scene_id=cue.id,
                 props=props_dict,
             ),
+            layout_archetype="kinetic_statement",
         )
 
     # VisualType.data
     requested_template = str(raw_payload.get("template") or "callout").strip().lower()
-    headline = str(raw_payload.get("headline") or "Key Data").strip()
+    headline = _truncate_motion_headline(str(raw_payload.get("headline") or "Key Data").strip())
     data = raw_payload.get("data") if isinstance(raw_payload.get("data"), dict) else {}
 
     rendered_template = requested_template
@@ -168,6 +171,8 @@ def normalize_motion_spec(
                 suffix=data.get("suffix"),
                 label=data.get("label") or data.get("caption"),
                 subtext=data.get("subtext") or data.get("description"),
+                eyebrow=None,
+                context_label=None,
             ).model_dump(mode="json")
         else:
             rendered_template = "callout"
@@ -191,6 +196,8 @@ def normalize_motion_spec(
                 suffix=data.get("suffix"),
                 decimals=decimals,
                 label=data.get("label") or data.get("caption"),
+                eyebrow=None,
+                context_label=None,
             ).model_dump(mode="json")
         else:
             rendered_template = "callout"
@@ -389,6 +396,27 @@ def normalize_motion_spec(
             subtext=str(data.get("subtext") or data.get("description") or "").strip() or None,
         ).model_dump(mode="json")
 
+    mc = extract_motion_copy(cue.narration or "", raw_payload, rendered_template)
+    if rendered_template in ("number", "counter") and props_dict:
+        props_dict["eyebrow"] = mc.eyebrow
+        props_dict["context_label"] = mc.label
+
+    layout_archetype = "default"
+    if rendered_template in ("number", "counter"):
+        layout_archetype = "metric_hero"
+    elif rendered_template == "comparison":
+        layout_archetype = "split_compare" if len(props_dict.get("items", [])) == 2 else "stacked_breakdown"
+    elif rendered_template == "bar_chart":
+        layout_archetype = "bar_chart_v2"
+    elif rendered_template == "line_chart":
+        layout_archetype = "line_chart_v2"
+    elif rendered_template == "threshold":
+        layout_archetype = "threshold_v2"
+    elif rendered_template == "timeline":
+        layout_archetype = "timeline_v2"
+    elif rendered_template == "callout":
+        layout_archetype = "statement_reveal"
+
     return MotionSceneSpec(
         scene_id=cue.id,
         order=cue.order,
@@ -415,4 +443,6 @@ def normalize_motion_spec(
             scene_id=cue.id,
             props=props_dict,
         ),
+        layout_archetype=layout_archetype,
+        motion_copy=mc.__dict__,
     )

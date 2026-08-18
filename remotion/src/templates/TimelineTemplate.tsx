@@ -1,191 +1,90 @@
 import React from 'react';
-import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
-import { Header } from '../components/Header';
+import { interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
+import { Background } from '../components/Background';
 import { Layout } from '../components/Layout';
+import { SlideIn, ScalePop } from '../components/MotionPrimitives';
 import { resolveTheme } from '../theme/theme';
-import { Theme, TimelineProps } from '../types';
+import { TimelineProps } from '../types';
 
 export const TimelineTemplate: React.FC<TimelineProps> = ({
-  headline,
-  milestones = [],
-  highlight_index,
-  theme: customTheme,
-  isGrouped = false,
-  isFirstInGroup = true,
-  animation_plan,
+  headline, milestones, theme: customTheme, isGrouped = false, animation_plan,
 }) => {
   const frame = useCurrentFrame();
-  const { fps, width, height, durationInFrames } = useVideoConfig();
+  const { width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
-  const isContinuous = isGrouped && !isFirstInGroup;
-  const validMilestones = milestones.slice(0, 5);
-  const count = validMilestones.length;
+  // Track-based V2:
+  // Horizontal track for landscape, vertical for portrait.
 
-  let lineStartFrame = isContinuous ? 0 : 8;
-  const lineDuration = Math.max(20, Math.round(durationInFrames * (isContinuous ? 0.8 : 0.5)));
+  const trackW = isPortrait ? 6 : width * 0.7;
+  const trackH = isPortrait ? height * 0.6 : 6;
+  const trackLeft = isPortrait ? width * 0.15 : (width - trackW) / 2;
+  const trackTop = isPortrait ? (height - trackH) / 2 : height * 0.6;
   
-  const mBeats = animation_plan?.beats?.filter(b => b.kind === 'milestone') || [];
-  
-  let lineProgress = isContinuous
-    ? 1
-    : interpolate(frame, [lineStartFrame, lineStartFrame + lineDuration], [0, 1], {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-      });
-      
-  if (mBeats.length > 0) {
-    const firstBeat = mBeats[0];
-    const lastBeat = mBeats[mBeats.length - 1];
-    lineProgress = interpolate(frame, [firstBeat.start_frame, lastBeat.start_frame], [0, 1], {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    });
-  }
+  const lastBeat = animation_plan?.beats?.find(b => b.data_ref === `m_${milestones.length - 1}`);
+  const trackEndFrame = lastBeat?.start_frame ?? 60;
+  const trackProgress = interpolate(frame, [0, trackEndFrame], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
 
   return (
     <Layout theme={theme} isGrouped={isGrouped}>
-      <Header headline={headline} theme={theme} isGrouped={isGrouped} isFirstInGroup={isFirstInGroup} />
-      <div
-        style={{
-          position: 'relative',
-          width: '92%',
-          display: 'flex',
-          flexDirection: isPortrait ? 'column' : 'row',
-          justifyContent: 'space-between',
-          alignItems: isPortrait ? 'flex-start' : 'center',
-          gap: isPortrait ? Math.round(height * 0.04) : 0,
-          marginTop: Math.round(height * 0.02),
-        }}
-      >
-        {isPortrait ? (
-          <div
-            style={{
-              position: 'absolute',
-              left: 28,
-              top: 20,
-              bottom: 20,
-              width: 4,
-              backgroundColor: theme.border,
-              zIndex: 0,
-            }}
-          >
-            <div
-              style={{
-                width: '100%',
-                height: `${lineProgress * 100}%`,
-                backgroundColor: theme.accent,
-              }}
-            />
-          </div>
-        ) : (
-          <div
-            style={{
-              position: 'absolute',
-              top: 28,
-              left: 30,
-              right: 30,
-              height: 4,
-              backgroundColor: theme.border,
-              zIndex: 0,
-            }}
-          >
-            <div
-              style={{
-                height: '100%',
-                width: `${lineProgress * 100}%`,
-                backgroundColor: theme.accent,
-              }}
-            />
-          </div>
-        )}
+      <Background variant="flat" theme={theme} subtle_motion />
+      
+      <SlideIn startFrame={0}>
+        <div style={{ position: 'absolute', top: '10%', width: '100%', textAlign: 'center', fontSize: isPortrait ? 32 : 48, fontWeight: 800, color: theme.text }}>
+          {headline}
+        </div>
+      </SlideIn>
 
-        {validMilestones.map((m, idx) => {
-          let nodeDelay = isContinuous ? 0 : 10 + Math.round((idx / Math.max(1, count - 1)) * lineDuration * 0.8);
-          if (mBeats[idx]) {
-            nodeDelay = mBeats[idx].start_frame;
-          }
+      <div style={{ position: 'absolute', left: trackLeft, top: trackTop, width: trackW, height: trackH }}>
+        {/* Track Base */}
+        <div style={{
+          position: 'absolute', top: 0, left: 0,
+          width: isPortrait ? '100%' : `${trackProgress * 100}%`,
+          height: isPortrait ? `${trackProgress * 100}%` : '100%',
+          backgroundColor: theme.surfaceBorder,
+        }}>
+          <div style={{ width: '100%', height: '100%', backgroundColor: theme.primary }} />
+        </div>
+
+        {/* Milestones */}
+        {milestones.map((m, idx) => {
+          const beat = animation_plan?.beats?.find(b => b.data_ref === `m_${idx}`);
+          const startFrame = beat?.start_frame ?? (15 + idx * 15);
           
-          const spr = spring({
-            frame: Math.max(0, frame - nodeDelay),
-            fps,
-            config: { damping: 12, stiffness: 100, mass: 0.8 },
-          });
-
-          const nodeScale = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
-          const nodeOpacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
-          const isHighlighted = highlight_index !== null && highlight_index !== undefined ? highlight_index === idx : !!m.is_active;
+          if (frame < startFrame) return null;
+          
+          const posPct = idx / Math.max(1, milestones.length - 1);
+          const dotLeft = isPortrait ? 3 : posPct * trackW;
+          const dotTop = isPortrait ? posPct * trackH : 3;
 
           return (
-            <div
-              key={idx}
-              style={{
-                opacity: nodeOpacity,
-                transform: `scale(${nodeScale})`,
-                display: 'flex',
-                flexDirection: isPortrait ? 'row' : 'column',
-                alignItems: isPortrait ? 'center' : 'center',
-                zIndex: 1,
-                gap: isPortrait ? 24 : 12,
-                flex: isPortrait ? undefined : 1,
-                textAlign: isPortrait ? 'left' : 'center',
-              }}
-            >
-              <div
-                style={{
-                  width: isPortrait ? 56 : 64,
-                  height: isPortrait ? 56 : 64,
+            <div key={`m-${idx}`} style={{ position: 'absolute', left: dotLeft, top: dotTop }}>
+              {/* Dot */}
+              <ScalePop startFrame={startFrame} boost={0.2}>
+                <div style={{
+                  position: 'absolute', left: 0, top: 0, width: 24, height: 24,
+                  transform: 'translate(-50%, -50%)',
+                  backgroundColor: m.is_active ? theme.accent : theme.surface,
+                  border: `4px solid ${m.is_active ? theme.background : theme.primary}`,
                   borderRadius: '50%',
-                  backgroundColor: isHighlighted ? theme.accent : theme.surface,
-                  border: `3px solid ${isHighlighted ? theme.text : theme.primary}`,
-                  color: isHighlighted ? theme.background : theme.text,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 900,
-                  fontSize: isPortrait ? 18 : 20,
-                  boxShadow: isHighlighted ? `0 0 24px ${theme.accent}` : undefined,
-                  flexShrink: 0,
-                }}
-              >
-                {idx + 1}
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div
-                  style={{
-                    fontSize: Math.min(28, Math.max(16, Math.round(width * 0.022))),
-                    fontWeight: 800,
-                    color: isHighlighted ? theme.accent : theme.text,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  {m.time_label}
+                  boxShadow: m.is_active ? `0 0 12px ${theme.accent}80` : 'none',
+                }} />
+              </ScalePop>
+              
+              {/* Label */}
+              <SlideIn startFrame={startFrame + 5} distance={10}>
+                <div style={{
+                  position: 'absolute',
+                  left: isPortrait ? 32 : -100,
+                  top: isPortrait ? -20 : (m.is_active ? -80 : 32),
+                  width: isPortrait ? width * 0.7 : 200,
+                  textAlign: isPortrait ? 'left' : 'center',
+                }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: m.is_active ? theme.accent : theme.muted }}>{m.time_label}</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: theme.text }}>{m.title}</div>
                 </div>
-                <div
-                  style={{
-                    fontSize: Math.min(22, Math.max(14, Math.round(width * 0.018))),
-                    fontWeight: 600,
-                    color: theme.muted,
-                    marginTop: 4,
-                  }}
-                >
-                  {m.title}
-                </div>
-                {m.description && (
-                  <div
-                    style={{
-                      fontSize: Math.min(18, Math.max(12, Math.round(width * 0.015))),
-                      fontWeight: 400,
-                      color: theme.muted,
-                      marginTop: 2,
-                    }}
-                  >
-                    {m.description}
-                  </div>
-                )}
-              </div>
+              </SlideIn>
             </div>
           );
         })}

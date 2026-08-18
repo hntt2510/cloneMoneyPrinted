@@ -1,166 +1,96 @@
 import React from 'react';
-import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
-import { Card } from '../components/Card';
-import { Header } from '../components/Header';
+import { interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
+import { Background } from '../components/Background';
 import { Layout } from '../components/Layout';
+import { SlideIn } from '../components/MotionPrimitives';
 import { resolveTheme } from '../theme/theme';
-import { LineChartProps, Theme } from '../types';
+import { LineChartProps } from '../types';
 
 export const LineChartTemplate: React.FC<LineChartProps> = ({
-  headline,
-  points = [],
-  unit,
-  show_area = true,
-  theme: customTheme,
-  isGrouped = false,
-  isFirstInGroup = true,
-  animation_plan,
+  headline, points, theme: customTheme, isGrouped = false, animation_plan,
 }) => {
   const frame = useCurrentFrame();
-  const { fps, width, height, durationInFrames } = useVideoConfig();
+  const { width, height } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
-  const isContinuous = isGrouped && !isFirstInGroup;
-  const validPoints = points.slice(0, 8);
-  const count = validPoints.length;
+  const maxVal = Math.max(...points.map(p => p.y_value), 1);
+  const minVal = Math.min(...points.map(p => p.y_value), 0);
+  const range = maxVal - minVal || 1;
+  
+  const chartW = isPortrait ? width * 0.8 : width * 0.7;
+  const chartH = isPortrait ? height * 0.4 : height * 0.5;
 
-  const minY = Math.min(...validPoints.map((p) => p.y_value), 0);
-  const maxY = Math.max(...validPoints.map((p) => p.y_value), 1);
-  const yRange = Math.max(maxY - minY, 1);
+  // Grid / Axes
+  const gridOp = interpolate(frame, [0, 15], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  const gridLines = [0, 0.33, 0.66, 1].map(pct => minVal + (range * pct));
 
-  const svgWidth = isPortrait ? width * 0.78 : width * 0.7;
-  const svgHeight = height * (isPortrait ? 0.38 : 0.35);
-
-  const paddingLeft = 40;
-  const paddingRight = 40;
-  const paddingTop = 40;
-  const paddingBottom = 40;
-
-  const innerW = svgWidth - paddingLeft - paddingRight;
-  const innerH = svgHeight - paddingTop - paddingBottom;
-
-  const coords = validPoints.map((p, idx) => {
-    const x = paddingLeft + (idx / Math.max(1, count - 1)) * innerW;
-    const yRatio = (p.y_value - minY) / yRange;
-    const y = paddingTop + (1 - yRatio) * innerH;
-    return { x, y, point: p };
+  // Path coordinates
+  const coords = points.map((p, i) => {
+    const x = (i / Math.max(1, points.length - 1)) * chartW;
+    const y = chartH - ((p.y_value - minVal) / range) * chartH;
+    return { x, y, p };
   });
 
   const pathD = coords.reduce((acc, curr, idx) => {
-    return idx === 0 ? `M ${curr.x} ${curr.y}` : `${acc} L ${curr.x} ${curr.y}`;
-  }, '');
+    return acc + (idx === 0 ? `M ${curr.x},${curr.y}` : ` L ${curr.x},${curr.y}`);
+  }, "");
 
-  const areaD = coords.length > 0
-    ? `${pathD} L ${coords[coords.length - 1].x} ${svgHeight - paddingBottom} L ${coords[0].x} ${svgHeight - paddingBottom} Z`
-    : '';
-
-  let lineProgress = isContinuous
-    ? 1
-    : interpolate(frame, [8, Math.round(durationInFrames * 0.65)], [0, 1], {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-      });
-      
-  const chartBeats = animation_plan?.beats?.filter(b => b.kind === 'chart_item') || [];
-  if (chartBeats.length > 0) {
-    const firstBeat = chartBeats[0];
-    const lastBeat = chartBeats[chartBeats.length - 1];
-    lineProgress = interpolate(frame, [firstBeat.start_frame, lastBeat.start_frame], [0, 1], {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    });
-  }
+  // Path animation
+  const totalLength = chartW * 2; // rough estimate
+  const lastPointBeat = animation_plan?.beats?.find(b => b.data_ref === `point_${points.length - 1}`);
+  const lineEndFrame = lastPointBeat?.start_frame ?? 60;
+  
+  const drawPct = interpolate(frame, [15, lineEndFrame], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  const strokeDashoffset = totalLength * (1 - drawPct);
 
   return (
     <Layout theme={theme} isGrouped={isGrouped}>
-      <Header headline={headline} theme={theme} isGrouped={isGrouped} isFirstInGroup={isFirstInGroup} />
-      <Card
-        theme={theme}
-        isGrouped={isGrouped}
-        isFirstInGroup={isFirstInGroup}
-        style={{ width: '92%', padding: 24 }}
-      >
-        <svg width={svgWidth} height={svgHeight} style={{ overflow: 'visible' }}>
-          <defs>
-            <linearGradient id="lineAreaGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={theme.primary} stopOpacity="0.35" />
-              <stop offset="100%" stopColor={theme.primary} stopOpacity="0.0" />
-            </linearGradient>
-          </defs>
+      <Background variant="flat" theme={theme} subtle_motion />
+      
+      <SlideIn startFrame={0}>
+        <div style={{ position: 'absolute', top: '10%', width: '100%', textAlign: 'center', fontSize: isPortrait ? 32 : 48, fontWeight: 800, color: theme.text }}>
+          {headline}
+        </div>
+      </SlideIn>
 
-          {show_area && (
-            <path
-              d={areaD}
-              fill="url(#lineAreaGrad)"
-              opacity={lineProgress}
-            />
-          )}
-
-          <line
-            x1={paddingLeft}
-            y1={svgHeight - paddingBottom}
-            x2={svgWidth - paddingRight}
-            y2={svgHeight - paddingBottom}
-            stroke={theme.border}
-            strokeWidth="2"
-          />
-
-          <path
-            d={pathD}
-            fill="none"
-            stroke={theme.accent}
-            strokeWidth="5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeDasharray="2000"
-            strokeDashoffset={2000 * (1 - lineProgress)}
-          />
-
-          {coords.map((c, idx) => {
-            let pointAppearFrame = isContinuous ? 0 : 8 + Math.round((idx / Math.max(1, count - 1)) * durationInFrames * 0.55);
-            if (chartBeats[idx]) {
-              pointAppearFrame = chartBeats[idx].start_frame;
-            }
-            
-            const spr = spring({
-              frame: Math.max(0, frame - pointAppearFrame),
-              fps,
-              config: { damping: 12, stiffness: 100, mass: 0.8 },
-            });
-            const pointScale = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
-            const pointOpacity = isContinuous ? 1 : interpolate(spr, [0, 1], [0, 1]);
-
-            const displayVal = c.point.display_value || `${c.point.y_value}${unit ? ` ${unit}` : ''}`;
-
+      <div style={{ position: 'absolute', top: '25%', left: (width - chartW) / 2, width: chartW, height: chartH, opacity: gridOp }}>
+        <svg width={chartW} height={chartH} style={{ overflow: 'visible' }}>
+          {/* Grid lines */}
+          {gridLines.map((gl, i) => {
+            const y = chartH - ((gl - minVal) / range) * chartH;
             return (
-              <g key={idx} opacity={pointOpacity} transform={`scale(${pointScale})`} style={{ transformOrigin: `${c.x}px ${c.y}px` }}>
-                <circle cx={c.x} cy={c.y} r="7" fill={theme.background} stroke={theme.text} strokeWidth="3" />
-                <text
-                  x={c.x}
-                  y={c.y - 14}
-                  fill={theme.text}
-                  fontSize={isPortrait ? "18" : "20"}
-                  fontWeight="800"
-                  textAnchor="middle"
-                >
-                  {displayVal}
-                </text>
-                <text
-                  x={c.x}
-                  y={svgHeight - paddingBottom + 24}
-                  fill={theme.muted}
-                  fontSize={isPortrait ? "14" : "16"}
-                  fontWeight="600"
-                  textAnchor="middle"
-                >
-                  {c.point.x_label}
-                </text>
+              <line key={`grid-${i}`} x1={0} y1={y} x2={chartW} y2={y} stroke={theme.surfaceBorder} strokeWidth={2} strokeDasharray="4 4" />
+            );
+          })}
+          
+          {/* Axes */}
+          <line x1={0} y1={0} x2={0} y2={chartH} stroke={theme.muted} strokeWidth={2} />
+          <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke={theme.muted} strokeWidth={2} />
+          
+          {/* The Line */}
+          <path d={pathD} fill="none" stroke={theme.accent} strokeWidth={4} strokeDasharray={totalLength} strokeDashoffset={strokeDashoffset} />
+          
+          {/* Points */}
+          {coords.map((c, i) => {
+            const beat = animation_plan?.beats?.find(b => b.data_ref === `point_${i}`);
+            const startFrame = beat?.start_frame ?? (15 + i * 15);
+            
+            if (frame < startFrame) return null;
+            
+            const isLast = i === coords.length - 1;
+            const r = isLast ? interpolate(frame, [startFrame, startFrame+10], [0, 8], { extrapolateRight: 'clamp' }) : 6;
+            
+            return (
+              <g key={`pt-${i}`}>
+                <circle cx={c.x} cy={c.y} r={r} fill={theme.primary} stroke={theme.background} strokeWidth={2} />
+                <text x={c.x} y={chartH + 24} fill={theme.muted} fontSize={16} fontWeight={600} textAnchor="middle">{c.p.x_label}</text>
+                <text x={c.x} y={c.y - 16} fill={theme.text} fontSize={20} fontWeight={800} textAnchor="middle">{c.p.display_value || c.p.y_value}</text>
               </g>
             );
           })}
         </svg>
-      </Card>
+      </div>
     </Layout>
   );
 };
