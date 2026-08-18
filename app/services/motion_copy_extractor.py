@@ -51,6 +51,21 @@ def _truncate_motion_headline(text: str) -> str:
     return ' '.join(kept).upper() if kept else text[:30].upper()
 
 
+_SEMANTIC_CONCEPT_MAPPINGS = [
+    # (regex pattern, eyebrow, headline, default_label)
+    (r"\b(?:repair(?:ing)?\s+(?:your\s+)?car\s+costs?|repair\s+costs?|total\s+repair)\b", "REPAIR COST", "TOTAL REPAIR", "ESTIMATED DAMAGE"),
+    (r"\b(?:collision\s+deductible|comprehensive\s+deductible|your\s+deductible|deductible)\b", "DEDUCTIBLE", "YOUR DEDUCTIBLE", "YOU PAY FIRST"),
+    (r"\b(?:insurance\s+company\s+covers|insurance\s+portion|insurance\s+pays|insurer\s+pays|insurance\s+coverage)\b", "INSURANCE", "INSURANCE COVERS", "POLICY BENEFIT"),
+    (r"\b(?:coverage\s+limit|policy\s+limit|maximum\s+coverage|liability\s+limit)\b", "COVERAGE LIMIT", "POLICY LIMIT", "MAX PAYOUT"),
+    (r"\b(?:damage\s+costs?|total\s+damage|amount\s+of\s+damage|damage\s+exceeds?)\b", "DAMAGE", "TOTAL DAMAGE", "ESTIMATED REPAIR"),
+    (r"\b(?:monthly\s+premium|annual\s+premium|insurance\s+premium|premium)\b", "PREMIUM", "POLICY PREMIUM", "RECURRING COST"),
+    (r"\b(?:out[\s-]of[\s-]pocket)\b", "OUT OF POCKET", "YOUR SHARE", "DIRECT EXPENSE"),
+    (r"\b(?:liability\s+coverage|bodily\s+injury|property\s+damage)\b", "LIABILITY", "LIABILITY COVERAGE", "THIRD PARTY"),
+    (r"\b(?:collision\s+coverage)\b", "COLLISION", "COLLISION COVERAGE", "VEHICLE DAMAGE"),
+    (r"\b(?:comprehensive\s+coverage)\b", "COMPREHENSIVE", "COMPREHENSIVE COVERAGE", "NON-COLLISION"),
+]
+
+
 def extract_motion_copy(
     narration: str,
     payload: dict[str, Any],
@@ -59,23 +74,42 @@ def extract_motion_copy(
     """Extract deterministic motion copy roles from narration + payload."""
     data = payload.get("data", {}) if isinstance(payload.get("data"), dict) else {}
     raw_headline = str(payload.get("headline") or "").strip()
+    narr_lower = narration.lower() if narration else ""
 
+    # 1. Match semantic concept mapping
+    matched_eyebrow = None
+    matched_headline = None
+    matched_label = None
+    for pat, eb, hl, lbl in _SEMANTIC_CONCEPT_MAPPINGS:
+        if re.search(pat, narr_lower, re.IGNORECASE):
+            matched_eyebrow = eb
+            matched_headline = hl
+            matched_label = lbl
+            break
+
+    # Headline resolution: prefer explicit payload headline if concise, else matched semantic headline, else truncated
     if raw_headline and not _is_narration_leak(raw_headline):
         headline = raw_headline.upper()
+    elif matched_headline:
+        headline = matched_headline
     else:
         headline = _truncate_motion_headline(raw_headline or narration)
 
+    # Eyebrow resolution
     eyebrow = None
     if data.get("eyebrow"):
         eyebrow = str(data["eyebrow"]).upper().strip()
     elif data.get("label"):
         eyebrow = str(data["label"]).upper().strip()
+    elif matched_eyebrow:
+        eyebrow = matched_eyebrow
     elif template in ("number", "counter"):
         text_without_fillers = " ".join([w for w in re.findall(r'\b[a-zA-Z]+\b', narration[:60]) if w.lower() not in _FILLER_WORDS])
         m = re.search(r'\b([a-zA-Z]+(?: [a-zA-Z]+){0,2})\b', text_without_fillers)
         if m:
             eyebrow = m.group(0).upper()
 
+    # Primary value resolution
     primary_value = None
     if template in ("number", "counter"):
         val = data.get("display_value") or data.get("value") or data.get("end_value")
@@ -84,11 +118,14 @@ def extract_motion_copy(
             suffix = data.get("suffix", "")
             primary_value = f"{prefix}{val}{suffix}"
 
+    # Label resolution
     label = None
     if data.get("subtext"):
         label = str(data["subtext"])[:40]
     elif data.get("context_label"):
         label = str(data["context_label"])[:40]
+    elif matched_label:
+        label = matched_label
 
     takeaway = None
     if data.get("takeaway"):

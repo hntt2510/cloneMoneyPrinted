@@ -77,10 +77,25 @@ export interface ComparisonItem {
   highlight?: boolean;
 }
 
+export interface BreakdownTotal {
+  label: string;
+  value: string;
+  numeric_value: number;
+}
+
+export interface BreakdownPart {
+  label: string;
+  value: string;
+  numeric_value: number;
+  highlight?: boolean;
+}
+
 export interface ComparisonProps extends BaseTemplateProps {
   headline: string;
   items: ComparisonItem[];
   subtext?: string | null;
+  total?: BreakdownTotal;
+  parts?: BreakdownPart[];
 }
 
 export interface TimelineItem {

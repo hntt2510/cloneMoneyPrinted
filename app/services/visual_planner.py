@@ -570,6 +570,31 @@ def _apply_diversity(
     cues: list[TimelineCue],
     decisions: list[VisualCue],
 ) -> list[VisualCue]:
+    # Detect cost breakdown group sequences across consecutive cues
+    n = len(decisions)
+    i = 0
+    while i < n - 1:
+        if i + 2 < n:
+            c0, c1, c2 = decisions[i], decisions[i + 1], decisions[i + 2]
+            n0 = (c0.narration or "").lower()
+            n1 = (c1.narration or "").lower()
+            n2 = (c2.narration or "").lower()
+            if (
+                any(w in n0 for w in ("repair", "cost", "damage", "total"))
+                and any(w in n1 for w in ("deductible", "you pay", "out of pocket"))
+                and any(w in n2 for w in ("insurance", "insurer", "cover", "remaining"))
+            ):
+                gid = c0.visual_group_id or c1.visual_group_id or c2.visual_group_id or "vg_cost_breakdown"
+                c0.visual_group_id = gid
+                c1.visual_group_id = gid
+                c2.visual_group_id = gid
+                c0.visual_type = VisualType.data
+                c1.visual_type = VisualType.data
+                c2.visual_type = VisualType.data
+                i += 3
+                continue
+        i += 1
+
     # Canonicalize visual groups (VG001, VG002...) for contiguous groups
     group_counter = 1
     current_raw_group = None

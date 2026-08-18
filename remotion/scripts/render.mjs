@@ -18,6 +18,7 @@ const ALLOWED_TEMPLATES = new Set([
   'age_marker',
   'callout',
   'text',
+  'breakdown',
 ]);
 
 function isPlainObject(obj) {

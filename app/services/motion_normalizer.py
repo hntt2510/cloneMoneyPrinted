@@ -405,7 +405,18 @@ def normalize_motion_spec(
     if rendered_template in ("number", "counter"):
         layout_archetype = "metric_hero"
     elif rendered_template == "comparison":
-        layout_archetype = "split_compare" if len(props_dict.get("items", [])) == 2 else "stacked_breakdown"
+        raw_items = props_dict.get("items", [])
+        if len(raw_items) == 3:
+            layout_archetype = "stacked_breakdown"
+        elif len(raw_items) == 2:
+            # Check if it's a cost breakdown pair or comparison
+            narr_lower = (cue.narration or "").lower()
+            if any(k in narr_lower for k in ("breakdown", "deductible", "insurance covers", "repair cost")):
+                layout_archetype = "stacked_breakdown"
+            else:
+                layout_archetype = "split_compare"
+        else:
+            layout_archetype = "stacked_breakdown"
     elif rendered_template == "bar_chart":
         layout_archetype = "bar_chart_v2"
     elif rendered_template == "line_chart":
@@ -416,6 +427,11 @@ def normalize_motion_spec(
         layout_archetype = "timeline_v2"
     elif rendered_template == "callout":
         layout_archetype = "statement_reveal"
+
+    if cue.visual_group_id and any(k in (cue.narration or "").lower() for k in ("repair", "deductible", "insurance", "breakdown")):
+        layout_archetype = "stacked_breakdown"
+
+    props_dict["layout_archetype"] = layout_archetype
 
     return MotionSceneSpec(
         scene_id=cue.id,

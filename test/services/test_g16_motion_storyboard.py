@@ -32,7 +32,8 @@ class TestG16MotionStoryboard(unittest.TestCase):
             payload={"headline": "", "data": {"value": 6000}},
             template="number"
         )
-        self.assertEqual(mc.eyebrow, "REPAIRING CAR COSTS")
+        self.assertEqual(mc.eyebrow, "REPAIR COST")
+        self.assertEqual(mc.headline, "TOTAL REPAIR")
 
     def test_layout_archetype_selection(self):
         from app.models.project import ProjectSpec
@@ -75,3 +76,7 @@ class TestG16MotionStoryboard(unittest.TestCase):
         kinds = [b.kind for b in plan.beats]
         self.assertIn("setup", kinds)
         self.assertIn("number", kinds)
+
+
+if __name__ == "__main__":
+    unittest.main()
