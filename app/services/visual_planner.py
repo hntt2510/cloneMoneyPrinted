@@ -411,18 +411,12 @@ def _fallback_payload(kind: VisualType, narration: str, project: ProjectSpec) ->
             for i, fact in enumerate(facts[:4]):
                 tok = fact.display
                 label = f"Item {i + 1}"
-                if "deductible" in t_lower and ("1000" in tok or (len(facts) == 3 and i == 1)):
+                if "deductible" in t_lower:
                     label = "Deductible"
-                elif ("insurance" in t_lower or "insurer" in t_lower or "cover" in t_lower) and ("5000" in tok or (len(facts) == 3 and i == 2)):
+                elif "insurance" in t_lower or "insurer" in t_lower or "cover" in t_lower:
                     label = "Insurance Portion"
-                elif ("repair" in t_lower or "cost" in t_lower) and ("6000" in tok or (len(facts) == 3 and i == 0)):
+                elif "repair" in t_lower or "cost" in t_lower or "damage" in t_lower:
                     label = "Repair Cost"
-                elif "deductible" in t_lower and i == 0:
-                    label = "Deductible"
-                elif "insurance" in t_lower or "insurer" in t_lower:
-                    label = "Insurance Portion" if i == 1 else f"Item {i + 1}"
-                elif "repair" in t_lower or "cost" in t_lower:
-                    label = "Repair Cost" if i == 0 else f"Item {i + 1}"
                 elif "limit" in t_lower:
                     label = "Coverage Limit" if i == 0 else "Damage Amount"
 
@@ -584,15 +578,25 @@ def _apply_diversity(
                 and any(w in n1 for w in ("deductible", "you pay", "out of pocket"))
                 and any(w in n2 for w in ("insurance", "insurer", "cover", "remaining"))
             ):
-                gid = c0.visual_group_id or c1.visual_group_id or c2.visual_group_id or "vg_cost_breakdown"
-                c0.visual_group_id = gid
-                c1.visual_group_id = gid
-                c2.visual_group_id = gid
-                c0.visual_type = VisualType.data
-                c1.visual_type = VisualType.data
-                c2.visual_type = VisualType.data
-                i += 3
-                continue
+                from app.services.numeric_parser import extract_canonical_numeric_facts
+                f0 = extract_canonical_numeric_facts(c0.narration or "")
+                f1 = extract_canonical_numeric_facts(c1.narration or "")
+                f2 = extract_canonical_numeric_facts(c2.narration or "")
+                if f0 and f1 and f2:
+                    v0, v1, v2 = f0[0].value, f1[0].value, f2[0].value
+                    if v0 > 0 and v1 > 0 and v2 > 0 and abs(v0 - (v1 + v2)) <= 1.0:
+                        gid = c0.visual_group_id or c1.visual_group_id or c2.visual_group_id or "vg_cost_breakdown"
+                        c0.visual_group_id = gid
+                        c1.visual_group_id = gid
+                        c2.visual_group_id = gid
+                        c0.visual_type = VisualType.data
+                        c1.visual_type = VisualType.data
+                        c2.visual_type = VisualType.data
+                        c0.payload["layout_archetype"] = "stacked_breakdown"
+                        c1.payload["layout_archetype"] = "stacked_breakdown"
+                        c2.payload["layout_archetype"] = "stacked_breakdown"
+                        i += 3
+                        continue
         i += 1
 
     # Canonicalize visual groups (VG001, VG002...) for contiguous groups

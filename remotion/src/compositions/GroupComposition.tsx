@@ -1,7 +1,7 @@
 import React from 'react';
 import { Sequence, useVideoConfig } from 'remotion';
 import { Layout } from '../components/Layout';
-import { BreakdownGroupMaster } from '../templates/BreakdownTemplate';
+import { BreakdownGroupMaster, resolveBreakdownData } from '../templates/BreakdownTemplate';
 import { getTemplateComponent } from '../templates/registry';
 import { GroupCompositionProps } from '../types';
 
@@ -15,24 +15,26 @@ export const GroupComposition: React.FC<GroupCompositionProps> = ({
     return null;
   }
 
-  // Detect if this is a continuous breakdown group
-  const isBreakdownGroup = scenes.some(
+  // Detect if this is an explicit breakdown group with valid grounded data
+  const hasBreakdownArchetype = scenes.some(
     (s) =>
       s.props?.layout_archetype === 'stacked_breakdown' ||
       s.template === 'breakdown' ||
       s.props?.layout_archetype === 'breakdown'
-  ) || (scenes.length >= 2 && scenes.some((s) => {
-    const text = `${s.props?.headline || ''} ${s.props?.eyebrow || ''} ${s.props?.label || ''}`;
-    return /repair|deductible|insurance|breakdown/i.test(text);
-  }));
+  );
 
-  if (isBreakdownGroup) {
+  const breakdownData = hasBreakdownArchetype
+    ? resolveBreakdownData({ scenes, ...(scenes[0]?.props || {}) })
+    : null;
+
+  if (hasBreakdownArchetype && breakdownData) {
     return (
       <Layout theme={theme} isGrouped={true}>
         <BreakdownGroupMaster
           scenes={scenes}
           theme={theme}
           durationInFrames={durationInFrames}
+          breakdownData={breakdownData}
         />
       </Layout>
     );

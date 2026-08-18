@@ -401,34 +401,38 @@ def normalize_motion_spec(
         props_dict["eyebrow"] = mc.eyebrow
         props_dict["context_label"] = mc.label
 
-    layout_archetype = "default"
-    if rendered_template in ("number", "counter"):
-        layout_archetype = "metric_hero"
-    elif rendered_template == "comparison":
-        raw_items = props_dict.get("items", [])
-        if len(raw_items) == 3:
-            layout_archetype = "stacked_breakdown"
-        elif len(raw_items) == 2:
-            # Check if it's a cost breakdown pair or comparison
-            narr_lower = (cue.narration or "").lower()
-            if any(k in narr_lower for k in ("breakdown", "deductible", "insurance covers", "repair cost")):
-                layout_archetype = "stacked_breakdown"
+    layout_archetype = raw_payload.get("layout_archetype")
+    if not layout_archetype:
+        if rendered_template in ("number", "counter"):
+            layout_archetype = "metric_hero"
+        elif rendered_template == "comparison":
+            raw_items = props_dict.get("items", [])
+            if len(raw_items) == 3:
+                v0 = raw_items[0].get("numeric_value") if isinstance(raw_items[0], dict) else None
+                v1 = raw_items[1].get("numeric_value") if isinstance(raw_items[1], dict) else None
+                v2 = raw_items[2].get("numeric_value") if isinstance(raw_items[2], dict) else None
+                if v0 is not None and v1 is not None and v2 is not None and v0 > 0 and abs(v0 - (v1 + v2)) <= 1.0:
+                    layout_archetype = "stacked_breakdown"
+                else:
+                    layout_archetype = "split_compare"
             else:
                 layout_archetype = "split_compare"
-        else:
+        elif rendered_template == "breakdown":
             layout_archetype = "stacked_breakdown"
-    elif rendered_template == "bar_chart":
-        layout_archetype = "bar_chart_v2"
-    elif rendered_template == "line_chart":
-        layout_archetype = "line_chart_v2"
-    elif rendered_template == "threshold":
-        layout_archetype = "threshold_v2"
-    elif rendered_template == "timeline":
-        layout_archetype = "timeline_v2"
-    elif rendered_template == "callout":
-        layout_archetype = "statement_reveal"
+        elif rendered_template == "bar_chart":
+            layout_archetype = "bar_chart_v2"
+        elif rendered_template == "line_chart":
+            layout_archetype = "line_chart_v2"
+        elif rendered_template == "threshold":
+            layout_archetype = "threshold_v2"
+        elif rendered_template == "timeline":
+            layout_archetype = "timeline_v2"
+        elif rendered_template == "callout":
+            layout_archetype = "statement_reveal"
+        else:
+            layout_archetype = "default"
 
-    if cue.visual_group_id and any(k in (cue.narration or "").lower() for k in ("repair", "deductible", "insurance", "breakdown")):
+    if cue.visual_group_id and "cost_breakdown" in str(cue.visual_group_id).lower():
         layout_archetype = "stacked_breakdown"
 
     props_dict["layout_archetype"] = layout_archetype

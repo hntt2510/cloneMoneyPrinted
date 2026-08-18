@@ -36,33 +36,85 @@ export interface BreakdownProps extends BaseTemplateProps {
   }>;
 }
 
-export function resolveBreakdownData(props: BreakdownProps): { total: BreakdownTotal; parts: BreakdownPart[] } {
+function parseNumeric(val: any): number | null {
+  if (typeof val === 'number' && !isNaN(val)) return val;
+  if (typeof val === 'string') {
+    const cleaned = val.replace(/[\$,]/g, '').trim();
+    const parsed = parseFloat(cleaned);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
+export function resolveBreakdownData(props: BreakdownProps): { total: BreakdownTotal; parts: BreakdownPart[] } | null {
   // 1. Explicit total and parts
   if (props.total && props.parts && Array.isArray(props.parts) && props.parts.length >= 2) {
-    const totalVal = Number(props.total.numeric_value) || 0;
-    return {
-      total: {
-        label: props.total.label || 'TOTAL REPAIR',
-        value: props.total.value || `$${totalVal.toLocaleString()}`,
-        numeric_value: totalVal,
-      },
-      parts: props.parts.map((p, idx) => ({
+    const totalVal = Number(props.total.numeric_value) || parseNumeric(props.total.value) || 0;
+    const parts = props.parts.map((p, idx) => {
+      const pVal = Number(p.numeric_value) || parseNumeric(p.value) || 0;
+      return {
         label: p.label || (idx === 0 ? 'YOU PAY' : 'INSURANCE'),
-        value: p.value || `$${(Number(p.numeric_value) || 0).toLocaleString()}`,
-        numeric_value: Number(p.numeric_value) || 0,
+        value: p.value || `$${pVal.toLocaleString()}`,
+        numeric_value: pVal,
         highlight: p.highlight !== undefined ? p.highlight : idx === 0,
-      })),
-    };
+      };
+    });
+    const partsSum = parts.reduce((sum, p) => sum + p.numeric_value, 0);
+    if (totalVal > 0 && parts.length >= 2 && Math.abs(totalVal - partsSum) <= 1.0) {
+      return {
+        total: {
+          label: props.total.label || 'TOTAL REPAIR',
+          value: props.total.value || `$${totalVal.toLocaleString()}`,
+          numeric_value: totalVal,
+        },
+        parts,
+      };
+    }
   }
 
-  // 2. Derive from items array (e.g. 3 items where item 0 is total and items 1,2 are parts)
+  // 2. From group scenes (3 scenes: Scene 0 = Total, Scene 1 = Part 1, Scene 2 = Part 2)
+  if (props.scenes && Array.isArray(props.scenes) && props.scenes.length >= 3) {
+    const s0 = props.scenes[0]?.props || {};
+    const s1 = props.scenes[1]?.props || {};
+    const s2 = props.scenes[2]?.props || {};
+
+    const v0 = Number(s0.numeric_value) || parseNumeric(s0.value) || 0;
+    const v1 = Number(s1.numeric_value) || parseNumeric(s1.value) || 0;
+    const v2 = Number(s2.numeric_value) || parseNumeric(s2.value) || 0;
+
+    if (v0 > 0 && v1 > 0 && v2 > 0 && Math.abs(v0 - (v1 + v2)) <= 1.0) {
+      return {
+        total: {
+          label: s0.headline || s0.eyebrow || 'TOTAL REPAIR',
+          value: s0.value || `$${v0.toLocaleString()}`,
+          numeric_value: v0,
+        },
+        parts: [
+          {
+            label: s1.headline || s1.eyebrow || 'YOU PAY',
+            value: s1.value || `$${v1.toLocaleString()}`,
+            numeric_value: v1,
+            highlight: true,
+          },
+          {
+            label: s2.headline || s2.eyebrow || 'INSURANCE',
+            value: s2.value || `$${v2.toLocaleString()}`,
+            numeric_value: v2,
+            highlight: false,
+          },
+        ],
+      };
+    }
+  }
+
+  // 3. Derive from items array (3 items where item 0 is total and items 1,2 are parts)
   const rawItems = props.items || [];
   if (rawItems.length === 3) {
-    const v0 = Number(rawItems[0].numeric_value) || 0;
-    const v1 = Number(rawItems[1].numeric_value) || 0;
-    const v2 = Number(rawItems[2].numeric_value) || 0;
+    const v0 = Number(rawItems[0].numeric_value) || parseNumeric(rawItems[0].value) || 0;
+    const v1 = Number(rawItems[1].numeric_value) || parseNumeric(rawItems[1].value) || 0;
+    const v2 = Number(rawItems[2].numeric_value) || parseNumeric(rawItems[2].value) || 0;
 
-    if (v0 > 0 && (Math.abs(v0 - (v1 + v2)) < 1.0 || v0 >= Math.max(v1, v2))) {
+    if (v0 > 0 && v1 > 0 && v2 > 0 && Math.abs(v0 - (v1 + v2)) <= 1.0) {
       return {
         total: {
           label: rawItems[0].label || 'TOTAL REPAIR',
@@ -87,41 +139,38 @@ export function resolveBreakdownData(props: BreakdownProps): { total: BreakdownT
     }
   }
 
-  if (rawItems.length >= 2) {
-    const p1 = Number(rawItems[0].numeric_value) || 0;
-    const p2 = Number(rawItems[1].numeric_value) || 0;
-    const sumTotal = p1 + p2 > 0 ? p1 + p2 : 6000;
-    return {
-      total: {
-        label: 'TOTAL REPAIR',
-        value: `$${sumTotal.toLocaleString()}`,
-        numeric_value: sumTotal,
-      },
-      parts: [
-        {
-          label: rawItems[0].label || 'YOU PAY',
-          value: rawItems[0].value || `$${p1.toLocaleString()}`,
-          numeric_value: p1,
-          highlight: rawItems[0].highlight ?? true,
+  // 4. Derive from items array (2 parts summing to an explicit positive total)
+  if (rawItems.length === 2) {
+    const p1 = Number(rawItems[0].numeric_value) || parseNumeric(rawItems[0].value) || 0;
+    const p2 = Number(rawItems[1].numeric_value) || parseNumeric(rawItems[1].value) || 0;
+    const sumTotal = p1 + p2;
+    if (sumTotal > 0 && p1 > 0 && p2 > 0) {
+      return {
+        total: {
+          label: 'TOTAL REPAIR',
+          value: `$${sumTotal.toLocaleString()}`,
+          numeric_value: sumTotal,
         },
-        {
-          label: rawItems[1].label || 'INSURANCE',
-          value: rawItems[1].value || `$${p2.toLocaleString()}`,
-          numeric_value: p2,
-          highlight: rawItems[1].highlight ?? false,
-        },
-      ],
-    };
+        parts: [
+          {
+            label: rawItems[0].label || 'YOU PAY',
+            value: rawItems[0].value || `$${p1.toLocaleString()}`,
+            numeric_value: p1,
+            highlight: rawItems[0].highlight ?? true,
+          },
+          {
+            label: rawItems[1].label || 'INSURANCE',
+            value: rawItems[1].value || `$${p2.toLocaleString()}`,
+            numeric_value: p2,
+            highlight: rawItems[1].highlight ?? false,
+          },
+        ],
+      };
+    }
   }
 
-  // 3. Fallback for insurance UAT ($6,000 = $1,000 + $5,000)
-  return {
-    total: { label: 'TOTAL REPAIR', value: '$6,000', numeric_value: 6000 },
-    parts: [
-      { label: 'YOU PAY', value: '$1,000', numeric_value: 1000, highlight: true },
-      { label: 'INSURANCE', value: '$5,000', numeric_value: 5000, highlight: false },
-    ],
-  };
+  // Strictly return null if ungrounded or mathematically inconsistent - DO NOT INVENT VALUES
+  return null;
 }
 
 export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
@@ -130,7 +179,12 @@ export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
   const theme = resolveTheme(props.theme);
   const isPortrait = height > width;
 
-  const { total, parts } = resolveBreakdownData(props);
+  const breakdownData = resolveBreakdownData(props);
+  if (!breakdownData) {
+    // If breakdown data is invalid or missing grounded numbers, return null or safe fallback
+    return null;
+  }
+  const { total, parts } = breakdownData;
 
   // Determine storyboard timeline milestones
   let phaseA_end = Math.round(durationInFrames * 0.33);
@@ -494,37 +548,18 @@ export const BreakdownGroupMaster: React.FC<{
   }>;
   theme?: Partial<Theme>;
   durationInFrames: number;
-}> = ({ scenes, theme, durationInFrames }) => {
-  // Aggregate scenes into a single continuous BreakdownProps
+  breakdownData?: { total: BreakdownTotal; parts: BreakdownPart[] } | null;
+}> = ({ scenes, theme, durationInFrames, breakdownData: passedBreakdownData }) => {
+  const breakdownData = passedBreakdownData || resolveBreakdownData({ scenes, ...(scenes[0]?.props || {}) });
+  if (!breakdownData) {
+    return null;
+  }
+
   const s0 = scenes[0]?.props || {};
-  const s1 = scenes[1]?.props || {};
-  const s2 = scenes[2]?.props || {};
-
-  const totalNum = Number(s0.numeric_value || s0.value?.replace(/[^0-9.]/g, '') || 6000);
-  const part1Num = Number(s1.numeric_value || s1.value?.replace(/[^0-9.]/g, '') || 1000);
-  const part2Num = Number(s2.numeric_value || s2.value?.replace(/[^0-9.]/g, '') || 5000);
-
   const breakdownProps: BreakdownProps = {
-    headline: s0.headline || 'TOTAL REPAIR',
-    total: {
-      label: s0.headline || 'TOTAL REPAIR',
-      value: s0.value || `$${totalNum.toLocaleString()}`,
-      numeric_value: totalNum,
-    },
-    parts: [
-      {
-        label: s1.headline || s1.eyebrow || 'YOU PAY',
-        value: s1.value || `$${part1Num.toLocaleString()}`,
-        numeric_value: part1Num,
-        highlight: true,
-      },
-      {
-        label: s2.headline || s2.eyebrow || 'INSURANCE',
-        value: s2.value || `$${part2Num.toLocaleString()}`,
-        numeric_value: part2Num,
-        highlight: false,
-      },
-    ],
+    headline: s0.headline || breakdownData.total.label,
+    total: breakdownData.total,
+    parts: breakdownData.parts,
     scenes,
     theme,
   };

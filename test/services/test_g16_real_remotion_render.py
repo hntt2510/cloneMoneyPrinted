@@ -378,6 +378,210 @@ class TestG16RealRemotionRender(unittest.TestCase):
         output_file = Path(asset.output_file)
         self.assertTrue(output_file.exists())
 
+    def test_render_non_uat_cost_breakdown_8k_2k_6k(self):
+        """Verify real Remotion render with non-UAT numbers ($8,000 = $2,000 + $6,000)."""
+        scenes = [
+            MotionSceneSpec(
+                scene_id="S001",
+                order=1,
+                visual_type="data",
+                requested_template="comparison",
+                rendered_template="comparison",
+                props={
+                    "headline": "TOTAL REPAIR",
+                    "value": "$8,000",
+                    "numeric_value": 8000,
+                    "eyebrow": "REPAIR COST",
+                    "layout_archetype": "stacked_breakdown",
+                    "total": {"label": "TOTAL REPAIR", "value": "$8,000", "numeric_value": 8000},
+                    "parts": [
+                        {"label": "YOU PAY", "value": "$2,000", "numeric_value": 2000, "highlight": True},
+                        {"label": "INSURANCE", "value": "$6,000", "numeric_value": 6000, "highlight": False},
+                    ],
+                },
+                start_time=0.0,
+                end_time=2.0,
+                start_frame=0,
+                end_frame=60,
+                duration_frames=60,
+                fps=30,
+                width=1280,
+                height=720,
+                visual_group_id="vg_cost_8k",
+                layout_archetype="stacked_breakdown",
+            ),
+            MotionSceneSpec(
+                scene_id="S002",
+                order=2,
+                visual_type="data",
+                requested_template="comparison",
+                rendered_template="comparison",
+                props={
+                    "headline": "YOUR DEDUCTIBLE",
+                    "value": "$2,000",
+                    "numeric_value": 2000,
+                    "eyebrow": "DEDUCTIBLE",
+                    "layout_archetype": "stacked_breakdown",
+                    "total": {"label": "TOTAL REPAIR", "value": "$8,000", "numeric_value": 8000},
+                    "parts": [
+                        {"label": "YOU PAY", "value": "$2,000", "numeric_value": 2000, "highlight": True},
+                        {"label": "INSURANCE", "value": "$6,000", "numeric_value": 6000, "highlight": False},
+                    ],
+                },
+                start_time=2.0,
+                end_time=4.0,
+                start_frame=60,
+                end_frame=120,
+                duration_frames=60,
+                fps=30,
+                width=1280,
+                height=720,
+                visual_group_id="vg_cost_8k",
+                layout_archetype="stacked_breakdown",
+            ),
+            MotionSceneSpec(
+                scene_id="S003",
+                order=3,
+                visual_type="data",
+                requested_template="comparison",
+                rendered_template="comparison",
+                props={
+                    "headline": "INSURANCE COVERS",
+                    "value": "$6,000",
+                    "numeric_value": 6000,
+                    "eyebrow": "INSURANCE",
+                    "layout_archetype": "stacked_breakdown",
+                    "total": {"label": "TOTAL REPAIR", "value": "$8,000", "numeric_value": 8000},
+                    "parts": [
+                        {"label": "YOU PAY", "value": "$2,000", "numeric_value": 2000, "highlight": True},
+                        {"label": "INSURANCE", "value": "$6,000", "numeric_value": 6000, "highlight": False},
+                    ],
+                },
+                start_time=4.0,
+                end_time=6.0,
+                start_frame=120,
+                end_frame=180,
+                duration_frames=60,
+                fps=30,
+                width=1280,
+                height=720,
+                visual_group_id="vg_cost_8k",
+                layout_archetype="stacked_breakdown",
+            ),
+        ]
+
+        group = MotionGroupSpec(
+            group_id="vg_cost_8k",
+            scene_ids=["S001", "S002", "S003"],
+            start_frame=0,
+            end_frame=180,
+            duration_frames=180,
+            fps=30,
+            width=1280,
+            height=720,
+            scenes=scenes,
+        )
+
+        assets = render_group_motion(group, self.temp_dir)
+        self.assertEqual(len(assets), 3)
+
+        master_path = Path(self.temp_dir) / "motion" / "groups" / "vg_cost_8k" / "master.mp4"
+        self.assertTrue(master_path.exists())
+        self.assertGreater(master_path.stat().st_size, 1000)
+
+    def test_render_invalid_breakdown_data_fallback(self):
+        """Verify invalid breakdown arithmetic (8000 != 2000 + 5000) falls back to sequential scenes without fabricating data."""
+        scenes = [
+            MotionSceneSpec(
+                scene_id="S001",
+                order=1,
+                visual_type="data",
+                requested_template="number",
+                rendered_template="number",
+                props={
+                    "headline": "TOTAL REPAIR",
+                    "value": "$8,000",
+                    "numeric_value": 8000,
+                    "eyebrow": "REPAIR COST",
+                    "layout_archetype": "metric_hero",
+                },
+                start_time=0.0,
+                end_time=2.0,
+                start_frame=0,
+                end_frame=60,
+                duration_frames=60,
+                fps=30,
+                width=1280,
+                height=720,
+                visual_group_id="vg_mismatch",
+                layout_archetype="metric_hero",
+            ),
+            MotionSceneSpec(
+                scene_id="S002",
+                order=2,
+                visual_type="data",
+                requested_template="number",
+                rendered_template="number",
+                props={
+                    "headline": "YOUR DEDUCTIBLE",
+                    "value": "$2,000",
+                    "numeric_value": 2000,
+                    "eyebrow": "DEDUCTIBLE",
+                    "layout_archetype": "metric_hero",
+                },
+                start_time=2.0,
+                end_time=4.0,
+                start_frame=60,
+                end_frame=120,
+                duration_frames=60,
+                fps=30,
+                width=1280,
+                height=720,
+                visual_group_id="vg_mismatch",
+                layout_archetype="metric_hero",
+            ),
+            MotionSceneSpec(
+                scene_id="S003",
+                order=3,
+                visual_type="data",
+                requested_template="number",
+                rendered_template="number",
+                props={
+                    "headline": "INSURANCE COVERS",
+                    "value": "$5,000",
+                    "numeric_value": 5000,
+                    "eyebrow": "INSURANCE",
+                    "layout_archetype": "metric_hero",
+                },
+                start_time=4.0,
+                end_time=6.0,
+                start_frame=120,
+                end_frame=180,
+                duration_frames=60,
+                fps=30,
+                width=1280,
+                height=720,
+                visual_group_id="vg_mismatch",
+                layout_archetype="metric_hero",
+            ),
+        ]
+
+        group = MotionGroupSpec(
+            group_id="vg_mismatch",
+            scene_ids=["S001", "S002", "S003"],
+            start_frame=0,
+            end_frame=180,
+            duration_frames=180,
+            fps=30,
+            width=1280,
+            height=720,
+            scenes=scenes,
+        )
+
+        assets = render_group_motion(group, self.temp_dir)
+        self.assertEqual(len(assets), 3)
+        for a in assets:
+            self.assertTrue(Path(a.output_file).exists())
 
 if __name__ == "__main__":
     unittest.main()
