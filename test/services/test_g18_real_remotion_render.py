@@ -16,27 +16,45 @@ from app.services.motion_demo_gallery import render_all_g18_demos
 from app.services.remotion import render_scene_motion, validate_rendered_motion_clip
 
 
-def _extract_frame_at_timestamp(mp4_path: str, timestamp_sec: float, output_png: str) -> np.ndarray:
-    """Extracts a frame at a specific timestamp from an MP4 file using ffmpeg."""
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-ss",
-        f"{timestamp_sec:.3f}",
-        "-i",
-        mp4_path,
-        "-vframes",
-        "1",
-        "-q:v",
-        "2",
-        output_png,
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0 or not Path(output_png).exists():
-        raise RuntimeError(f"Failed to extract frame at {timestamp_sec}s from {mp4_path}: {res.stderr}")
+def _extract_frame_at_timestamp(mp4_path: str, timestamp_sec: float, output_png: str | None = None) -> np.ndarray:
+    """Extracts a frame at a specific timestamp from an MP4 file using moviepy or ffmpeg."""
+    try:
+        from moviepy import VideoFileClip
+        clip = VideoFileClip(mp4_path)
+        t = min(max(0.0, timestamp_sec), max(0.0, clip.duration - 0.05))
+        frame = clip.get_frame(t)
+        clip.close()
+        if output_png:
+            Image.fromarray(frame).save(output_png)
+        return np.array(frame)
+    except Exception:
+        ffmpeg_bin = "ffmpeg"
+        try:
+            import imageio_ffmpeg
+            ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe() or "ffmpeg"
+        except Exception:
+            pass
 
-    with Image.open(output_png) as img:
-        return np.array(img.convert("RGB"))
+        target_png = output_png or (mp4_path + ".frame.png")
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-ss",
+            f"{timestamp_sec:.3f}",
+            "-i",
+            mp4_path,
+            "-vframes",
+            "1",
+            "-q:v",
+            "2",
+            target_png,
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0 or not Path(target_png).exists():
+            raise RuntimeError(f"Failed to extract frame at {timestamp_sec}s from {mp4_path}: {res.stderr}")
+
+        with Image.open(target_png) as img:
+            return np.array(img.convert("RGB"))
 
 
 class TestG18RealRemotionRender(unittest.TestCase):
