@@ -612,3 +612,431 @@ def render_all_g17_demos(output_dir: str | Path = "storage/demo/g17") -> list[st
         print(f"  - {os.path.basename(f)} ({os.path.getsize(f):,} bytes)")
     print(f"=======================================================\n")
     return rendered_files
+
+
+def render_all_g18_demos(output_dir: str | Path = "storage/demo/g18") -> list[str]:
+    """Renders all 12 G18 visual editorial layout & color safety demos into the specified output directory."""
+    out_dir = Path(output_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rendered_files: list[str] = []
+
+    logger.info("Starting G18 Motion Demo Gallery render -> {}", out_dir)
+
+    demos: list[tuple[str, MotionSceneSpec]] = []
+
+    # 1. 01_pie_multicolor.mp4
+    demos.append((
+        "01_pie_multicolor.mp4",
+        MotionSceneSpec(
+            scene_id="G18_01",
+            order=1,
+            visual_type="data",
+            requested_template="pie",
+            rendered_template="pie",
+            layout_archetype="pie_focus",
+            props={
+                "headline": "Customer Plan Distribution",
+                "eyebrow": "PORTFOLIO MIX",
+                "variant": "pie_focus",
+                "items": [
+                    {"label": "PREMIUM", "value": 40, "percentage": 40, "display_value": "40%", "highlight": True},
+                    {"label": "STANDARD", "value": 35, "percentage": 35, "display_value": "35%", "highlight": False},
+                    {"label": "BASIC", "value": 25, "percentage": 25, "display_value": "25%", "highlight": False},
+                ],
+                "focus_label": "PREMIUM",
+            },
+            start_time=0.0,
+            end_time=3.0,
+            start_frame=0,
+            end_frame=90,
+            duration_frames=90,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 2. 02_donut_multicolor.mp4
+    demos.append((
+        "02_donut_multicolor.mp4",
+        MotionSceneSpec(
+            scene_id="G18_02",
+            order=2,
+            visual_type="data",
+            requested_template="pie",
+            rendered_template="pie",
+            layout_archetype="donut_center_stat",
+            props={
+                "headline": "Coverage Tier Allocation",
+                "eyebrow": "PORTFOLIO ALLOCATION",
+                "variant": "donut_center_stat",
+                "items": [
+                    {"label": "COMPREHENSIVE", "value": 55, "percentage": 55, "display_value": "55%", "highlight": True},
+                    {"label": "COLLISION ONLY", "value": 30, "percentage": 30, "display_value": "30%", "highlight": False},
+                    {"label": "LIABILITY", "value": 15, "percentage": 15, "display_value": "15%", "highlight": False},
+                ],
+                "focus_label": "COMPREHENSIVE",
+            },
+            start_time=0.0,
+            end_time=3.0,
+            start_frame=0,
+            end_frame=90,
+            duration_frames=90,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 3. 03_timeline_safe.mp4
+    demos.append((
+        "03_timeline_safe.mp4",
+        MotionSceneSpec(
+            scene_id="G18_03",
+            order=3,
+            visual_type="data",
+            requested_template="timeline",
+            rendered_template="timeline",
+            props={
+                "headline": "Collision Claim Resolution Lifecycle",
+                "eyebrow": "CLAIMS PROCESS",
+                "milestones": [
+                    {"time_label": "DAY 1", "title": "Incident Filed"},
+                    {"time_label": "DAY 3", "title": "Adjuster Assessment"},
+                    {"time_label": "DAY 7", "title": "Payment Disbursed"},
+                ],
+            },
+            start_time=0.0,
+            end_time=4.0,
+            start_frame=0,
+            end_frame=120,
+            duration_frames=120,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 4. 04_waterfall_safe.mp4
+    demos.append((
+        "04_waterfall_safe.mp4",
+        MotionSceneSpec(
+            scene_id="G18_04",
+            order=4,
+            visual_type="data",
+            requested_template="waterfall",
+            rendered_template="waterfall",
+            props={
+                "headline": "Auto Premium Calculation Bridge",
+                "eyebrow": "PREMIUM BRIDGE",
+                "start_value": 100,
+                "start_label": "Base Quote",
+                "steps": [
+                    {"label": "State Filing Fee", "delta": 30, "display_value": "+$30"},
+                    {"label": "Safe Driver Discount", "delta": -20, "display_value": "-$20"},
+                ],
+                "end_value": 110,
+                "end_label": "Final Premium",
+            },
+            start_time=0.0,
+            end_time=4.0,
+            start_frame=0,
+            end_frame=120,
+            duration_frames=120,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 5. 05_ranked_colors.mp4
+    demos.append((
+        "05_ranked_colors.mp4",
+        MotionSceneSpec(
+            scene_id="G18_05",
+            order=5,
+            visual_type="data",
+            requested_template="ranked_list",
+            rendered_template="ranked_list",
+            props={
+                "headline": "Top 4 Collision Claim Causes",
+                "eyebrow": "INCIDENT FREQUENCY",
+                "items": [
+                    {"rank": 1, "label": "Rear-End Collisions", "value": 38, "display_value": "38%", "highlight": True},
+                    {"rank": 2, "label": "Intersection T-Bones", "value": 27, "display_value": "27%", "highlight": False},
+                    {"rank": 3, "label": "Single-Vehicle Runoff", "value": 21, "display_value": "21%", "highlight": False},
+                    {"rank": 4, "label": "Parking Lot Scrapes", "value": 14, "display_value": "14%", "highlight": False},
+                ],
+            },
+            start_time=0.0,
+            end_time=3.5,
+            start_frame=0,
+            end_frame=105,
+            duration_frames=105,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 6. 06_line_multiseries.mp4
+    demos.append((
+        "06_line_multiseries.mp4",
+        MotionSceneSpec(
+            scene_id="G18_06",
+            order=6,
+            visual_type="data",
+            requested_template="line_chart",
+            rendered_template="line_chart",
+            props={
+                "headline": "Average Annual Premium Growth",
+                "eyebrow": "HISTORICAL TREND",
+                "points": [
+                    {"x_label": "2022", "y_value": 120, "display_value": "$120"},
+                    {"x_label": "2024", "y_value": 150, "display_value": "$150"},
+                    {"x_label": "2026", "y_value": 180, "display_value": "$180"},
+                ],
+            },
+            start_time=0.0,
+            end_time=3.0,
+            start_frame=0,
+            end_frame=90,
+            duration_frames=90,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 7. 07_threshold_semantic.mp4
+    demos.append((
+        "07_threshold_semantic.mp4",
+        MotionSceneSpec(
+            scene_id="G18_07",
+            order=7,
+            visual_type="data",
+            requested_template="threshold",
+            rendered_template="threshold",
+            props={
+                "headline": "Claim Damage vs Coverage Limit",
+                "eyebrow": "THRESHOLD ANALYSIS",
+                "current_value": 40000,
+                "current_display": "$40,000",
+                "threshold_value": 25000,
+                "threshold_display": "$25,000",
+                "threshold_label": "Coverage Limit",
+            },
+            start_time=0.0,
+            end_time=3.5,
+            start_frame=0,
+            end_frame=105,
+            duration_frames=105,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 8. 08_gauge_progress.mp4
+    demos.append((
+        "08_gauge_progress.mp4",
+        MotionSceneSpec(
+            scene_id="G18_08",
+            order=8,
+            visual_type="data",
+            requested_template="gauge",
+            rendered_template="gauge",
+            props={
+                "headline": "Underwriting Inspection Progress",
+                "eyebrow": "PROCESS STATUS",
+                "current_value": 75,
+                "max_value": 100,
+                "display_value": "75%",
+                "label": "Completed",
+            },
+            start_time=0.0,
+            end_time=3.0,
+            start_frame=0,
+            end_frame=90,
+            duration_frames=90,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 9. 09_voice_synced_pie.mp4
+    demos.append((
+        "09_voice_synced_pie.mp4",
+        MotionSceneSpec(
+            scene_id="G18_09",
+            order=9,
+            visual_type="data",
+            requested_template="pie",
+            rendered_template="pie",
+            layout_archetype="donut_center_stat",
+            props={
+                "headline": "Voice-Synced Tier Distribution",
+                "eyebrow": "SYNCED HIGHLIGHT",
+                "items": [
+                    {"label": "PREMIUM", "value": 40, "percentage": 40, "display_value": "40%"},
+                    {"label": "STANDARD", "value": 35, "percentage": 35, "display_value": "35%"},
+                    {"label": "BASIC", "value": 25, "percentage": 25, "display_value": "25%"},
+                ],
+            },
+            animation_plan=MotionAnimationPlan(
+                scene_id="G18_09",
+                beats=[
+                    KineticBeat(id="b1", start_frame=15, end_frame=40, kind=KineticBeatKind.phrase, text="40% chose Premium", data_ref="slice_0"),
+                    KineticBeat(id="b2", start_frame=40, end_frame=65, kind=KineticBeatKind.phrase, text="35% Standard", data_ref="slice_1"),
+                    KineticBeat(id="b3", start_frame=65, end_frame=90, kind=KineticBeatKind.phrase, text="and 25% Basic", data_ref="slice_2"),
+                ],
+                final_hold_frames=20,
+            ),
+            start_time=0.0,
+            end_time=4.0,
+            start_frame=0,
+            end_frame=120,
+            duration_frames=120,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 10. 10_voice_synced_bar.mp4
+    demos.append((
+        "10_voice_synced_bar.mp4",
+        MotionSceneSpec(
+            scene_id="G18_10",
+            order=10,
+            visual_type="data",
+            requested_template="bar_chart",
+            rendered_template="bar_chart",
+            props={
+                "headline": "Comparative Plan Costs",
+                "eyebrow": "VOICE SYNCED PRICING",
+                "items": [
+                    {"label": "PLAN A", "value": 120, "display_value": "$120"},
+                    {"label": "PLAN B", "value": 180, "display_value": "$180"},
+                    {"label": "PLAN C", "value": 230, "display_value": "$230"},
+                ],
+            },
+            animation_plan=MotionAnimationPlan(
+                scene_id="G18_10",
+                beats=[
+                    KineticBeat(id="b1", start_frame=15, end_frame=40, kind=KineticBeatKind.phrase, text="Plan A costs $120", data_ref="bar_0"),
+                    KineticBeat(id="b2", start_frame=40, end_frame=65, kind=KineticBeatKind.phrase, text="Plan B costs $180", data_ref="bar_1"),
+                    KineticBeat(id="b3", start_frame=65, end_frame=90, kind=KineticBeatKind.phrase, text="and Plan C $230", data_ref="bar_2"),
+                ],
+                final_hold_frames=20,
+            ),
+            start_time=0.0,
+            end_time=4.0,
+            start_frame=0,
+            end_frame=120,
+            duration_frames=120,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 11. 11_voice_synced_timeline.mp4
+    demos.append((
+        "11_voice_synced_timeline.mp4",
+        MotionSceneSpec(
+            scene_id="G18_11",
+            order=11,
+            visual_type="data",
+            requested_template="timeline",
+            rendered_template="timeline",
+            props={
+                "headline": "Voice-Aligned Claims Resolution",
+                "eyebrow": "CHOREOGRAPHY",
+                "milestones": [
+                    {"time_label": "DAY 1", "title": "Incident Filed"},
+                    {"time_label": "DAY 3", "title": "Adjuster Assessment"},
+                    {"time_label": "DAY 7", "title": "Payment Disbursed"},
+                ],
+            },
+            animation_plan=MotionAnimationPlan(
+                scene_id="G18_11",
+                beats=[
+                    KineticBeat(id="b1", start_frame=15, end_frame=40, kind=KineticBeatKind.milestone, text="On day one incident filed", data_ref="m_0"),
+                    KineticBeat(id="b2", start_frame=40, end_frame=65, kind=KineticBeatKind.milestone, text="By day three adjuster assessment", data_ref="m_1"),
+                    KineticBeat(id="b3", start_frame=65, end_frame=90, kind=KineticBeatKind.milestone, text="By day seven payment disbursed", data_ref="m_2"),
+                ],
+                final_hold_frames=20,
+            ),
+            start_time=0.0,
+            end_time=4.0,
+            start_frame=0,
+            end_frame=120,
+            duration_frames=120,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    # 12. 12_voice_synced_waterfall.mp4
+    demos.append((
+        "12_voice_synced_waterfall.mp4",
+        MotionSceneSpec(
+            scene_id="G18_12",
+            order=12,
+            visual_type="data",
+            requested_template="waterfall",
+            rendered_template="waterfall",
+            props={
+                "headline": "Voice-Aligned Premium Breakdown",
+                "eyebrow": "CHOREOGRAPHY",
+                "start_value": 100,
+                "start_label": "Base Quote",
+                "steps": [
+                    {"label": "State Fee", "delta": 30, "display_value": "+$30"},
+                    {"label": "Discount", "delta": -20, "display_value": "-$20"},
+                ],
+                "end_value": 110,
+                "end_label": "Final Premium",
+            },
+            animation_plan=MotionAnimationPlan(
+                scene_id="G18_12",
+                beats=[
+                    KineticBeat(id="b1", start_frame=10, end_frame=30, kind=KineticBeatKind.step, text="Starts at $100", data_ref="step_0"),
+                    KineticBeat(id="b2", start_frame=30, end_frame=55, kind=KineticBeatKind.step, text="A $30 fee added", data_ref="step_1"),
+                    KineticBeat(id="b3", start_frame=55, end_frame=80, kind=KineticBeatKind.step, text="A $20 discount applied", data_ref="step_2"),
+                    KineticBeat(id="b4", start_frame=80, end_frame=100, kind=KineticBeatKind.step, text="Final premium is $110", data_ref="step_3"),
+                ],
+                final_hold_frames=20,
+            ),
+            start_time=0.0,
+            end_time=4.0,
+            start_frame=0,
+            end_frame=120,
+            duration_frames=120,
+            fps=30,
+            width=1280,
+            height=720,
+        ),
+    ))
+
+    for filename, spec in demos:
+        target_path = out_dir / filename
+        logger.info("Rendering G18 demo clip: {}", filename)
+        asset = render_scene_motion(spec, str(out_dir))
+        src_file = Path(asset.output_file)
+        if src_file.exists():
+            import shutil
+            shutil.copyfile(str(src_file), str(target_path))
+            rendered_files.append(str(target_path))
+
+    logger.success("Completed rendering {} G18 demo clips into {}", len(rendered_files), out_dir)
+    print(f"\n=======================================================")
+    print(f"G18 DEMO GALLERY PERSISTED TO: {out_dir}")
+    print(f"Total Clips Rendered: {len(rendered_files)}")
+    for f in rendered_files:
+        print(f"  - {os.path.basename(f)} ({os.path.getsize(f):,} bytes)")
+    print(f"=======================================================\n")
+    return rendered_files

@@ -1,6 +1,8 @@
 import React from 'react';
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
+import { Background } from '../components/Background';
 import { Layout } from '../components/Layout';
+import { getSafeArea, fitText } from '../layout';
 import { resolveTheme } from '../theme/theme';
 import { AreaChartProps } from '../types';
 
@@ -9,6 +11,8 @@ export const AreaChartTemplate: React.FC<AreaChartProps> = (props) => {
   const { fps, width, height, durationInFrames } = useVideoConfig();
   const theme = resolveTheme(props.theme);
   const isPortrait = height > width;
+
+  const safe = getSafeArea(width, height);
 
   const rawPoints = props.points || [
     { x_label: '2022', y_value: 100, display_value: '$100' },
@@ -21,18 +25,36 @@ export const AreaChartTemplate: React.FC<AreaChartProps> = (props) => {
   const minY = Math.min(0, ...yValues);
   const yRange = maxY - minY || 1;
 
-  // Chart dimensions
-  const chartW = isPortrait ? width * 0.88 : Math.min(width * 0.75, 840);
-  const chartH = isPortrait ? height * 0.42 : height * 0.46;
-  const paddingL = 48;
-  const paddingR = 32;
-  const paddingT = 32;
-  const paddingB = 48;
+  // 1. Title Zone Layout
+  const titleFit = fitText({
+    text: props.headline,
+    maxWidth: safe.titleZone.width * 0.9,
+    maxHeight: safe.titleZone.height - 16,
+    preferredFontSize: isPortrait ? 24 : 36,
+    minimumFontSize: isPortrait ? 18 : 22,
+    maxLines: 2,
+    role: 'headline',
+  });
 
+  const headerSpr = spring({
+    frame,
+    fps,
+    config: { damping: 16, stiffness: 120 },
+  });
+
+  // 2. Geometry
+  const chartW = isPortrait ? safe.chartZone.width * 0.92 : Math.min(safe.chartZone.width * 0.85, 960);
+  const chartH = isPortrait ? safe.chartZone.height * 0.65 : safe.chartZone.height * 0.68;
+  const chartLeft = safe.chartZone.x + (safe.chartZone.width - chartW) / 2;
+  const chartTop = safe.chartZone.y + Math.round(safe.chartZone.height * 0.06);
+
+  const paddingL = 40;
+  const paddingR = 40;
+  const paddingT = 30;
+  const paddingB = 40;
   const innerW = chartW - paddingL - paddingR;
   const innerH = chartH - paddingT - paddingB;
 
-  // Coordinates
   const coords = rawPoints.map((p, idx) => {
     const x = paddingL + (idx / Math.max(1, rawPoints.length - 1)) * innerW;
     const yVal = Number(p.y_value) || 0;
@@ -40,7 +62,6 @@ export const AreaChartTemplate: React.FC<AreaChartProps> = (props) => {
     return { x, y, point: p };
   });
 
-  // SVG Path definitions
   const linePath = coords.reduce((acc, c, idx) => {
     return idx === 0 ? `M ${c.x} ${c.y}` : `${acc} L ${c.x} ${c.y}`;
   }, '');
@@ -49,178 +70,156 @@ export const AreaChartTemplate: React.FC<AreaChartProps> = (props) => {
     ? `${linePath} L ${coords[coords.length - 1].x} ${paddingT + innerH} L ${coords[0].x} ${paddingT + innerH} Z`
     : '';
 
-  // Entrance spring
-  const headerSpr = spring({
-    frame,
-    fps,
-    config: { damping: 16, stiffness: 120 },
-  });
-
-  // Path drawing spring
   const drawSpr = spring({
     frame: Math.max(0, frame - 8),
     fps,
     config: { damping: 14, stiffness: 75 },
   });
 
-  const approxPathLen = innerW * 1.5;
-
   return (
     <Layout theme={theme} isGrouped={props.isGrouped}>
+      <Background variant="flat" theme={theme} subtle_motion />
+
+      {/* ZONE 1: TITLE ZONE */}
       <div
         style={{
-          width: '100%',
-          height: '100%',
+          position: 'absolute',
+          left: safe.titleZone.x,
+          top: safe.titleZone.y,
+          width: safe.titleZone.width,
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'center',
-          padding: isPortrait ? '36px 20px' : '44px 56px',
-          boxSizing: 'border-box',
-          position: 'relative',
+          textAlign: 'center',
+          opacity: headerSpr,
+          transform: `translateY(${interpolate(headerSpr, [0, 1], [16, 0])}px)`,
+          zIndex: 10,
         }}
       >
-        {/* Header Section */}
-        <div
-          style={{
-            textAlign: 'center',
-            marginBottom: isPortrait ? 20 : 28,
-            opacity: headerSpr,
-            transform: `translateY(${interpolate(headerSpr, [0, 1], [16, 0])}px)`,
-          }}
-        >
-          {props.eyebrow && (
-            <div
-              style={{
-                fontSize: isPortrait ? 13 : 15,
-                fontWeight: 800,
-                letterSpacing: '0.15em',
-                color: theme.accent,
-                textTransform: 'uppercase',
-                marginBottom: 6,
-              }}
-            >
-              {props.eyebrow}
-            </div>
-          )}
+        {props.eyebrow && (
           <div
             style={{
-              fontSize: isPortrait ? 22 : 32,
-              fontWeight: 900,
-              color: theme.text,
-              letterSpacing: '-0.02em',
-              maxWidth: 780,
-              lineHeight: 1.25,
+              fontSize: isPortrait ? 12 : 14,
+              fontWeight: 800,
+              letterSpacing: '0.14em',
+              color: theme.accent,
+              textTransform: 'uppercase',
+              marginBottom: 4,
             }}
           >
-            {props.headline}
+            {props.eyebrow}
           </div>
-        </div>
-
-        {/* SVG Area Chart Container */}
-        <div
+        )}
+        <h1
           style={{
-            width: chartW,
-            height: chartH,
-            backgroundColor: theme.surface,
-            border: `1.5px solid ${theme.surfaceBorder}`,
-            borderRadius: 20,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-            position: 'relative',
-            overflow: 'hidden',
+            margin: 0,
+            fontSize: titleFit.fontSize,
+            lineHeight: `${titleFit.lineHeight}px`,
+            fontWeight: 800,
+            color: theme.text,
+            letterSpacing: '-0.02em',
+            maxWidth: safe.titleZone.width * 0.9,
+            wordBreak: 'break-word',
           }}
         >
-          <svg width={chartW} height={chartH} viewBox={`0 0 ${chartW} ${chartH}`}>
-            <defs>
-              <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={theme.accent} stopOpacity={0.45 * drawSpr} />
-                <stop offset="100%" stopColor={theme.accent} stopOpacity={0.0} />
-              </linearGradient>
-            </defs>
+          {titleFit.lines.map((ln, i) => (
+            <div key={i}>{ln}</div>
+          ))}
+        </h1>
+      </div>
 
-            {/* Gridlines */}
-            {[0.25, 0.5, 0.75, 1.0].map((tick, i) => {
-              const y = paddingT + innerH * (1 - tick);
-              return (
-                <line
-                  key={i}
-                  x1={paddingL}
-                  y1={y}
-                  x2={paddingL + innerW}
-                  y2={y}
-                  stroke={theme.surfaceBorder}
-                  strokeDasharray="4 4"
-                  strokeWidth={1}
+      {/* ZONE 2: AREA CHART SVG */}
+      <div
+        style={{
+          position: 'absolute',
+          left: chartLeft,
+          top: chartTop,
+          width: chartW,
+          height: chartH,
+          zIndex: 5,
+        }}
+      >
+        <svg width={chartW} height={chartH} style={{ overflow: 'visible' }}>
+          <defs>
+            <linearGradient id="areaGlow" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={theme.accent} stopOpacity="0.35" />
+              <stop offset="100%" stopColor={theme.accent} stopOpacity="0.0" />
+            </linearGradient>
+          </defs>
+
+          {/* Baseline */}
+          <line
+            x1={paddingL - 10}
+            y1={paddingT + innerH}
+            x2={chartW - paddingR + 10}
+            y2={paddingT + innerH}
+            stroke={theme.surfaceBorder}
+            strokeWidth={1.5}
+          />
+
+          {/* Semi-transparent Area Gradient Fill */}
+          <path
+            d={areaPath}
+            fill="url(#areaGlow)"
+            opacity={drawSpr}
+          />
+
+          {/* Area Top Line */}
+          <path
+            d={linePath}
+            fill="none"
+            stroke={theme.accent}
+            strokeWidth={4}
+            style={{
+              filter: `drop-shadow(0 0 12px ${theme.accent}80)`,
+              opacity: drawSpr,
+            }}
+          />
+
+          {/* Points and Values */}
+          {coords.map((c, i) => {
+            const delay = 10 + i * Math.max(8, Math.floor((durationInFrames * 0.4) / coords.length));
+            const ptSpr = spring({
+              frame: Math.max(0, frame - delay),
+              fps,
+              config: { damping: 14, stiffness: 120 },
+            });
+
+            return (
+              <g key={`pt-${i}`} style={{ opacity: ptSpr }}>
+                <circle
+                  cx={c.x}
+                  cy={c.y}
+                  r={7}
+                  fill={theme.accent}
+                  stroke="#ffffff"
+                  strokeWidth={3}
+                  style={{ filter: `drop-shadow(0 0 8px ${theme.accent})` }}
                 />
-              );
-            })}
-
-            {/* Area Fill */}
-            <path d={areaPath} fill="url(#areaGradient)" />
-
-            {/* Line Stroke */}
-            <path
-              d={linePath}
-              fill="none"
-              stroke={theme.accent}
-              strokeWidth={4}
-              strokeDasharray={`${approxPathLen} ${approxPathLen}`}
-              strokeDashoffset={approxPathLen * (1 - drawSpr)}
-              strokeLinecap="round"
-              style={{
-                filter: `drop-shadow(0 0 12px ${theme.accent}88)`,
-              }}
-            />
-
-            {/* Data Point Dots and Labels */}
-            {coords.map((c, idx) => {
-              const pointDelay = 12 + idx * Math.max(4, Math.floor((durationInFrames * 0.35) / coords.length));
-              const pointSpr = spring({
-                frame: Math.max(0, frame - pointDelay),
-                fps,
-                config: { damping: 14, stiffness: 120 },
-              });
-
-              return (
-                <g key={idx} opacity={pointSpr} transform={`translate(0, ${interpolate(pointSpr, [0, 1], [10, 0])})`}>
-                  {/* Outer circle halo */}
-                  <circle
-                    cx={c.x}
-                    cy={c.y}
-                    r={8}
-                    fill={theme.background}
-                    stroke={theme.accent}
-                    strokeWidth={3}
-                  />
-
-                  {/* Value badge */}
-                  <text
-                    x={c.x}
-                    y={c.y - 14}
-                    textAnchor="middle"
-                    fill={theme.text}
-                    fontSize={isPortrait ? 12 : 14}
-                    fontWeight={900}
-                  >
-                    {c.point.display_value || c.point.y_value}
-                  </text>
-
-                  {/* X Axis Label */}
-                  <text
-                    x={c.x}
-                    y={paddingT + innerH + 24}
-                    textAnchor="middle"
-                    fill={theme.muted}
-                    fontSize={isPortrait ? 11 : 13}
-                    fontWeight={800}
-                  >
-                    {c.point.x_label}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
+                <text
+                  x={c.x}
+                  y={c.y - 14}
+                  fill="#ffffff"
+                  fontSize={isPortrait ? 13 : 16}
+                  fontWeight={900}
+                  textAnchor="middle"
+                >
+                  {c.point.display_value || c.point.y_value}
+                </text>
+                <text
+                  x={c.x}
+                  y={paddingT + innerH + 22}
+                  fill={theme.muted}
+                  fontSize={isPortrait ? 11 : 13}
+                  fontWeight={800}
+                  textAnchor="middle"
+                >
+                  {c.point.x_label}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
       </div>
     </Layout>
   );

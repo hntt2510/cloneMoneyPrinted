@@ -1,76 +1,230 @@
 import React from 'react';
-import { interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
+import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Background } from '../components/Background';
 import { Layout } from '../components/Layout';
-import { SlideIn } from '../components/MotionPrimitives';
+import { getSafeArea, fitText, resolveCategoryColor, getItemFocusState } from '../layout';
 import { resolveTheme } from '../theme/theme';
 import { BarChartProps } from '../types';
 
 export const BarChartTemplate: React.FC<BarChartProps> = ({
-  headline, items, theme: customTheme, isGrouped = false, animation_plan,
+  headline,
+  items = [],
+  theme: customTheme,
+  isGrouped = false,
+  animation_plan,
+  eyebrow,
 }) => {
   const frame = useCurrentFrame();
-  const { width, height } = useVideoConfig();
+  const { fps, width, height, durationInFrames } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
 
-  // Axes and grid fade in (first 15 frames)
-  const gridOp = interpolate(frame, [0, 15], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  const safe = getSafeArea(width, height);
+  const barItems = items.length > 0 ? items : [
+    { label: 'Plan A', value: 120, display_value: '$120' },
+    { label: 'Plan B', value: 180, display_value: '$180' },
+    { label: 'Plan C', value: 230, display_value: '$230' },
+  ];
 
-  const maxVal = Math.max(...items.map(i => i.value), 1);
+  // 1. Title Zone
+  const titleFit = fitText({
+    text: headline,
+    maxWidth: safe.titleZone.width * 0.9,
+    maxHeight: safe.titleZone.height - 16,
+    preferredFontSize: isPortrait ? 24 : 36,
+    minimumFontSize: isPortrait ? 18 : 22,
+    maxLines: 2,
+    role: 'headline',
+  });
+
+  const headerSpr = spring({
+    frame,
+    fps,
+    config: { damping: 16, stiffness: 120 },
+  });
+
+  // 2. Chart Dimensions
+  const chartW = isPortrait ? safe.chartZone.width * 0.92 : Math.min(safe.chartZone.width * 0.85, 960);
+  const chartH = isPortrait ? safe.chartZone.height * 0.65 : safe.chartZone.height * 0.68;
+  const chartLeft = safe.chartZone.x + (safe.chartZone.width - chartW) / 2;
+  const chartTop = safe.chartZone.y + Math.round(safe.chartZone.height * 0.06);
+
+  const maxVal = Math.max(...barItems.map((i) => Number(i.value) || 0), 10);
   const gridLines = [0, maxVal * 0.33, maxVal * 0.66, maxVal];
 
-  const chartW = isPortrait ? width * 0.8 : width * 0.7;
-  const chartH = isPortrait ? height * 0.4 : height * 0.5;
-  const barWidth = (chartW * 0.6) / items.length;
-  const spacing = (chartW * 0.4) / (items.length + 1);
+  const numBars = barItems.length;
+  const barWidth = Math.min((chartW * 0.55) / numBars, isPortrait ? 64 : 110);
+  const spacing = (chartW - numBars * barWidth) / (numBars + 1);
 
   return (
     <Layout theme={theme} isGrouped={isGrouped}>
       <Background variant="flat" theme={theme} subtle_motion />
-      
-      <SlideIn startFrame={0}>
-        <div style={{ position: 'absolute', top: '10%', width: '100%', textAlign: 'center', fontSize: isPortrait ? 32 : 48, fontWeight: 800, color: theme.text }}>
-          {headline}
-        </div>
-      </SlideIn>
 
-      <div style={{ position: 'absolute', top: '25%', left: (width - chartW) / 2, width: chartW, height: chartH, opacity: gridOp }}>
+      {/* ZONE 1: TITLE ZONE */}
+      <div
+        style={{
+          position: 'absolute',
+          left: safe.titleZone.x,
+          top: safe.titleZone.y,
+          width: safe.titleZone.width,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          textAlign: 'center',
+          opacity: headerSpr,
+          transform: `translateY(${interpolate(headerSpr, [0, 1], [16, 0])}px)`,
+          zIndex: 10,
+        }}
+      >
+        {eyebrow && (
+          <div
+            style={{
+              fontSize: isPortrait ? 12 : 14,
+              fontWeight: 800,
+              letterSpacing: '0.14em',
+              color: theme.accent,
+              textTransform: 'uppercase',
+              marginBottom: 4,
+            }}
+          >
+            {eyebrow}
+          </div>
+        )}
+        <h1
+          style={{
+            margin: 0,
+            fontSize: titleFit.fontSize,
+            lineHeight: `${titleFit.lineHeight}px`,
+            fontWeight: 800,
+            color: theme.text,
+            letterSpacing: '-0.02em',
+            maxWidth: safe.titleZone.width * 0.9,
+            wordBreak: 'break-word',
+          }}
+        >
+          {titleFit.lines.map((ln, i) => (
+            <div key={i}>{ln}</div>
+          ))}
+        </h1>
+      </div>
+
+      {/* ZONE 2: BAR CHART SVG */}
+      <div
+        style={{
+          position: 'absolute',
+          left: chartLeft,
+          top: chartTop,
+          width: chartW,
+          height: chartH,
+          zIndex: 5,
+        }}
+      >
         <svg width={chartW} height={chartH} style={{ overflow: 'visible' }}>
-          {/* Grid lines */}
+          {/* Horizontal Grid lines */}
           {gridLines.map((gl, i) => {
-            const y = chartH - (gl / maxVal) * chartH;
+            const y = chartH - (gl / maxVal) * (chartH - 60) - 40;
             return (
-              <line key={`grid-${i}`} x1={0} y1={y} x2={chartW} y2={y} stroke={theme.surfaceBorder} strokeWidth={2} strokeDasharray="4 4" />
+              <line
+                key={`grid-${i}`}
+                x1={0}
+                y1={y}
+                x2={chartW}
+                y2={y}
+                stroke={theme.surfaceBorder}
+                strokeWidth={1.5}
+                strokeDasharray="4 4"
+              />
             );
           })}
-          
-          {/* Axes */}
-          <line x1={0} y1={0} x2={0} y2={chartH} stroke={theme.muted} strokeWidth={2} />
-          <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke={theme.muted} strokeWidth={2} />
-          
+
+          {/* Baseline */}
+          <line
+            x1={0}
+            y1={chartH - 40}
+            x2={chartW}
+            y2={chartH - 40}
+            stroke={theme.surfaceBorder}
+            strokeWidth={2}
+          />
+
           {/* Bars */}
-          {items.map((item, idx) => {
-            const beat = animation_plan?.beats?.find(b => b.data_ref === `bar_${idx}`);
-            const startFrame = beat?.start_frame ?? (15 + idx * 10);
-            
-            const barH = (item.value / maxVal) * chartH;
+          {barItems.map((item, idx) => {
+            const focus = getItemFocusState(idx, frame, durationInFrames, animation_plan, numBars);
+
+            const delay = 10 + idx * Math.max(8, Math.floor((durationInFrames * 0.45) / numBars));
+            const barSpr = spring({
+              frame: Math.max(0, frame - delay),
+              fps,
+              config: { damping: 14, stiffness: 100 },
+            });
+
+            const barColor = item.color || resolveCategoryColor({
+              label: item.label,
+              index: idx,
+              totalCategories: numBars,
+            });
+
+            const barH = ((Number(item.value) || 0) / maxVal) * (chartH - 60);
             const x = spacing + idx * (barWidth + spacing);
-            
-            const progress = interpolate(frame, [startFrame, startFrame + 15], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
-            const currH = progress * barH;
-            const y = chartH - currH;
-            
-            if (frame < startFrame) return null;
-            
+            const currH = barSpr * barH;
+            const y = chartH - 40 - currH;
+
+            const lblFit = fitText({
+              text: item.label,
+              maxWidth: barWidth * 1.3,
+              preferredFontSize: isPortrait ? 11 : 14,
+              fontWeight: 800,
+              role: 'chart_label',
+            });
+
             return (
-              <g key={`bar-${idx}`}>
-                <rect x={x} y={y} width={barWidth} height={currH} fill={item.color || theme.primary} rx={4} ry={4} />
-                {progress > 0.5 && (
-                  <text x={x + barWidth / 2} y={chartH + 24} fill={theme.muted} fontSize={16} fontWeight={600} textAnchor="middle">{item.label}</text>
+              <g
+                key={`bar-${idx}`}
+                style={{
+                  opacity: barSpr * focus.opacity,
+                  transition: 'opacity 0.2s ease',
+                }}
+              >
+                {/* Bar Rectangle */}
+                <rect
+                  x={x}
+                  y={y}
+                  width={barWidth}
+                  height={Math.max(4, currH)}
+                  fill={barColor}
+                  rx={6}
+                  ry={6}
+                  style={{
+                    filter: focus.isActive ? `drop-shadow(0 0 16px ${barColor}99)` : 'none',
+                  }}
+                />
+
+                {/* Value Text Above Bar */}
+                {barSpr > 0.4 && (
+                  <text
+                    x={x + barWidth / 2}
+                    y={y - 10}
+                    fill={focus.isActive ? '#ffffff' : theme.text}
+                    fontSize={isPortrait ? 13 : 16}
+                    fontWeight={900}
+                    textAnchor="middle"
+                  >
+                    {item.display_value || item.value}
+                  </text>
                 )}
-                {progress > 0.8 && (
-                  <text x={x + barWidth / 2} y={y - 12} fill={theme.text} fontSize={20} fontWeight={800} textAnchor="middle">{item.display_value || item.value}</text>
+
+                {/* Category Label Below Baseline */}
+                {barSpr > 0.2 && (
+                  <text
+                    x={x + barWidth / 2}
+                    y={chartH - 18}
+                    fill={focus.isActive ? theme.text : theme.muted}
+                    fontSize={lblFit.fontSize}
+                    fontWeight={focus.isActive ? 900 : 700}
+                    textAnchor="middle"
+                  >
+                    {lblFit.lines[0]}
+                  </text>
                 )}
               </g>
             );
