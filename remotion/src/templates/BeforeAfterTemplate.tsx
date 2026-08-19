@@ -1,6 +1,8 @@
 import React from 'react';
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
+import { Background } from '../components/Background';
 import { Layout } from '../components/Layout';
+import { getSafeArea, fitText, SEMANTIC_COLORS } from '../layout';
 import { resolveTheme } from '../theme/theme';
 import { BeforeAfterProps } from '../types';
 
@@ -10,7 +12,19 @@ export const BeforeAfterTemplate: React.FC<BeforeAfterProps> = (props) => {
   const theme = resolveTheme(props.theme);
   const isPortrait = height > width;
 
-  // Header entrance
+  const safe = getSafeArea(width, height);
+
+  // 1. Title Zone
+  const titleFit = fitText({
+    text: props.headline,
+    maxWidth: safe.titleZone.width * 0.9,
+    maxHeight: safe.titleZone.height - 16,
+    preferredFontSize: isPortrait ? 24 : 36,
+    minimumFontSize: isPortrait ? 18 : 22,
+    maxLines: 2,
+    role: 'headline',
+  });
+
   const headerSpr = spring({
     frame,
     fps,
@@ -31,221 +45,170 @@ export const BeforeAfterTemplate: React.FC<BeforeAfterProps> = (props) => {
     config: { damping: 15, stiffness: 100 },
   });
 
-  // Delta resolution spring
-  const deltaSpr = spring({
-    frame: Math.max(0, frame - Math.round(durationInFrames * 0.65)),
-    fps,
-    config: { damping: 14, stiffness: 130 },
-  });
+  const cardW = isPortrait ? safe.chartZone.width * 0.88 : Math.min(safe.chartZone.width * 0.42, 440);
 
   return (
     <Layout theme={theme} isGrouped={props.isGrouped}>
+      <Background variant="flat" theme={theme} subtle_motion />
+
+      {/* ZONE 1: TITLE ZONE */}
       <div
         style={{
-          width: '100%',
-          height: '100%',
+          position: 'absolute',
+          left: safe.titleZone.x,
+          top: safe.titleZone.y,
+          width: safe.titleZone.width,
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'center',
-          padding: isPortrait ? '36px 20px' : '44px 64px',
-          boxSizing: 'border-box',
-          position: 'relative',
+          textAlign: 'center',
+          opacity: headerSpr,
+          transform: `translateY(${interpolate(headerSpr, [0, 1], [16, 0])}px)`,
+          zIndex: 10,
         }}
       >
-        {/* Header */}
-        <div
-          style={{
-            textAlign: 'center',
-            marginBottom: isPortrait ? 24 : 32,
-            opacity: headerSpr,
-            transform: `translateY(${interpolate(headerSpr, [0, 1], [16, 0])}px)`,
-          }}
-        >
-          {props.eyebrow && (
-            <div
-              style={{
-                fontSize: isPortrait ? 13 : 15,
-                fontWeight: 800,
-                letterSpacing: '0.15em',
-                color: theme.accent,
-                textTransform: 'uppercase',
-                marginBottom: 6,
-              }}
-            >
-              {props.eyebrow}
-            </div>
-          )}
-          <div
-            style={{
-              fontSize: isPortrait ? 22 : 32,
-              fontWeight: 900,
-              color: theme.text,
-              letterSpacing: '-0.02em',
-              maxWidth: 780,
-              lineHeight: 1.25,
-            }}
-          >
-            {props.headline}
-          </div>
-        </div>
-
-        {/* Comparison Split Cards */}
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: isPortrait ? 'column' : 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: isPortrait ? 20 : 36,
-            width: '100%',
-            maxWidth: 920,
-            position: 'relative',
-          }}
-        >
-          {/* 1. BEFORE CARD */}
-          <div
-            style={{
-              flex: 1,
-              width: isPortrait ? '100%' : 'auto',
-              maxWidth: isPortrait ? 380 : 'none',
-              padding: isPortrait ? '24px 20px' : '36px 32px',
-              backgroundColor: theme.surface,
-              border: `1.5px solid ${theme.surfaceBorder}`,
-              borderRadius: 20,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              textAlign: 'center',
-              opacity: beforeSpr,
-              transform: `translateX(${interpolate(beforeSpr, [0, 1], [isPortrait ? 0 : -30, 0])}px)`,
-            }}
-          >
-            <div
-              style={{
-                fontSize: isPortrait ? 12 : 14,
-                fontWeight: 800,
-                letterSpacing: '0.15em',
-                color: theme.muted,
-                textTransform: 'uppercase',
-                marginBottom: 10,
-              }}
-            >
-              {props.before_label || 'BEFORE'}
-            </div>
-            <div
-              style={{
-                fontSize: isPortrait ? 32 : 46,
-                fontWeight: 900,
-                color: theme.text,
-                letterSpacing: '-0.03em',
-              }}
-            >
-              {props.before_value}
-            </div>
-          </div>
-
-          {/* Center Transition Icon / Divider */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 44,
-              height: 44,
-              borderRadius: 22,
-              backgroundColor: theme.surface,
-              border: `1.5px solid ${theme.surfaceBorder}`,
-              color: theme.accent,
-              fontSize: 20,
-              fontWeight: 900,
-              opacity: afterSpr,
-              transform: `scale(${interpolate(afterSpr, [0, 1], [0.6, 1])})`,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
-              flexShrink: 0,
-            }}
-          >
-            {isPortrait ? '↓' : '→'}
-          </div>
-
-          {/* 2. AFTER CARD */}
-          <div
-            style={{
-              flex: 1,
-              width: isPortrait ? '100%' : 'auto',
-              maxWidth: isPortrait ? 380 : 'none',
-              padding: isPortrait ? '24px 20px' : '36px 32px',
-              backgroundColor: theme.surface,
-              border: `2px solid ${theme.accent}`,
-              borderRadius: 20,
-              boxShadow: `0 8px 32px ${theme.accent}33`,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              textAlign: 'center',
-              opacity: afterSpr,
-              transform: `translateX(${interpolate(afterSpr, [0, 1], [isPortrait ? 0 : 30, 0])}px)`,
-            }}
-          >
-            <div
-              style={{
-                fontSize: isPortrait ? 12 : 14,
-                fontWeight: 800,
-                letterSpacing: '0.15em',
-                color: theme.accent,
-                textTransform: 'uppercase',
-                marginBottom: 10,
-              }}
-            >
-              {props.after_label || 'AFTER'}
-            </div>
-            <div
-              style={{
-                fontSize: isPortrait ? 32 : 46,
-                fontWeight: 900,
-                color: theme.accent,
-                letterSpacing: '-0.03em',
-              }}
-            >
-              {props.after_value}
-            </div>
-          </div>
-        </div>
-
-        {/* Delta Callout Badge */}
-        {props.delta_display && (
-          <div
-            style={{
-              marginTop: 28,
-              padding: '10px 24px',
-              backgroundColor: theme.surface,
-              border: `1.5px solid ${theme.positive}`,
-              borderRadius: 14,
-              color: theme.positive,
-              fontSize: isPortrait ? 14 : 16,
-              fontWeight: 900,
-              opacity: deltaSpr,
-              transform: `scale(${interpolate(deltaSpr, [0, 1], [0.85, 1])})`,
-              boxShadow: `0 4px 20px ${theme.positive}33`,
-            }}
-          >
-            {props.delta_display}
-          </div>
-        )}
-
-        {props.subtext && (
+        {props.eyebrow && (
           <div
             style={{
               fontSize: isPortrait ? 12 : 14,
-              color: theme.muted,
-              marginTop: 16,
-              textAlign: 'center',
+              fontWeight: 800,
+              letterSpacing: '0.14em',
+              color: theme.accent,
+              textTransform: 'uppercase',
+              marginBottom: 4,
             }}
           >
-            {props.subtext}
+            {props.eyebrow}
           </div>
         )}
+        <h1
+          style={{
+            margin: 0,
+            fontSize: titleFit.fontSize,
+            lineHeight: `${titleFit.lineHeight}px`,
+            fontWeight: 800,
+            color: theme.text,
+            letterSpacing: '-0.02em',
+            maxWidth: safe.titleZone.width * 0.9,
+            wordBreak: 'break-word',
+          }}
+        >
+          {titleFit.lines.map((ln, i) => (
+            <div key={i}>{ln}</div>
+          ))}
+        </h1>
+      </div>
+
+      {/* ZONE 2: BEFORE / AFTER SPLIT CARDS */}
+      <div
+        style={{
+          position: 'absolute',
+          left: safe.chartZone.x,
+          top: safe.chartZone.y,
+          width: safe.chartZone.width,
+          height: safe.chartZone.height,
+          display: 'flex',
+          flexDirection: isPortrait ? 'column' : 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: isPortrait ? 20 : 36,
+          zIndex: 5,
+        }}
+      >
+        {/* BEFORE CARD */}
+        <div
+          style={{
+            width: cardW,
+            padding: '24px 32px',
+            backgroundColor: 'rgba(21, 29, 46, 0.6)',
+            border: `1.5px solid ${theme.surfaceBorder}`,
+            borderRadius: 20,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            textAlign: 'center',
+            opacity: beforeSpr,
+            transform: `scale(${interpolate(beforeSpr, [0, 1], [0.9, 1])})`,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+          }}
+        >
+          <div
+            style={{
+              fontSize: isPortrait ? 12 : 14,
+              fontWeight: 800,
+              color: SEMANTIC_COLORS.beforeAfter.before,
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              marginBottom: 8,
+            }}
+          >
+            {props.before_label || 'BEFORE'}
+          </div>
+          <div
+            style={{
+              fontSize: isPortrait ? 36 : 52,
+              fontWeight: 900,
+              color: '#ffffff',
+              letterSpacing: '-0.02em',
+            }}
+          >
+            {props.before_value}
+          </div>
+        </div>
+
+        {/* ARROW / CONNECTOR */}
+        <div
+          style={{
+            fontSize: 28,
+            color: theme.muted,
+            opacity: afterSpr,
+            transform: isPortrait ? 'rotate(90deg)' : 'none',
+          }}
+        >
+          ➔
+        </div>
+
+        {/* AFTER CARD */}
+        <div
+          style={{
+            width: cardW,
+            padding: '24px 32px',
+            backgroundColor: theme.surface,
+            border: `1.5px solid ${theme.accent}`,
+            borderRadius: 20,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            textAlign: 'center',
+            opacity: afterSpr,
+            transform: `scale(${interpolate(afterSpr, [0, 1], [0.9, 1])})`,
+            boxShadow: `0 8px 32px ${theme.accent}33`,
+          }}
+        >
+          <div
+            style={{
+              fontSize: isPortrait ? 12 : 14,
+              fontWeight: 800,
+              color: SEMANTIC_COLORS.beforeAfter.after,
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              marginBottom: 8,
+            }}
+          >
+            {props.after_label || 'AFTER'}
+          </div>
+          <div
+            style={{
+              fontSize: isPortrait ? 36 : 52,
+              fontWeight: 900,
+              color: SEMANTIC_COLORS.beforeAfter.after,
+              letterSpacing: '-0.02em',
+              textShadow: `0 0 16px ${theme.accent}80`,
+            }}
+          >
+            {props.after_value}
+          </div>
+        </div>
       </div>
     </Layout>
   );

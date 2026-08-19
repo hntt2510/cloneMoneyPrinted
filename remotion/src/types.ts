@@ -64,6 +64,7 @@ export interface BaseTemplateProps {
   storyboard_actions?: string[] | null;
   motion_style?: 'subtle' | 'standard' | 'energetic';
   motion_copy?: Record<string, string | null> | null;
+  eyebrow?: string | null;
 }
 
 export interface NumberProps extends BaseTemplateProps {
