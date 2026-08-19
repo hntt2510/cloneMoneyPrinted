@@ -4,4 +4,6 @@ export * from './CollisionResolver';
 export * from './AnnotationLayout';
 export * from './ResponsiveLayout';
 export * from './ColorSystem';
+export * from './TimelineLayout';
+export * from './WaterfallLayout';
 export * from './LayoutDebugOverlay';

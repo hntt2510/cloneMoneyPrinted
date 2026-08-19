@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
+
+import numpy as np
+from PIL import Image
 
 from app.models.motion import KineticBeat, KineticBeatKind, MotionAnimationPlan, MotionSceneSpec
 from app.models.project import ProjectSpec
@@ -11,36 +16,44 @@ from app.services.motion_demo_gallery import render_all_g18_demos
 from app.services.remotion import render_scene_motion, validate_rendered_motion_clip
 
 
-def _make_project(aspect_ratio: str = "16:9") -> ProjectSpec:
-    return ProjectSpec.model_validate({
-        "schema_version": "1.0",
-        "project": {
-            "title": "G18 Real Remotion Render Test",
-            "aspect_ratio": aspect_ratio,
-            "fps": 30,
-        },
-        "script": {
-            "subject": "Auto Insurance Motion Rendering",
-            "script": "Script text",
-        },
-        "narration": {
-            "mode": "tts",
-        },
-    })
+def _extract_frame_at_timestamp(mp4_path: str, timestamp_sec: float, output_png: str) -> np.ndarray:
+    """Extracts a frame at a specific timestamp from an MP4 file using ffmpeg."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{timestamp_sec:.3f}",
+        "-i",
+        mp4_path,
+        "-vframes",
+        "1",
+        "-q:v",
+        "2",
+        output_png,
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0 or not Path(output_png).exists():
+        raise RuntimeError(f"Failed to extract frame at {timestamp_sec}s from {mp4_path}: {res.stderr}")
+
+    with Image.open(output_png) as img:
+        return np.array(img.convert("RGB"))
 
 
 class TestG18RealRemotionRender(unittest.TestCase):
-    """Real Remotion MP4 rendering tests for G18 Hard Visual Acceptance fixtures."""
+    """Real Remotion MP4 rendering and frame-level visual QA tests for G18 fixtures."""
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.mkdtemp(prefix="g18_test_render_")
 
     def tearDown(self) -> None:
-        pass
+        """Restore automatic cleanup so test renders do not leak temp storage."""
+        if hasattr(self, "temp_dir") and Path(self.temp_dir).exists():
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_hard_acceptance_a_pie_multicolor_voice_sync(self) -> None:
-        """Section 92: Hard Visual Acceptance A — Pie (Premium 40, Standard 35, Basic 25)
+    def test_hard_acceptance_a_pie_multicolor_voice_sync_frames(self) -> None:
+        """Section 92, 10: Hard Visual Acceptance A — Pie (Premium 40, Standard 35, Basic 25)
         with 3 distinct colors, matching legend markers, and voice-synced highlighting.
+        Performs frame-level QA proving active focus differences across narration beats.
         """
         spec = MotionSceneSpec(
             scene_id="TEST_PIE_MULTICOLOR",
@@ -91,6 +104,26 @@ class TestG18RealRemotionRender(unittest.TestCase):
         )
         self.assertAlmostEqual(duration, spec.duration_frames / float(spec.fps), delta=0.2)
 
+        # Frame QA: Extract frames during each kinetic beat and final hold
+        f_prem_png = os.path.join(self.temp_dir, "pie_prem.png")
+        f_std_png = os.path.join(self.temp_dir, "pie_std.png")
+        f_basic_png = os.path.join(self.temp_dir, "pie_basic.png")
+        f_settled_png = os.path.join(self.temp_dir, "pie_settled.png")
+
+        arr_prem = _extract_frame_at_timestamp(asset.output_file, 0.80, f_prem_png)      # Frame ~24 (Beat 1: Premium)
+        arr_std = _extract_frame_at_timestamp(asset.output_file, 1.50, f_std_png)        # Frame ~45 (Beat 2: Standard)
+        arr_basic = _extract_frame_at_timestamp(asset.output_file, 2.20, f_basic_png)    # Frame ~66 (Beat 3: Basic)
+        arr_settled = _extract_frame_at_timestamp(asset.output_file, 2.85, f_settled_png)# Frame ~85 (Settled hold)
+
+        diff_prem_std = float(np.sum(np.abs(arr_prem.astype(int) - arr_std.astype(int))))
+        diff_std_basic = float(np.sum(np.abs(arr_std.astype(int) - arr_basic.astype(int))))
+        diff_basic_settled = float(np.sum(np.abs(arr_basic.astype(int) - arr_settled.astype(int))))
+
+        # Visual proof: frames during different voice sync beats are materially different
+        self.assertGreater(diff_prem_std, 40000.0, "Premium beat frame must be materially different from Standard beat frame")
+        self.assertGreater(diff_std_basic, 40000.0, "Standard beat frame must be materially different from Basic beat frame")
+        self.assertGreater(diff_basic_settled, 40000.0, "Basic beat frame must be materially different from Settled frame")
+
     def test_hard_acceptance_b_pie_comprehensive_collision_liability(self) -> None:
         """Section 93: Hard Visual Acceptance B — Comprehensive 55, Collision Only 30, Liability 15
         receives 3 distinct colors (Blue, Teal, Purple) with no repeated blue.
@@ -127,13 +160,13 @@ class TestG18RealRemotionRender(unittest.TestCase):
         self.assertTrue(Path(asset.output_file).exists())
         self.assertGreater(Path(asset.output_file).stat().st_size, 10000)
 
-    def test_hard_acceptance_c_timeline_zero_text_collision(self) -> None:
-        """Section 94: Hard Visual Acceptance C — Timeline with exact fixture:
+    def test_hard_acceptance_c_timeline_zero_text_collision_and_frame_evolution(self) -> None:
+        """Section 94, 9: Hard Visual Acceptance C — Timeline with exact fixture:
         Headline: 'Collision Claim Resolution Lifecycle'
         DAY 1: Incident Filed
         DAY 3: Adjuster Assessment
         DAY 7: Payment Disbursed
-        Asserts successful MP4 render and zero collision between title, node 2, and neighbor nodes.
+        Asserts real MP4 render, safe bounds, and frame-level evolution at 25%, 50%, 75%, 95%.
         """
         spec = MotionSceneSpec(
             scene_id="TEST_TIMELINE_SAFE",
@@ -164,13 +197,27 @@ class TestG18RealRemotionRender(unittest.TestCase):
         self.assertTrue(Path(asset.output_file).exists())
         self.assertGreater(Path(asset.output_file).stat().st_size, 10000)
 
-    def test_hard_acceptance_d_waterfall_edge_safety_and_connectors(self) -> None:
-        """Section 95: Hard Visual Acceptance D — Waterfall:
+        # Extract frames at 25%, 50%, 75%, 95% of duration
+        f25 = _extract_frame_at_timestamp(asset.output_file, 1.0, os.path.join(self.temp_dir, "tl_25.png"))
+        f50 = _extract_frame_at_timestamp(asset.output_file, 2.0, os.path.join(self.temp_dir, "tl_50.png"))
+        f75 = _extract_frame_at_timestamp(asset.output_file, 3.0, os.path.join(self.temp_dir, "tl_75.png"))
+        f95 = _extract_frame_at_timestamp(asset.output_file, 3.8, os.path.join(self.temp_dir, "tl_95.png"))
+
+        diff_25_50 = float(np.sum(np.abs(f25.astype(int) - f50.astype(int))))
+        diff_50_75 = float(np.sum(np.abs(f50.astype(int) - f75.astype(int))))
+        diff_75_95 = float(np.sum(np.abs(f75.astype(int) - f95.astype(int))))
+
+        self.assertGreater(diff_25_50, 25000.0, "Timeline frame at 25% must differ as Day 3 node appears")
+        self.assertGreater(diff_50_75, 25000.0, "Timeline frame at 50% must differ as Day 7 node appears")
+        self.assertGreater(diff_75_95, 10000.0, "Timeline frame at 75% must differ as animation completes")
+
+    def test_hard_acceptance_d_waterfall_edge_safety_and_step_frames(self) -> None:
+        """Section 95, 9: Hard Visual Acceptance D — Waterfall:
         Base Quote = $100
         State Filing Fee = +$30
         Safe Driver Discount = -$20
         Final Premium = $110
-        Asserts $110 and 'Final Premium' are inside frame, connectors visible, semantic colors.
+        Asserts frame-level visual evolution across start, positive step, negative step, and final total.
         """
         spec = MotionSceneSpec(
             scene_id="TEST_WATERFALL_SAFE",
@@ -203,6 +250,20 @@ class TestG18RealRemotionRender(unittest.TestCase):
         asset = render_scene_motion(spec, self.temp_dir)
         self.assertTrue(Path(asset.output_file).exists())
         self.assertGreater(Path(asset.output_file).stat().st_size, 10000)
+
+        # Extract frames at start (0.6s), positive step (1.6s), negative step (2.6s), final (3.6s)
+        f_start = _extract_frame_at_timestamp(asset.output_file, 0.6, os.path.join(self.temp_dir, "wf_start.png"))
+        f_pos = _extract_frame_at_timestamp(asset.output_file, 1.6, os.path.join(self.temp_dir, "wf_pos.png"))
+        f_neg = _extract_frame_at_timestamp(asset.output_file, 2.6, os.path.join(self.temp_dir, "wf_neg.png"))
+        f_final = _extract_frame_at_timestamp(asset.output_file, 3.6, os.path.join(self.temp_dir, "wf_final.png"))
+
+        diff_start_pos = float(np.sum(np.abs(f_start.astype(int) - f_pos.astype(int))))
+        diff_pos_neg = float(np.sum(np.abs(f_pos.astype(int) - f_neg.astype(int))))
+        diff_neg_final = float(np.sum(np.abs(f_neg.astype(int) - f_final.astype(int))))
+
+        self.assertGreater(diff_start_pos, 30000.0, "Waterfall start frame must differ as +$30 step reveals")
+        self.assertGreater(diff_pos_neg, 30000.0, "Waterfall positive step must differ as -$20 discount reveals")
+        self.assertGreater(diff_neg_final, 30000.0, "Waterfall negative step must differ as Final Premium $110 reveals")
 
     def test_hard_acceptance_e_long_label_stress_safety(self) -> None:
         """Section 96: Hard Visual Acceptance E — Intentionally long label fixture
