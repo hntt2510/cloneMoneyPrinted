@@ -417,21 +417,29 @@ def derive_kinetic_beats(
     # 5. THRESHOLD TEMPLATE
     # -------------------------------------------------------------------------
     elif template == "threshold":
-        limit_end = round(available_frames * 0.25)
-        grow_end = round(available_frames * 0.75)
-        cross_end = round(available_frames * 0.87)
+        if len(clauses) >= 2:
+            clause_0_end = clause_slices[0][1]
+            limit_end = max(6, round(clause_0_end * 0.45))
+            grow_start = max(limit_end, round(clause_0_end * 0.85))
+            cross_frame = min(available_frames - 10, round(clause_slices[1][0] + (clause_slices[1][1] - clause_slices[1][0]) * 0.40))
+            resolve_frame = min(available_frames - 5, round(clause_slices[1][0] + (clause_slices[1][1] - clause_slices[1][0]) * 0.75))
+        else:
+            limit_end = max(6, round(available_frames * 0.20))
+            grow_start = max(limit_end + 2, round(available_frames * 0.25))
+            cross_frame = max(grow_start + 10, round(available_frames * 0.70))
+            resolve_frame = max(cross_frame + 5, round(available_frames * 0.82))
 
         beats = [
             KineticBeat(id=f"{scene_id}_limit", start_frame=0, end_frame=limit_end,
                         kind=KineticBeatKind.threshold, text=f"{props.get('threshold_label','Limit')}: {props.get('threshold_display','')}",
                         emphasis=False, data_ref="threshold"),
-            KineticBeat(id=f"{scene_id}_grow", start_frame=limit_end, end_frame=grow_end,
+            KineticBeat(id=f"{scene_id}_grow", start_frame=grow_start, end_frame=cross_frame,
                         kind=KineticBeatKind.number, text=f"Current: {props.get('current_display','')}",
                         emphasis=True, data_ref="current_value"),
-            KineticBeat(id=f"{scene_id}_cross", start_frame=grow_end, end_frame=cross_end,
+            KineticBeat(id=f"{scene_id}_cross", start_frame=cross_frame, end_frame=resolve_frame,
                         kind=KineticBeatKind.highlight, text="crossing",
                         emphasis=True, data_ref="current_value"),
-            KineticBeat(id=f"{scene_id}_resolve", start_frame=cross_end, end_frame=available_frames,
+            KineticBeat(id=f"{scene_id}_resolve", start_frame=resolve_frame, end_frame=available_frames,
                         kind=KineticBeatKind.resolve, text="OVER LIMIT",
                         emphasis=True, data_ref="resolve"),
         ]
