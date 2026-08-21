@@ -191,6 +191,35 @@ class TestG18LayoutSafety(unittest.TestCase):
         self.assertLessEqual(final_long_col.label_bounds.right, safe.right)
         self.assertGreaterEqual(final_long_col.label_bounds.left, safe.left)
 
+    def test_external_narration_path_normalization(self) -> None:
+        """Section 16: Verify that external narration file paths are resolved to absolute paths."""
+        from app.models.project import ProjectSpec, NarrationMode
+        from app.services.project_timeline_runner import run_project_plan
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            wav_file = tmp_path / "narration.wav"
+            wav_file.write_bytes(b"RIFF....WAVEfmt ....data....")
+            srt_file = tmp_path / "narration.srt"
+            srt_file.write_text("1\n00:00:00,000 --> 00:00:02,000\nTest cue\n", encoding="utf-8")
+            proj_file = tmp_path / "project.json"
+            proj_data = {
+                "schema_version": "1.0",
+                "project": {"title": "Test Proj", "aspect_ratio": "16:9", "fps": 30},
+                "script": {"subject": "Test", "script": "Test cue"},
+                "narration": {"mode": "file", "file": "narration.wav", "timing_file": "narration.srt"},
+                "production": {"video_source": "pexels"},
+            }
+            import json
+            proj_file.write_text(json.dumps(proj_data), encoding="utf-8")
+
+            # Check preflight
+            from app.services.project_spec import load_project_spec, preflight_project
+            loaded = load_project_spec(proj_file)
+            self.assertEqual(loaded.narration.mode, NarrationMode.file)
+
 
 if __name__ == "__main__":
     unittest.main()

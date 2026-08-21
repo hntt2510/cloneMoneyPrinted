@@ -49,15 +49,28 @@ export const NumberTemplate: React.FC<NumberProps> = ({
   // CONTEXT LABEL
   const ctxStart = isContinuous ? 0 : (contextBeat?.start_frame ?? counterEnd + 5);
 
-  // COUNTER VALUE
-  let displayString = `${prefix || ''}${value}${suffix || ''}`;
+  // COUNTER VALUE & DEDUPLICATION
+  const rawValue = (value ?? '').toString();
+  const rawPrefix = prefix || '';
+  const rawSuffix = suffix || '';
+
+  // Strip duplicate leading prefix or trailing suffix already embedded in value
+  let cleanValue = rawValue;
+  if (rawPrefix && cleanValue.startsWith(rawPrefix)) {
+    cleanValue = cleanValue.slice(rawPrefix.length);
+  }
+  if (rawSuffix && cleanValue.endsWith(rawSuffix)) {
+    cleanValue = cleanValue.slice(0, -rawSuffix.length);
+  }
+
+  let displayString = `${rawPrefix}${cleanValue}${rawSuffix}`;
   if (numeric_value != null && numberBeat) {
     const cp = interpolate(frame, [counterStart, counterEnd], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
     const easedP = spring({ frame: cp * fps, fps, config: { damping: 16, stiffness: 45 } });
     const current = easedP * numeric_value;
-    const decimals = value.includes('.') ? value.split('.')[1].length : 0;
+    const decimals = cleanValue.includes('.') ? cleanValue.split('.')[1].length : 0;
     if (frame < counterEnd) {
-      displayString = `${prefix || ''}${current.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}${suffix || ''}`;
+      displayString = `${rawPrefix}${current.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}${rawSuffix}`;
     }
   }
 

@@ -44,7 +44,19 @@ def run_timeline_plan(
     preflight_project(project, source.parent)
     run_task_id = task_id or utils.get_uuid()
     task_directory = Path(utils.task_dir(run_task_id))
-    save_project_spec(project, task_directory / "project.normalized.json")
+    normalized_narration = project.narration
+    if project.narration.mode == NarrationMode.file and project.narration.file:
+        resolved_file = resolve_project_path(source.parent, project.narration.file)
+        resolved_timing = (
+            resolve_project_path(source.parent, project.narration.timing_file)
+            if project.narration.timing_file
+            else project.narration.timing_file
+        )
+        normalized_narration = project.narration.model_copy(
+            update={"file": resolved_file, "timing_file": resolved_timing}
+        )
+    normalized_project = project.model_copy(update={"narration": normalized_narration})
+    save_project_spec(normalized_project, task_directory / "project.normalized.json")
 
     now = _utc_now()
     manifest = ProjectManifest(
@@ -137,6 +149,7 @@ def run_timeline_plan(
         planned_project = project.model_copy(
             update={
                 "script": project.script.model_copy(update={"script": script}),
+                "narration": normalized_narration,
                 "timeline_cues": timeline_cues,
                 "timing_source": timing_source,
             }
