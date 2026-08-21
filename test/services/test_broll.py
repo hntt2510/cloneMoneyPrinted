@@ -104,6 +104,10 @@ def _candidate(
     download_url: str = "https://example.com/dl1.mp4",
     source_url: str | None = "https://example.com/src1",
 ) -> BrollCandidate:
+    if title is None:
+        title = f"{query} footage {cid}"
+    if tags is None:
+        tags = query.split()
     return BrollCandidate(
         id=cid,
         provider=provider,
@@ -116,7 +120,7 @@ def _candidate(
         height=height,
         title=title,
         description=description,
-        tags=tags or [],
+        tags=tags,
     )
 
 
@@ -276,9 +280,9 @@ class TestWinnerOnlyDownloadAndRetry(unittest.TestCase):
             cue = project.visual_cues[0]
             ctx = BrollSelectionContext()
 
-            cand1 = _candidate(cid="c1", query="senior couple", download_url="https://dl.example/c1.mp4", title="Best match")
-            cand2 = _candidate(cid="c2", query="senior couple", download_url="https://dl.example/c2.mp4", title="Second match")
-            cand3 = _candidate(cid="c3", query="senior couple", download_url="https://dl.example/c3.mp4", title="Third match")
+            cand1 = _candidate(cid="c1", query="senior couple", download_url="https://dl.example/c1.mp4", title="Senior couple park walk", tags=["senior", "couple", "park"])
+            cand2 = _candidate(cid="c2", query="senior couple", download_url="https://dl.example/c2.mp4", title="Senior couple outdoors", tags=["senior", "couple", "outdoors"])
+            cand3 = _candidate(cid="c3", query="senior couple", download_url="https://dl.example/c3.mp4", title="Senior couple morning tea", tags=["senior", "couple", "tea"])
 
             download_attempts = []
 

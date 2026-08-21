@@ -153,7 +153,10 @@ def evaluate_semantic_match(
     - missing_critical_concepts: list of must-show concepts not found
     - rejected_concepts_found: list of reject terms found in metadata
     """
-    meta_text = f"{candidate.title or ''} {candidate.description or ''} {' '.join(candidate.tags or [])}".lower()
+    url_slug = ""
+    if candidate.source_url:
+        url_slug = " ".join(re.findall(r"[a-zA-Z]{3,}", candidate.source_url.split("?")[0]))
+    meta_text = f"{candidate.title or ''} {candidate.description or ''} {' '.join(candidate.tags or [])} {url_slug}".lower()
     meta_tokens = set(_extract_meaningful_tokens(meta_text))
 
     # 1. Check Reject Visuals / Avoid Terms
@@ -196,14 +199,9 @@ def evaluate_semantic_match(
         query_tokens = _extract_meaningful_tokens(candidate.query)
         if query_tokens and meta_tokens:
             overlap_count = sum(1 for qt in query_tokens if qt in meta_tokens or any(qt in cluster for cluster in CONCEPT_CLUSTERS.values() if any(mt in cluster for mt in meta_tokens)))
-            if overlap_count == 0 and any(t in meta_tokens for t in ("best", "match", "winner", "candidate", "sample", "second", "third")):
-                overlap_count = len(query_tokens)
             coverage_ratio = overlap_count / max(1, len(query_tokens))
             if overlap_count > 0:
                 matched_concepts.append(f"query_overlap:{overlap_count}")
-        elif not meta_tokens:
-            coverage_ratio = 0.85
-            matched_concepts.append(f"query_match:{candidate.query}")
         else:
             coverage_ratio = 0.0
 
