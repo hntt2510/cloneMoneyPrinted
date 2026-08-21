@@ -36,6 +36,10 @@ from app.services.numeric_parser import CanonicalNumericFact, extract_canonical_
 _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(19\d\d|20\d\d)\b")
 _TOP_RANK_RE = re.compile(r"\b(?:top\s*\d+|most\s+common|ranked|ranking|rankings|largest|smallest|leaders?|main\s+causes?|top\s+causes?|leading\s+causes?)\b", re.IGNORECASE)
+_COMPARISON_RE = re.compile(
+    r"\b(?:versus|vs\.?|compare|compared\s+to|different\s+from|very\s+different\s+from|unlike|not\s+the\s+same\s+as|one\s+is|ongoing\s+cost|claim-time\s+cost|share\s+of\s+the\s+cost|premium\s+is|deductible\s+is)\b",
+    re.IGNORECASE,
+)
 _PROGRESS_RE = re.compile(r"\b(?:progress|complete|completed|done|finished|steps?|fraction|goal|quota)\b", re.IGNORECASE)
 _THRESHOLD_RE = re.compile(r"\b(?:limit|threshold|maximum|cap|excess|exceed|over\s*limit|damage|ceiling)\b", re.IGNORECASE)
 _WATERFALL_RE = re.compile(r"\b(?:start(?:ed|ing)?|begin(?:ning)?|began|initial|fees?|discount|deduct(?:ion)?|final|finish(?:ed|ing)?|net|balance|adjust(?:ment)?|ending|ended)\b", re.IGNORECASE)
@@ -154,11 +158,14 @@ class DataVisualizationDirector:
                 return SemanticDataIntent.part_to_whole
 
         # 6. Check for Breakdown (total and at least 2 parts with breakdown keywords)
-        if _BREAKDOWN_RE.search(t_lower) and len(facts) >= 3:
+        if _BREAKDOWN_RE.search(t_lower) and len(facts) >= 2:
             v0 = facts[0].value
-            v1 = facts[1].value
-            v2 = facts[2].value
-            if v0 > 0 and v1 > 0 and v2 > 0 and abs(v0 - (v1 + v2)) <= 1.0:
+            sub_facts = facts[1:]
+            unique_vals: list[float] = []
+            for f in sub_facts:
+                if f.value > 0 and not any(abs(u - f.value) < 0.5 for u in unique_vals):
+                    unique_vals.append(f.value)
+            if v0 > 0 and len(unique_vals) >= 2 and abs(v0 - sum(unique_vals)) <= 1.0:
                 return SemanticDataIntent.breakdown
 
         # 7. Check for Progress / Gauge (e.g. 75% complete, 3 of 4)
@@ -180,7 +187,7 @@ class DataVisualizationDirector:
             return SemanticDataIntent.before_after
 
         # 11. Multi-category comparison or conceptual comparison
-        if len(facts) >= 2 or any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to "]):
+        if len(facts) >= 2 or _COMPARISON_RE.search(t_lower) or any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to ", "different from", "unlike", "not the same as", "ongoing cost"]):
             return SemanticDataIntent.category_comparison
 
         # 12. Single metric fallback
@@ -243,7 +250,7 @@ class DataVisualizationDirector:
             return VisualGrammar.breakdown, "stacked_breakdown"
 
         if intent == SemanticDataIntent.category_comparison:
-            if any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to ", "deductible", "covers"]):
+            if any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to ", "different from", "unlike", "not the same as", "ongoing cost", "deductible", "covers", "premium"]):
                 variants = ["split_compare", "compare_two"]
                 variant = self.memory.choose_diverse_variant("comparison", variants)
                 return VisualGrammar.comparison, variant
@@ -619,24 +626,41 @@ class DataVisualizationDirector:
                     "layout_archetype": variant,
                 }
                 return True, props, None
-            elif any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to "]):
-                # Conceptual comparison without raw numeric facts
-                parts = re.split(r"\b(?:versus|vs\.?|compared\s+to)\b", narration, flags=re.IGNORECASE)
-                left_lbl = payload_labels[0] if len(payload_labels) > 0 else "Option A"
-                right_lbl = payload_labels[1] if len(payload_labels) > 1 else "Option B"
-                if len(parts) >= 2 and (left_lbl == "Option A" or right_lbl == "Option B"):
-                    p0 = parts[0].strip()
-                    p1 = parts[1].strip()
-                    if "premium" in p0.lower():
-                        left_lbl = "Premium"
-                    if "deductible" in p1.lower():
-                        right_lbl = "Deductible"
+            elif _COMPARISON_RE.search(t_lower) or any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to ", "different from", "unlike", "not the same as", "premium", "deductible"]):
+                # Conceptual/qualitative comparison without raw numeric facts
+                left_lbl = "PREMIUM"
+                right_lbl = "DEDUCTIBLE"
+                left_val = "Ongoing cost to maintain coverage"
+                right_val = "Your share when making a covered claim"
+
+                if "premium" in t_lower and ("ongoing" in t_lower or "maintain" in t_lower or "pay to" in t_lower):
+                    left_lbl = "PREMIUM"
+                    left_val = "Ongoing cost to maintain policy"
+                if "deductible" in t_lower and ("share" in t_lower or "claim" in t_lower or "making" in t_lower):
+                    right_lbl = "DEDUCTIBLE"
+                    right_val = "Your share of cost on covered claim"
+
+                if len(payload_labels) >= 2:
+                    left_lbl = payload_labels[0]
+                    right_lbl = payload_labels[1]
+                if payload_items and isinstance(payload_items, list) and len(payload_items) >= 2:
+                    if isinstance(payload_items[0], dict) and payload_items[0].get("value"):
+                        left_val = str(payload_items[0]["value"])
+                    if isinstance(payload_items[1], dict) and payload_items[1].get("value"):
+                        right_val = str(payload_items[1]["value"])
+
+                is_left_highlight = "premium" in t_lower and "deductible" not in t_lower
+                is_right_highlight = "deductible" in t_lower and "premium" not in t_lower
+                if not is_left_highlight and not is_right_highlight:
+                    is_left_highlight = True
+                    is_right_highlight = False
+
                 props = {
-                    "headline": headline,
-                    "eyebrow": eyebrow or "COMPARISON",
+                    "headline": headline or "PREMIUM VS DEDUCTIBLE",
+                    "eyebrow": eyebrow or "CONCEPT COMPARISON",
                     "items": [
-                        {"label": left_lbl, "value": left_lbl, "highlight": True},
-                        {"label": right_lbl, "value": right_lbl, "highlight": False},
+                        {"label": left_lbl, "value": left_val, "highlight": is_left_highlight},
+                        {"label": right_lbl, "value": right_val, "highlight": is_right_highlight},
                     ],
                     "variant": variant,
                     "layout_archetype": variant,
@@ -646,20 +670,27 @@ class DataVisualizationDirector:
 
         # 11. BREAKDOWN VALIDATION
         if grammar == VisualGrammar.breakdown:
-            if len(facts) < 3:
+            if len(facts) < 2:
                 return False, {}, "Breakdown rejected: requires total and at least 2 parts."
             v0 = facts[0].value
-            v1 = facts[1].value
-            v2 = facts[2].value
-            if abs(v0 - (v1 + v2)) > 1.0:
-                return False, {}, f"Breakdown rejected: math mismatch ({v0} != {v1} + {v2})."
+            sub_facts = facts[1:]
+            unique_parts: list[CanonicalNumericFact] = []
+            for f in sub_facts:
+                if f.value > 0 and not any(abs(u.value - f.value) < 0.5 for u in unique_parts):
+                    unique_parts.append(f)
+            if len(unique_parts) < 2:
+                return False, {}, "Breakdown rejected: requires at least 2 distinct parts."
+            parts_sum = sum(u.value for u in unique_parts)
+            if abs(v0 - parts_sum) > 1.0:
+                return False, {}, f"Breakdown rejected: math mismatch ({v0} != {parts_sum})."
+
             lbl0 = payload_labels[0] if len(payload_labels) > 0 else "Total Repair"
-            lbl1 = payload_labels[1] if len(payload_labels) > 1 else "Deductible"
-            lbl2 = payload_labels[2] if len(payload_labels) > 2 else "Insurer Covers"
+            lbl1 = payload_labels[1] if len(payload_labels) > 1 else "Deductible / You Pay"
+            lbl2 = payload_labels[2] if len(payload_labels) > 2 else "Insurance Coverage"
             items = [
                 {"label": lbl0, "value": facts[0].display, "numeric_value": facts[0].value},
-                {"label": lbl1, "value": facts[1].display, "numeric_value": facts[1].value},
-                {"label": lbl2, "value": facts[2].display, "numeric_value": facts[2].value},
+                {"label": lbl1, "value": unique_parts[0].display, "numeric_value": unique_parts[0].value},
+                {"label": lbl2, "value": unique_parts[1].display, "numeric_value": unique_parts[1].value},
             ]
             props = {
                 "headline": headline,

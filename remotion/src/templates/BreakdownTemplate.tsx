@@ -72,38 +72,44 @@ export function resolveBreakdownData(props: BreakdownProps): { total: BreakdownT
     }
   }
 
-  // 2. From group scenes (3 scenes: Scene 0 = Total, Scene 1 = Part 1, Scene 2 = Part 2)
+  // 2. From group scenes (supports 3-scene and 4-scene multi-cue breakdown groups)
   if (props.scenes && Array.isArray(props.scenes) && props.scenes.length >= 3) {
-    const s0 = props.scenes[0]?.props || {};
-    const s1 = props.scenes[1]?.props || {};
-    const s2 = props.scenes[2]?.props || {};
-
-    const v0 = Number(s0.numeric_value) || parseNumeric(s0.value) || 0;
-    const v1 = Number(s1.numeric_value) || parseNumeric(s1.value) || 0;
-    const v2 = Number(s2.numeric_value) || parseNumeric(s2.value) || 0;
-
-    if (v0 > 0 && v1 > 0 && v2 > 0 && Math.abs(v0 - (v1 + v2)) <= 1.0) {
+    const rawVals = props.scenes.map((s) => {
+      const sp = s?.props || {};
       return {
-        total: {
-          label: s0.headline || s0.eyebrow || 'TOTAL REPAIR',
-          value: s0.value || `$${v0.toLocaleString()}`,
-          numeric_value: v0,
-        },
-        parts: [
-          {
-            label: s1.headline || s1.eyebrow || 'YOU PAY',
-            value: s1.value || `$${v1.toLocaleString()}`,
-            numeric_value: v1,
-            highlight: true,
-          },
-          {
-            label: s2.headline || s2.eyebrow || 'INSURANCE',
-            value: s2.value || `$${v2.toLocaleString()}`,
-            numeric_value: v2,
-            highlight: false,
-          },
-        ],
+        val: Number(sp.numeric_value) || parseNumeric(sp.value) || 0,
+        headline: sp.headline || sp.eyebrow,
+        display: sp.value,
       };
+    });
+
+    const v0 = rawVals[0].val;
+    const partVals = rawVals.slice(1);
+    // Find unique non-zero part values in order
+    const uniqueParts: Array<{ val: number; headline?: string; display?: string }> = [];
+    for (const pv of partVals) {
+      if (pv.val > 0 && !uniqueParts.some((u) => Math.abs(u.val - pv.val) < 0.5)) {
+        uniqueParts.push(pv);
+      }
+    }
+
+    if (v0 > 0 && uniqueParts.length >= 2) {
+      const partsSum = uniqueParts.reduce((sum, u) => sum + u.val, 0);
+      if (Math.abs(v0 - partsSum) <= 1.0) {
+        return {
+          total: {
+            label: rawVals[0].headline || 'TOTAL REPAIR',
+            value: rawVals[0].display || `$${v0.toLocaleString()}`,
+            numeric_value: v0,
+          },
+          parts: uniqueParts.map((u, idx) => ({
+            label: u.headline || (idx === 0 ? 'YOU PAY / DEDUCTIBLE' : 'INSURANCE'),
+            value: u.display || `$${u.val.toLocaleString()}`,
+            numeric_value: u.val,
+            highlight: idx === 0,
+          })),
+        };
+      }
     }
   }
 
@@ -187,17 +193,27 @@ export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
   const { total, parts } = breakdownData;
 
   // Determine storyboard timeline milestones
-  let phaseA_end = Math.round(durationInFrames * 0.33);
-  let phaseB_end = Math.round(durationInFrames * 0.66);
-  let phaseC_end = durationInFrames;
+  const isFourScenes = Boolean(props.scenes && props.scenes.length >= 4);
+  let phaseA_end = Math.round(durationInFrames * (isFourScenes ? 0.25 : 0.33));
+  let phaseB_end = Math.round(durationInFrames * (isFourScenes ? 0.50 : 0.66));
+  let phaseC_end = isFourScenes ? Math.round(durationInFrames * 0.75) : phaseB_end;
 
-  if (props.scenes && props.scenes.length >= 3) {
+  if (props.scenes && props.scenes.length >= 4) {
+    const s0Dur = props.scenes[0].duration_frames || phaseA_end;
+    const s1Dur = props.scenes[1].duration_frames || (phaseB_end - phaseA_end);
+    const s2Dur = props.scenes[2].duration_frames || (phaseC_end - phaseB_end);
+    phaseA_end = s0Dur;
+    phaseB_end = s0Dur + s1Dur;
+    phaseC_end = s0Dur + s1Dur + s2Dur;
+  } else if (props.scenes && props.scenes.length === 3) {
     const s0Dur = props.scenes[0].duration_frames || phaseA_end;
     const s1Dur = props.scenes[1].duration_frames || (phaseB_end - phaseA_end);
     phaseA_end = s0Dur;
     phaseB_end = s0Dur + s1Dur;
-    phaseC_end = durationInFrames;
+    phaseC_end = phaseB_end;
   }
+
+  const resolvePhaseStart = isFourScenes ? phaseC_end : phaseB_end;
 
   // Phase A: Total bar grows (0 -> phaseA_end)
   const totalBarProgress = interpolate(frame, [5, Math.min(phaseA_end - 5, 35)], [0, 1], {
@@ -252,8 +268,8 @@ export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
     ? `$${currentPart1Val.toLocaleString()}`
     : parts[0].value;
 
-  // Phase C: Insurance resolve (starts at phaseB_end)
-  const resolveP = interpolate(frame, [phaseB_end, phaseB_end + 20], [0, 1], {
+  // Phase C/D: Insurance resolve (starts at resolvePhaseStart)
+  const resolveP = interpolate(frame, [resolvePhaseStart, resolvePhaseStart + 20], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
@@ -264,7 +280,7 @@ export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
   });
 
   // Part 2 counter
-  const part2CounterP = interpolate(frame, [phaseB_end + 5, phaseB_end + 25], [0, 1], {
+  const part2CounterP = interpolate(frame, [resolvePhaseStart + 5, resolvePhaseStart + 25], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
@@ -274,12 +290,12 @@ export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
     config: SPRING_CONFIGS.SLOW,
   });
   const currentPart2Val = Math.round(part2CountEased * parts[1].numeric_value);
-  const part2DisplayStr = frame < phaseB_end + 25
+  const part2DisplayStr = frame < resolvePhaseStart + 25
     ? `$${currentPart2Val.toLocaleString()}`
     : parts[1].value;
 
   // Final Equation Pop
-  const equationP = interpolate(frame, [phaseB_end + 20, phaseB_end + 35], [0, 1], {
+  const equationP = interpolate(frame, [resolvePhaseStart + 20, resolvePhaseStart + 35], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
@@ -295,10 +311,12 @@ export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
 
   // Dynamic Headline
   let activeHeadline = total.label;
-  if (frame >= phaseB_end) {
+  if (frame >= resolvePhaseStart) {
     activeHeadline = 'INSURANCE SETTLEMENT';
-  } else if (frame >= phaseA_end) {
+  } else if (isFourScenes && frame >= phaseB_end) {
     activeHeadline = 'YOUR OUT-OF-POCKET';
+  } else if (frame >= phaseA_end) {
+    activeHeadline = 'COLLISION DEDUCTIBLE';
   }
 
   return (
@@ -428,8 +446,8 @@ export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
             />
           )}
 
-          {/* Phase C: Segment 2 (INSURANCE) Highlights */}
-          {frame >= phaseB_end && (
+          {/* Phase C/D: Segment 2 (INSURANCE) Highlights */}
+          {frame >= resolvePhaseStart && (
             <div
               style={{
                 position: 'absolute',
@@ -455,7 +473,7 @@ export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
             marginTop: 16,
           }}
         >
-          {/* Part 1 Label (YOU PAY) */}
+          {/* Part 1 Label (YOU PAY / DEDUCTIBLE) */}
           {frame >= phaseA_end && (
             <div
               style={{
@@ -475,7 +493,7 @@ export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
           )}
 
           {/* Part 2 Label (INSURANCE) */}
-          {frame >= phaseB_end && (
+          {frame >= resolvePhaseStart && (
             <div
               style={{
                 opacity: resolveSpr,
@@ -495,7 +513,7 @@ export const BreakdownTemplate: React.FC<BreakdownProps> = (props) => {
         </div>
 
         {/* PHASE D: FINAL RESOLVED EQUATION (Resolves $1K + $5K = $6K) */}
-        {frame >= phaseB_end + 15 && (
+        {frame >= resolvePhaseStart + 15 && (
           <div
             style={{
               position: 'absolute',

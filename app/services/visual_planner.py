@@ -38,7 +38,7 @@ _DOCUMENT_RE = re.compile(
     re.IGNORECASE,
 )
 _COMPARISON_RE = re.compile(
-    r"\b(versus|vs|compare|compared|more than|less than|higher than|lower than|increase|decrease|growth|decline|cost breakdown|premium vs|deductible vs|limit vs)\b",
+    r"\b(versus|vs|compare|compared|different\s+from|very\s+different\s+from|unlike|not\s+the\s+same\s+as|ongoing\s+cost|claim-time\s+cost|share\s+of\s+the\s+cost|premium\s+is|deductible\s+is|more than|less than|higher than|lower than|increase|decrease|growth|decline|cost breakdown|premium vs|deductible vs|limit vs)\b",
     re.IGNORECASE,
 )
 
@@ -548,10 +548,75 @@ def _apply_diversity(
     cues: list[TimelineCue],
     decisions: list[VisualCue],
 ) -> list[VisualCue]:
-    # Detect cost breakdown group sequences across consecutive cues
+    from app.services.numeric_parser import extract_canonical_numeric_facts
+
+    # 1. Detect multi-cue breakdown group sequences across consecutive cues (4 cues or 3 cues)
     n = len(decisions)
     i = 0
     while i < n - 1:
+        # Check 4-cue window first (e.g. Total, Deductible, You Pay first $1k, Insurance covers remaining $5k)
+        if i + 3 < n:
+            window = [decisions[i], decisions[i + 1], decisions[i + 2], decisions[i + 3]]
+            w_narrs = [(c.narration or "").lower() for c in window]
+            if (
+                any(w in w_narrs[0] for w in ("repair", "cost", "damage", "total"))
+                and any(w in w_narrs[1] for w in ("deductible", "you pay", "out of pocket"))
+                and any(w in w_narrs[2] for w in ("responsible", "first", "pay", "deductible"))
+                and any(w in w_narrs[3] for w in ("insurance", "insurer", "cover", "remaining"))
+            ):
+                f_list = [extract_canonical_numeric_facts(c.narration or "") for c in window]
+                if all(f_list):
+                    v0 = f_list[0][0].value
+                    sub_facts = [f[0] for f in f_list[1:]]
+                    unique_sub: list[CanonicalNumericFact] = []
+                    for f in sub_facts:
+                        if f.value > 0 and not any(abs(u.value - f.value) < 0.5 for u in unique_sub):
+                            unique_sub.append(f)
+                    if v0 > 0 and len(unique_sub) >= 2 and abs(v0 - sum(u.value for u in unique_sub)) <= 1.0:
+                        gid = window[0].visual_group_id or "vg_cost_breakdown"
+                        total_item = {"label": "TOTAL REPAIR", "value": f_list[0][0].display, "numeric_value": v0}
+                        parts_items = [
+                            {"label": "DEDUCTIBLE / YOU PAY", "value": unique_sub[0].display, "numeric_value": unique_sub[0].value, "highlight": True},
+                            {"label": "INSURANCE", "value": unique_sub[1].display, "numeric_value": unique_sub[1].value, "highlight": False},
+                        ]
+                        for c_idx, c in enumerate(window):
+                            c.visual_group_id = gid
+                            c.visual_type = VisualType.data
+                            c.purpose = VisualPurpose.explain
+                            if c_idx == 0:
+                                h_val = "TOTAL REPAIR"
+                                d_val = f_list[0][0].display
+                                n_val = v0
+                            elif c_idx == 1:
+                                h_val = "COLLISION DEDUCTIBLE"
+                                d_val = unique_sub[0].display
+                                n_val = unique_sub[0].value
+                            elif c_idx == 2:
+                                h_val = "YOUR OUT-OF-POCKET"
+                                d_val = unique_sub[0].display
+                                n_val = unique_sub[0].value
+                            elif c_idx == 3:
+                                h_val = "INSURANCE COVERS"
+                                d_val = unique_sub[1].display
+                                n_val = unique_sub[1].value
+
+                            c.payload = DataPayload(
+                                template=DataTemplate.breakdown,
+                                headline=h_val,
+                                data={
+                                    "total": total_item,
+                                    "parts": parts_items,
+                                    "value": d_val,
+                                    "numeric_value": n_val,
+                                },
+                                layout_archetype="stacked_breakdown",
+                                data_intent="breakdown",
+                                visual_grammar="breakdown",
+                            ).model_dump(mode="json")
+                        i += 4
+                        continue
+
+        # Check 3-cue window
         if i + 2 < n:
             c0, c1, c2 = decisions[i], decisions[i + 1], decisions[i + 2]
             n0 = (c0.narration or "").lower()
@@ -562,7 +627,6 @@ def _apply_diversity(
                 and any(w in n1 for w in ("deductible", "you pay", "out of pocket"))
                 and any(w in n2 for w in ("insurance", "insurer", "cover", "remaining"))
             ):
-                from app.services.numeric_parser import extract_canonical_numeric_facts
                 f0 = extract_canonical_numeric_facts(c0.narration or "")
                 f1 = extract_canonical_numeric_facts(c1.narration or "")
                 f2 = extract_canonical_numeric_facts(c2.narration or "")
@@ -570,17 +634,93 @@ def _apply_diversity(
                     v0, v1, v2 = f0[0].value, f1[0].value, f2[0].value
                     if v0 > 0 and v1 > 0 and v2 > 0 and abs(v0 - (v1 + v2)) <= 1.0:
                         gid = c0.visual_group_id or c1.visual_group_id or c2.visual_group_id or "vg_cost_breakdown"
-                        c0.visual_group_id = gid
-                        c1.visual_group_id = gid
-                        c2.visual_group_id = gid
-                        c0.visual_type = VisualType.data
-                        c1.visual_type = VisualType.data
-                        c2.visual_type = VisualType.data
-                        c0.payload["layout_archetype"] = "stacked_breakdown"
-                        c1.payload["layout_archetype"] = "stacked_breakdown"
-                        c2.payload["layout_archetype"] = "stacked_breakdown"
+                        total_item = {"label": "TOTAL REPAIR", "value": f0[0].display, "numeric_value": v0}
+                        parts_items = [
+                            {"label": "DEDUCTIBLE / YOU PAY", "value": f1[0].display, "numeric_value": v1, "highlight": True},
+                            {"label": "INSURANCE", "value": f2[0].display, "numeric_value": v2, "highlight": False},
+                        ]
+                        for c_idx, c in enumerate([c0, c1, c2]):
+                            c.visual_group_id = gid
+                            c.visual_type = VisualType.data
+                            c.purpose = VisualPurpose.explain
+                            if c_idx == 0:
+                                h_val = "TOTAL REPAIR"
+                                d_val = f0[0].display
+                                n_val = v0
+                            elif c_idx == 1:
+                                h_val = "COLLISION DEDUCTIBLE"
+                                d_val = f1[0].display
+                                n_val = v1
+                            elif c_idx == 2:
+                                h_val = "INSURANCE COVERS"
+                                d_val = f2[0].display
+                                n_val = v2
+
+                            c.payload = DataPayload(
+                                template=DataTemplate.breakdown,
+                                headline=h_val,
+                                data={
+                                    "total": total_item,
+                                    "parts": parts_items,
+                                    "value": d_val,
+                                    "numeric_value": n_val,
+                                },
+                                layout_archetype="stacked_breakdown",
+                                data_intent="breakdown",
+                                visual_grammar="breakdown",
+                            ).model_dump(mode="json")
                         i += 3
                         continue
+        i += 1
+
+    # 2. Detect multi-cue conceptual comparison sequences (e.g. Premium vs Deductible across 3 cues)
+    i = 0
+    while i < n - 1:
+        if i + 2 < n:
+            window = [decisions[i], decisions[i + 1], decisions[i + 2]]
+            w_narrs = [(c.narration or "").lower() for c in window]
+            if (
+                any(w in w_narrs[0] for w in ("different from", "very different", "unlike", "not the same"))
+                and any(w in w_narrs[1] for w in ("premium", "ongoing cost", "maintain the policy"))
+                and any(w in w_narrs[2] for w in ("deductible", "share of the cost", "claim"))
+            ):
+                gid = window[0].visual_group_id or "vg_premium_vs_deductible"
+                for c_idx, c in enumerate(window):
+                    c.visual_group_id = gid
+                    c.visual_type = VisualType.data
+                    c.purpose = VisualPurpose.compare
+                    if c_idx == 0:
+                        h_val = "PREMIUM VS DEDUCTIBLE"
+                        items_val = [
+                            {"label": "PREMIUM", "value": "Ongoing cost to maintain policy", "highlight": True},
+                            {"label": "DEDUCTIBLE", "value": "Your share when making a claim", "highlight": False},
+                        ]
+                    elif c_idx == 1:
+                        h_val = "PREMIUM"
+                        items_val = [
+                            {"label": "PREMIUM", "value": "Ongoing cost to maintain policy", "highlight": True},
+                            {"label": "DEDUCTIBLE", "value": "Your share when making a claim", "highlight": False},
+                        ]
+                    elif c_idx == 2:
+                        h_val = "DEDUCTIBLE"
+                        items_val = [
+                            {"label": "PREMIUM", "value": "Ongoing cost to maintain policy", "highlight": False},
+                            {"label": "DEDUCTIBLE", "value": "Your share when making a claim", "highlight": True},
+                        ]
+
+                    c.payload = DataPayload(
+                        template=DataTemplate.comparison,
+                        headline=h_val,
+                        data={
+                            "items": items_val,
+                            "eyebrow": "CONCEPT COMPARISON",
+                        },
+                        layout_archetype="split_compare",
+                        data_intent="category_comparison",
+                        visual_grammar="comparison",
+                    ).model_dump(mode="json")
+                i += 3
+                continue
         i += 1
 
     # Canonicalize visual groups (VG001, VG002...) for contiguous groups
