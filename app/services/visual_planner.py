@@ -749,6 +749,58 @@ def _apply_diversity(
                     continue
         i += 1
 
+    # 3. Detect multi-cue threshold sequences (e.g. limit in cue 0, damage in cue 1)
+    i = 0
+    while i < n - 1:
+        c0, c1 = decisions[i], decisions[i + 1]
+        n0 = (c0.narration or "").lower()
+        n1 = (c1.narration or "").lower()
+        f0 = extract_canonical_numeric_facts(c0.narration or "")
+        f1 = extract_canonical_numeric_facts(c1.narration or "")
+        if f0 and f1:
+            is_c0_limit = any(w in n0 for w in ("coverage", "limit", "cap", "threshold", "maximum", "policy limit"))
+            is_c1_actual = any(w in n1 for w in ("damage", "cause", "claim", "actual", "cost", "loss", "exceed", "covered damage"))
+            is_c1_limit = any(w in n1 for w in ("coverage", "limit", "cap", "threshold", "maximum", "policy limit"))
+            is_c0_actual = any(w in n0 for w in ("damage", "cause", "claim", "actual", "cost", "loss", "exceed", "covered damage"))
+
+            if (is_c0_limit and is_c1_actual) or (is_c0_actual and is_c1_limit):
+                if is_c0_limit:
+                    limit_fact, act_fact = f0[0], f1[0]
+                else:
+                    limit_fact, act_fact = f1[0], f0[0]
+
+                gid = c0.visual_group_id or c1.visual_group_id or "vg_coverage_threshold"
+                for c_idx, c in enumerate([c0, c1]):
+                    c.visual_group_id = gid
+                    c.visual_type = VisualType.data
+                    c.purpose = VisualPurpose.explain
+                    if c_idx == 0:
+                        h_val = "COVERAGE LIMIT"
+                        eyebrow_val = "POLICY LIMIT"
+                    else:
+                        h_val = "DAMAGE EXCEEDS LIMIT" if act_fact.value > limit_fact.value else "COVERED DAMAGE"
+                        eyebrow_val = "LIMIT EXCEEDED" if act_fact.value > limit_fact.value else "WITHIN LIMIT"
+
+                    c.payload = DataPayload(
+                        template=DataTemplate.threshold,
+                        headline=h_val,
+                        data={
+                            "threshold_value": limit_fact.value,
+                            "threshold_display": limit_fact.display,
+                            "threshold_label": "Coverage Limit",
+                            "current_value": act_fact.value,
+                            "current_display": act_fact.display,
+                            "subtext": "Property Damage Liability",
+                            "eyebrow": eyebrow_val,
+                        },
+                        layout_archetype="threshold_v2",
+                        data_intent="threshold",
+                        visual_grammar="threshold",
+                    ).model_dump(mode="json")
+                i += 2
+                continue
+        i += 1
+
     # Canonicalize visual groups (VG001, VG002...) for contiguous groups
     group_counter = 1
     current_raw_group = None
