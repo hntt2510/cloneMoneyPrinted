@@ -213,6 +213,36 @@ class TestG18SemanticHardening(unittest.TestCase):
             self.assertEqual(len(parts), 2)
             self.assertEqual(parts[0]["numeric_value"] + parts[1]["numeric_value"], total_val)
 
+    def test_two_cue_threshold_sequence_grouping(self) -> None:
+        """Validate that a 2-cue threshold sequence ($25k coverage limit vs $40k damage)
+        is automatically grouped and adapted into threshold data templates without domain hardcoding.
+        """
+        cues = [
+            TimelineCue(id="C037", order=37, start=128.8, end=133.8, narration="Imagine you have twenty-five thousand dollars of property damage liability coverage,"),
+            TimelineCue(id="C038", order=38, start=133.8, end=137.5, narration="but you cause forty thousand dollars in covered damage."),
+        ]
+        decisions = [
+            VisualCue(id="C037", order=37, visual_type=VisualType.data, purpose=VisualPurpose.explain, start=128.8, end=133.8, narration=cues[0].narration, payload={"template": "number", "headline": "COVERAGE"}),
+            VisualCue(id="C038", order=38, visual_type=VisualType.data, purpose=VisualPurpose.explain, start=133.8, end=137.5, narration=cues[1].narration, payload={"template": "number", "headline": "DAMAGE"}),
+        ]
+        project = ProjectSpec.model_validate({
+            "schema_version": "1.0",
+            "project": {"title": "Threshold Test", "aspect_ratio": "16:9", "fps": 30},
+            "script": {"subject": "coverage limits", "script": "test"},
+            "narration": {"mode": "tts"},
+            "production": {"video_source": "pexels"},
+        })
+
+        adapted = _apply_diversity(project, cues, decisions)
+        self.assertIsNotNone(adapted[0].visual_group_id)
+        self.assertEqual(adapted[0].visual_group_id, adapted[1].visual_group_id)
+        for c in adapted:
+            self.assertEqual(c.visual_type, VisualType.data)
+            self.assertEqual(c.payload.get("template"), "threshold")
+            self.assertEqual(c.payload.get("data", {}).get("threshold_value"), 25000.0)
+            self.assertEqual(c.payload.get("data", {}).get("current_value"), 40000.0)
+
+
     def test_hard_broll_progression_skips_weak_candidates_and_selects_strong(self) -> None:
         """Section 10: Mock:
         - Tier 1 candidate: weak score (< 35.0, irrelevant metadata)
