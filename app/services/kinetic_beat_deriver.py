@@ -696,3 +696,133 @@ def derive_kinetic_beats(
         logger.warning(q_warn)
 
     return plan
+
+
+def resolve_progressive_copy(
+    text: str,
+    start_frame: int,
+    end_frame: int,
+    frame: int,
+    mode: str = "word",
+) -> list[str]:
+    """Deterministically resolve the list of currently visible units for a given frame.
+
+    Mirrors the Remotion ProgressiveText component behavior:
+    - Splits text into words or phrases.
+    - Computes each unit's start frame across [start_frame, end_frame].
+    - Returns all units whose start_frame <= frame.
+    """
+    if not text or not text.strip():
+        return []
+
+    if mode == "phrase":
+        raw_units = [u.strip() for u in re.split(r"([,;:]|\s+-\s+)", text) if u.strip()]
+    else:
+        raw_units = [w.strip() for w in text.split() if w.strip()]
+
+    if not raw_units:
+        return []
+
+    num_units = len(raw_units)
+    total_frames = max(1, end_frame - start_frame)
+    step_frames = total_frames / num_units if num_units > 1 else total_frames
+
+    visible_units: list[str] = []
+    for idx, unit in enumerate(raw_units):
+        unit_start = start_frame + round(idx * step_frames)
+        if frame >= unit_start:
+            visible_units.append(unit)
+
+    return visible_units
+
+
+def resolve_threshold_copy_state(
+    headline: str,
+    eyebrow: str | None,
+    threshold_label: str,
+    threshold_value: float,
+    current_value: float,
+    frame: int,
+    duration_frames: int,
+    animation_plan: MotionAnimationPlan | None = None,
+) -> dict[str, Any]:
+    """Deterministically compute the exact visible copy state for a threshold scene at `frame`."""
+    has_overflow = current_value > threshold_value
+
+    limit_beat = next(
+        (b for b in (animation_plan.beats if animation_plan else []) if b.kind == KineticBeatKind.threshold or "limit" in b.id),
+        None,
+    )
+    grow_beat = next(
+        (b for b in (animation_plan.beats if animation_plan else []) if "grow" in b.id or b.kind == KineticBeatKind.number),
+        None,
+    )
+    cross_beat = next(
+        (b for b in (animation_plan.beats if animation_plan else []) if "cross" in b.id or b.kind == KineticBeatKind.highlight),
+        None,
+    )
+    resolve_beat = next(
+        (b for b in (animation_plan.beats if animation_plan else []) if "resolve" in b.id or b.kind == KineticBeatKind.resolve),
+        None,
+    )
+
+    phase1_setup = 0
+    phase2_limit = (
+        max(0, limit_beat.start_frame + round((limit_beat.end_frame - limit_beat.start_frame) * 0.35))
+        if limit_beat
+        else round(duration_frames * 0.12)
+    )
+    phase3_grow_start = grow_beat.start_frame if grow_beat else round(duration_frames * 0.25)
+    phase4_cross = cross_beat.start_frame if cross_beat else round(duration_frames * 0.72)
+    phase5_resolve = resolve_beat.start_frame if resolve_beat else round(duration_frames * 0.82)
+
+    is_conclusion = bool(
+        re.search(r"\b(?:exceeds?|exceeded|over\s+limit|above\s+limit|beyond\s+limit)\b", headline, re.I)
+    )
+    neutral_subject = headline
+    if is_conclusion:
+        neutral_subject = re.sub(
+            r"\b(?:damage\s+exceeds\s+limit|exceeds?\s+(?:policy\s+)?limit|exceeded)\b", "", headline, flags=re.I
+        ).strip()
+        if not neutral_subject or len(neutral_subject) < 2:
+            neutral_subject = (
+                eyebrow
+                if eyebrow
+                else (
+                    threshold_label.upper()
+                    if threshold_label.upper().endswith("LIMIT")
+                    else f"{threshold_label.upper()} LIMIT"
+                )
+            )
+
+    show_conclusion = has_overflow and frame >= phase4_cross
+
+    if show_conclusion:
+        active_headline_words = resolve_progressive_copy(headline, phase4_cross, phase5_resolve, frame, mode="word")
+        active_eyebrow = "LIMIT EXCEEDED"
+    else:
+        active_headline_words = resolve_progressive_copy(neutral_subject, phase1_setup, phase2_limit, frame, mode="word")
+        active_eyebrow = eyebrow if (eyebrow and eyebrow != neutral_subject) else threshold_label.upper()
+
+    consequence_visible = has_overflow and frame >= phase5_resolve
+
+    return {
+        "frame": frame,
+        "phase": (
+            "resolve"
+            if frame >= phase5_resolve
+            else "crossing"
+            if frame >= phase4_cross
+            else "growing"
+            if frame >= phase3_grow_start
+            else "limit_reveal"
+            if frame >= phase2_limit
+            else "setup"
+        ),
+        "headline_words": active_headline_words,
+        "headline_text": " ".join(active_headline_words),
+        "eyebrow": active_eyebrow,
+        "show_conclusion": show_conclusion,
+        "consequence_visible": consequence_visible,
+        "is_full_conclusion_visible": active_headline_words == [w for w in headline.split() if w],
+    }

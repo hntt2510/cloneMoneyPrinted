@@ -2,6 +2,7 @@ import React from 'react';
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Background } from '../components/Background';
 import { Layout } from '../components/Layout';
+import { ProgressiveText } from '../components/ProgressiveText';
 import { getSafeArea, fitText, SEMANTIC_COLORS } from '../layout';
 import { resolveTheme } from '../theme/theme';
 import { ThresholdProps } from '../types';
@@ -140,7 +141,7 @@ export const ThresholdTemplate: React.FC<ThresholdProps> = ({
   // --- PROGRESSIVE COPY REVEAL ---
   // Do NOT show conclusion headlines (e.g. "DAMAGE EXCEEDS LIMIT") before the crossing moment.
   // Pre-crossing: show the neutral subject (e.g. "PROPERTY DAMAGE LIABILITY" or "API REQUESTS").
-  // Post-crossing: reveal the conclusion headline.
+  // Post-crossing: reveal the conclusion headline progressively word-by-word.
   const isConclusionHeadline = /\b(?:exceeds?|exceeded|over\s+limit|above\s+limit|beyond\s+limit)\b/i.test(headline);
   let neutralSubject = headline;
   if (isConclusionHeadline) {
@@ -152,7 +153,7 @@ export const ThresholdTemplate: React.FC<ThresholdProps> = ({
         ? eyebrow
         : (threshold_label
             ? (threshold_label.toUpperCase().endsWith('LIMIT') ? threshold_label.toUpperCase() : `${threshold_label.toUpperCase()} LIMIT`)
-            : 'POLICY LIMIT');
+            : 'LIMIT');
     }
   }
 
@@ -240,11 +241,33 @@ export const ThresholdTemplate: React.FC<ThresholdProps> = ({
             letterSpacing: '-0.02em',
             maxWidth: safe.titleZone.width * 0.9,
             wordBreak: 'break-word',
+            display: 'flex',
+            justifyContent: 'center',
           }}
         >
-          {titleFit.lines.map((ln, i) => (
-            <div key={i}>{ln}</div>
-          ))}
+          {showConclusion ? (
+            <ProgressiveText
+              text={headline}
+              startFrame={phase4_crossFrame}
+              endFrame={phase5_resolveFrame}
+              fontSize={titleFit.fontSize}
+              lineHeight={`${titleFit.lineHeight}px`}
+              color={theme.text}
+              fontWeight={800}
+              maxWidth={safe.titleZone.width * 0.9}
+            />
+          ) : (
+            <ProgressiveText
+              text={neutralSubject}
+              startFrame={phase1_setupFrame}
+              endFrame={phase2_limitValFrame}
+              fontSize={titleFit.fontSize}
+              lineHeight={`${titleFit.lineHeight}px`}
+              color={theme.text}
+              fontWeight={800}
+              maxWidth={safe.titleZone.width * 0.9}
+            />
+          )}
         </h1>
       </div>
 
