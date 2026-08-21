@@ -247,44 +247,60 @@ def normalize_motion_spec(
             visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template in ("comparison", "breakdown"):
-        raw_items = data.get("items") or data.get("options") or data.get("comparison")
-        if not raw_items and isinstance(data.get("values"), list) and len(data["values"]) >= 2:
-            raw_items = [
-                {"label": f"Option {i + 1}" if not isinstance(v, dict) else v.get("label", f"Option {i+1}"),
-                 "value": v if not isinstance(v, dict) else v.get("value", "")}
-                for i, v in enumerate(data["values"])
-            ]
-        items: list[ComparisonItem] = []
-        if isinstance(raw_items, list) and len(raw_items) >= 2:
-            for it in raw_items:
-                if isinstance(it, dict) and it.get("label") and it.get("value") is not None:
-                    items.append(
-                        ComparisonItem(
-                            label=str(it["label"]).strip(),
-                            value=str(it["value"]).strip(),
-                            numeric_value=_parse_float(it.get("numeric_value") if it.get("numeric_value") is not None else it["value"]),
-                            highlight=bool(it.get("highlight")),
-                        )
-                    )
-        if len(items) >= 2:
-            props_dict = ComparisonProps(
-                headline=headline,
-                items=items,
-                subtext=data.get("subtext"),
-            ).model_dump(mode="json")
-            if requested_template == "breakdown":
-                data_intent = SemanticDataIntent.breakdown
-                visual_grammar = VisualGrammar.breakdown
-                rendered_template = "breakdown"
-            else:
-                data_intent = SemanticDataIntent.category_comparison
-                visual_grammar = VisualGrammar.comparison
-                rendered_template = "comparison"
+        raw_total = data.get("total") or raw_payload.get("total")
+        raw_parts = data.get("parts") or raw_payload.get("parts")
+        if requested_template == "breakdown" and isinstance(raw_parts, list) and len(raw_parts) >= 2:
+            props_dict = {
+                "headline": headline,
+                "total": raw_total,
+                "parts": raw_parts,
+                "value": raw_payload.get("value") or data.get("value"),
+                "numeric_value": raw_payload.get("numeric_value") or data.get("numeric_value"),
+                "subtext": data.get("subtext"),
+                "layout_archetype": "stacked_breakdown",
+            }
+            data_intent = SemanticDataIntent.breakdown
+            visual_grammar = VisualGrammar.breakdown
+            rendered_template = "breakdown"
         else:
-            rendered_template = "callout"
-            fallback_reason = f"{requested_template.capitalize()} template requires at least 2 valid items"
-            data_intent = SemanticDataIntent.takeaway
-            visual_grammar = VisualGrammar.kinetic_statement
+            raw_items = data.get("items") or raw_payload.get("items") or data.get("options") or data.get("comparison")
+            if not raw_items and isinstance(data.get("values"), list) and len(data["values"]) >= 2:
+                raw_items = [
+                    {"label": f"Option {i + 1}" if not isinstance(v, dict) else v.get("label", f"Option {i+1}"),
+                     "value": v if not isinstance(v, dict) else v.get("value", "")}
+                    for i, v in enumerate(data["values"])
+                ]
+            items: list[ComparisonItem] = []
+            if isinstance(raw_items, list) and len(raw_items) >= 2:
+                for it in raw_items:
+                    if isinstance(it, dict) and it.get("label") and it.get("value") is not None:
+                        items.append(
+                            ComparisonItem(
+                                label=str(it["label"]).strip(),
+                                value=str(it["value"]).strip(),
+                                numeric_value=_parse_float(it.get("numeric_value") if it.get("numeric_value") is not None else it["value"]),
+                                highlight=bool(it.get("highlight")),
+                            )
+                        )
+            if len(items) >= 2:
+                props_dict = ComparisonProps(
+                    headline=headline,
+                    items=items,
+                    subtext=data.get("subtext"),
+                ).model_dump(mode="json")
+                if requested_template == "breakdown":
+                    data_intent = SemanticDataIntent.breakdown
+                    visual_grammar = VisualGrammar.breakdown
+                    rendered_template = "breakdown"
+                else:
+                    data_intent = SemanticDataIntent.category_comparison
+                    visual_grammar = VisualGrammar.comparison
+                    rendered_template = "comparison"
+            else:
+                rendered_template = "callout"
+                fallback_reason = f"{requested_template.capitalize()} template requires at least 2 valid items"
+                data_intent = SemanticDataIntent.takeaway
+                visual_grammar = VisualGrammar.kinetic_statement
 
     elif requested_template == "timeline":
         raw_milestones = data.get("milestones") or data.get("events") or data.get("timeline")

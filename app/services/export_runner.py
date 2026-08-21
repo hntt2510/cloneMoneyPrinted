@@ -488,6 +488,16 @@ def export_editor_package(
                     provenance_ref["provider"] = broll_job.metadata.get("provider")
                     if broll_job.metadata.get("asset_url"):
                         provenance_ref["asset_url"] = sanitize_secret_url(broll_job.metadata["asset_url"])
+            else:
+                # Check for text fallback on rejected or failed B-roll
+                resolved_job = resolve_final_render_job(cue.id, working_project.render_jobs)
+                if resolved_job and resolved_job.kind == "text_fallback":
+                    source_stage = "fallback"
+                    resolved_type = VisualType.text
+                    fallback_from = VisualType.broll
+                    fallback_reason = resolved_job.metadata.get("fallback_reason", "all_candidates_failed")
+                    if resolved_job.status == JobStatus.ready and resolved_job.output:
+                        output_src_file = _resolve_file_path(resolved_job.output, task_dir)
 
         # Check RenderJobs (Motion, Document, Fallback)
         else:

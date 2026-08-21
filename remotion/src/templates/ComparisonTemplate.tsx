@@ -22,13 +22,19 @@ export const ComparisonTemplate: React.FC<ComparisonProps> = ({
     const dividerBeat = animation_plan?.beats?.find(b => b.kind === 'split');
     const takeawayBeat = animation_plan?.beats?.find(b => b.kind === 'takeaway');
 
-    const i0Start = item0Beat?.start_frame ?? 0;
-    const divStart = dividerBeat?.start_frame ?? i0Start + 15;
-    const i1Start = item1Beat?.start_frame ?? divStart + 10;
-    const takeStart = takeawayBeat?.start_frame ?? i1Start + 15;
+    const isContinuous = isGrouped && !isFirstInGroup;
+    const i0Start = isContinuous ? 0 : (item0Beat?.start_frame ?? 0);
+    const divStart = isContinuous ? 0 : (dividerBeat?.start_frame ?? i0Start + 15);
+    const i1Start = isContinuous ? 0 : (item1Beat?.start_frame ?? divStart + 10);
+    const takeStart = isContinuous ? 0 : (takeawayBeat?.start_frame ?? i1Start + 15);
 
-    const labelSize = isPortrait ? 24 : 32;
-    const valueSize = isPortrait ? 56 : 72;
+    const isLongValue0 = (items[0]?.value?.length ?? 0) > 8;
+    const isLongValue1 = (items[1]?.value?.length ?? 0) > 8;
+    const isLongValue = isLongValue0 || isLongValue1;
+
+    const labelSize = isPortrait ? (isLongValue ? 20 : 24) : (isLongValue ? 24 : 32);
+    const valueSize0 = isLongValue0 ? (isPortrait ? 24 : 36) : (isPortrait ? 56 : 72);
+    const valueSize1 = isLongValue1 ? (isPortrait ? 24 : 36) : (isPortrait ? 56 : 72);
 
     return (
       <Layout theme={theme} isGrouped={isGrouped}>
@@ -47,15 +53,15 @@ export const ComparisonTemplate: React.FC<ComparisonProps> = ({
           position: 'absolute',
           top: isPortrait ? '25%' : '35%',
           left: isPortrait ? '10%' : '15%',
-          width: isPortrait ? '80%' : '30%',
+          width: isPortrait ? '80%' : '32%',
           textAlign: isPortrait ? 'center' : 'left',
         }}>
           {frame >= i0Start && (
             <SlideIn startFrame={i0Start} distance={10}>
-              <div style={{ fontSize: labelSize, fontWeight: 700, color: items[0].highlight ? theme.accent : theme.muted, textTransform: 'uppercase', marginBottom: 16 }}>
+              <div style={{ fontSize: labelSize, fontWeight: 700, color: items[0].highlight ? theme.accent : theme.muted, textTransform: 'uppercase', marginBottom: 16, letterSpacing: '0.08em' }}>
                 {items[0].label}
               </div>
-              <div style={{ fontSize: valueSize, fontWeight: 900, color: theme.text }}>
+              <div style={{ fontSize: valueSize0, fontWeight: isLongValue0 ? 700 : 900, color: items[0].highlight ? theme.accent : theme.text, lineHeight: isLongValue0 ? 1.3 : 1.1 }}>
                 {items[0].value}
               </div>
             </SlideIn>
@@ -79,15 +85,15 @@ export const ComparisonTemplate: React.FC<ComparisonProps> = ({
           top: isPortrait ? '65%' : '35%',
           right: isPortrait ? undefined : '15%',
           left: isPortrait ? '10%' : undefined,
-          width: isPortrait ? '80%' : '30%',
+          width: isPortrait ? '80%' : '32%',
           textAlign: isPortrait ? 'center' : 'right',
         }}>
           {frame >= i1Start && (
             <SlideIn startFrame={i1Start} distance={10}>
-              <div style={{ fontSize: labelSize, fontWeight: 700, color: items[1].highlight ? theme.accent : theme.muted, textTransform: 'uppercase', marginBottom: 16 }}>
+              <div style={{ fontSize: labelSize, fontWeight: 700, color: items[1].highlight ? theme.accent : theme.muted, textTransform: 'uppercase', marginBottom: 16, letterSpacing: '0.08em' }}>
                 {items[1].label}
               </div>
-              <div style={{ fontSize: valueSize, fontWeight: 900, color: theme.text }}>
+              <div style={{ fontSize: valueSize1, fontWeight: isLongValue1 ? 700 : 900, color: items[1].highlight ? theme.accent : theme.text, lineHeight: isLongValue1 ? 1.3 : 1.1 }}>
                 {items[1].value}
               </div>
             </SlideIn>

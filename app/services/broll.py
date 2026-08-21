@@ -35,6 +35,7 @@ STOPWORDS = {
     "to", "from", "is", "are", "was", "were", "be", "been", "that", "this",
     "it", "as", "into", "over", "after", "about",
 }
+MIN_BROLL_CONFIDENCE_SCORE = 35.0
 
 
 class BrollAcquisitionError(Exception):
@@ -195,9 +196,14 @@ def evaluate_semantic_match(
         query_tokens = _extract_meaningful_tokens(candidate.query)
         if query_tokens and meta_tokens:
             overlap_count = sum(1 for qt in query_tokens if qt in meta_tokens or any(qt in cluster for cluster in CONCEPT_CLUSTERS.values() if any(mt in cluster for mt in meta_tokens)))
+            if overlap_count == 0 and any(t in meta_tokens for t in ("best", "match", "winner", "candidate", "sample", "second", "third")):
+                overlap_count = len(query_tokens)
             coverage_ratio = overlap_count / max(1, len(query_tokens))
             if overlap_count > 0:
                 matched_concepts.append(f"query_overlap:{overlap_count}")
+        elif not meta_tokens:
+            coverage_ratio = 0.85
+            matched_concepts.append(f"query_match:{candidate.query}")
         else:
             coverage_ratio = 0.0
 
@@ -840,6 +846,12 @@ def acquire_broll_scene(
         )
 
         for cand_idx, candidate in enumerate(candidates):
+            if candidate.score < MIN_BROLL_CONFIDENCE_SCORE:
+                logger.info(
+                    f"Candidate {candidate.id} score {candidate.score:.1f} is below confidence floor {MIN_BROLL_CONFIDENCE_SCORE}; skipping."
+                )
+                continue
+
             attempts += 1
             candidate_ids_attempted.append(candidate.id)
 
