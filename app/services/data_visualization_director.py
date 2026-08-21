@@ -37,14 +37,94 @@ _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(19\d\d|20\d\d)\b")
 _TOP_RANK_RE = re.compile(r"\b(?:top\s*\d+|most\s+common|ranked|ranking|rankings|largest|smallest|leaders?|main\s+causes?|top\s+causes?|leading\s+causes?)\b", re.IGNORECASE)
 _COMPARISON_RE = re.compile(
-    r"\b(?:versus|vs\.?|compare|compared\s+to|different\s+from|very\s+different\s+from|unlike|not\s+the\s+same\s+as|one\s+is|ongoing\s+cost|claim-time\s+cost|share\s+of\s+the\s+cost|premium\s+is|deductible\s+is)\b",
+    r"\b(?:versus|vs\.?|compare|compared\s+to|different\s+from|very\s+different\s+from|unlike|not\s+the\s+same\s+as|one\s+is|while\s+the\s+other|in\s+contrast\s+to|on\s+the\s+other\s+hand|whereas)\b",
     re.IGNORECASE,
 )
 _PROGRESS_RE = re.compile(r"\b(?:progress|complete|completed|done|finished|steps?|fraction|goal|quota)\b", re.IGNORECASE)
 _THRESHOLD_RE = re.compile(r"\b(?:limit|threshold|maximum|cap|excess|exceed|over\s*limit|damage|ceiling)\b", re.IGNORECASE)
 _WATERFALL_RE = re.compile(r"\b(?:start(?:ed|ing)?|begin(?:ning)?|began|initial|fees?|discount|deduct(?:ion)?|final|finish(?:ed|ing)?|net|balance|adjust(?:ment)?|ending|ended)\b", re.IGNORECASE)
 _BEFORE_AFTER_RE = re.compile(r"\b(?:before|after|previously|now|old|new|prior|shifted|transition)\b", re.IGNORECASE)
-_BREAKDOWN_RE = re.compile(r"\b(?:breakdown|total|deductible|insurance\s*covers|out\s*of\s*pocket|you\s*pay)\b", re.IGNORECASE)
+_BREAKDOWN_RE = re.compile(r"\b(?:breakdown|total|parts?|portion|remaining|sum\s+of|out\s*of)\b", re.IGNORECASE)
+
+
+def _clean_entity_label(raw: str) -> str:
+    """Clean raw entity string by removing leading determiners, possessives, and trailing clutter."""
+    t = raw.strip().rstrip(".").rstrip(",").rstrip(";")
+    t = re.sub(r"^(?:that|the|your|a|an|this|our|my|insurance)\s+", "", t, flags=re.IGNORECASE).strip()
+    words = t.split()
+    if len(words) > 3:
+        words = words[:3]
+    return " ".join(words).strip()
+
+
+def extract_grounded_comparison_entities(text: str) -> tuple[str, str] | None:
+    """Extract two compared entities from narration text generically across any domain."""
+    if not text:
+        return None
+    cleaned = text.strip().rstrip(".").rstrip(",").rstrip(";")
+
+    # Pattern 1: [that/the/your]? Entity1 [is/are] [very]? [different from / unlike / not the same as / compared to / vs] [that/the/your]? Entity2
+    p1 = re.search(
+        r"(?:that|the|your|a|an|this)?\s*([a-zA-Z0-9_\- ]+?)\s+(?:is|are)\s+(?:very\s+)?(?:different\s+from|unlike|not\s+the\s+same\s+as|compared\s+to|vs\.?|versus)\s+(?:that|the|your|a|an|this)?\s*([a-zA-Z0-9_\- ]+?)(?:\.|$|,|;)",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if p1:
+        e1 = _clean_entity_label(p1.group(1))
+        e2 = _clean_entity_label(p1.group(2))
+        if e1 and e2 and e1.lower() != e2.lower():
+            return e1, e2
+
+    # Pattern 2: Entity1 [versus / vs / against] Entity2
+    p2 = re.search(
+        r"(?:that|the|your|a|an|this)?\s*([a-zA-Z0-9_\- ]+?)\s+(?:versus|vs\.?|against)\s+(?:that|the|your|a|an|this)?\s*([a-zA-Z0-9_\- ]+?)(?:\.|$|,|;)",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if p2:
+        e1 = _clean_entity_label(p2.group(1))
+        e2 = _clean_entity_label(p2.group(2))
+        if e1 and e2 and e1.lower() != e2.lower():
+            return e1, e2
+
+    # Pattern 3: Comparing/compare Entity1 [with / and / to] Entity2
+    p3 = re.search(
+        r"(?:comparing|compare)\s+(?:that|the|your|a|an|this)?\s*([a-zA-Z0-9_\- ]+?)\s+(?:with|and|to)\s+(?:that|the|your|a|an|this)?\s*([a-zA-Z0-9_\- ]+?)(?:\.|$|,|;)",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if p3:
+        e1 = _clean_entity_label(p3.group(1))
+        e2 = _clean_entity_label(p3.group(2))
+        if e1 and e2 and e1.lower() != e2.lower():
+            return e1, e2
+
+    return None
+
+
+def extract_grounded_entity_definition(entity: str, text: str) -> str | None:
+    """Extract grounded definition/description of an entity from narration text."""
+    if not text or not entity:
+        return None
+
+    cleaned_text = text.strip()
+    e_tokens = [re.escape(w) for w in entity.strip().split() if len(w) > 2]
+    e_pattern = r"(?:\b" + r"\b|\b".join(e_tokens) + r"\b)" if e_tokens else re.escape(entity.strip())
+
+    patterns = [
+        rf"(?:that|the|your|a|an)?\s*{e_pattern}\s+(?:is|are|means|gives|provides|represents|refers\s+to)\s+(.+?)(?:\.|$|;)",
+        rf"(?:gives|provides|represents)\s+(.+?)(?:\.|$|;)",
+        rf"{e_pattern}\s*:\s*(.+?)(?:\.|$|;)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, cleaned_text, re.IGNORECASE)
+        if m:
+            defn = m.group(1).strip().rstrip(".").rstrip(",")
+            defn = re.sub(r"\s+(?:while|whereas|versus|vs|assuming|subject\s+to).*$", "", defn, flags=re.IGNORECASE).strip()
+            defn = re.sub(r"^(?:that|the|your|a|an)\s+(ongoing\s+cost.*)", r"\1", defn, flags=re.IGNORECASE).strip()
+            if len(defn) >= 3:
+                return defn[0].upper() + defn[1:]
+    return None
 
 
 class VisualDiversityMemory:
@@ -608,10 +688,6 @@ class DataVisualizationDirector:
                     lbl = payload_labels[i] if i < len(payload_labels) else None
                     if not lbl or lbl.lower().startswith("option ") or lbl.lower().startswith("item "):
                         lbl = f"Option {i + 1}"
-                        if "deductible" in narration.lower() and i == 0:
-                            lbl = "Deductible"
-                        elif "insurer" in narration.lower() and i == 1:
-                            lbl = "Insurer Covers"
                     items.append({
                         "label": lbl,
                         "value": f.display,
@@ -626,47 +702,54 @@ class DataVisualizationDirector:
                     "layout_archetype": variant,
                 }
                 return True, props, None
-            elif _COMPARISON_RE.search(t_lower) or any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to ", "different from", "unlike", "not the same as", "premium", "deductible"]):
-                # Conceptual/qualitative comparison without raw numeric facts
-                left_lbl = "PREMIUM"
-                right_lbl = "DEDUCTIBLE"
-                left_val = "Ongoing cost to maintain coverage"
-                right_val = "Your share when making a covered claim"
+            elif payload_items and isinstance(payload_items, list) and len(payload_items) >= 2:
+                valid_items = []
+                for idx, it in enumerate(payload_items[:2]):
+                    if isinstance(it, dict) and it.get("label"):
+                        l_val = str(it.get("value") or it["label"]).strip()
+                        valid_items.append({
+                            "label": str(it["label"]).strip().upper(),
+                            "value": l_val,
+                            "highlight": bool(it.get("highlight", idx == 0)),
+                        })
+                if len(valid_items) >= 2:
+                    props = {
+                        "headline": headline or f"{valid_items[0]['label']} VS {valid_items[1]['label']}",
+                        "eyebrow": eyebrow or "CONCEPT COMPARISON",
+                        "items": valid_items,
+                        "variant": variant,
+                        "layout_archetype": variant,
+                    }
+                    return True, props, None
+            elif _COMPARISON_RE.search(t_lower):
+                # Conceptual/qualitative comparison grounded directly in narration text
+                ents = extract_grounded_comparison_entities(narration)
+                if ents:
+                    e1, e2 = ents
+                    def1 = extract_grounded_entity_definition(e1, narration)
+                    def2 = extract_grounded_entity_definition(e2, narration)
 
-                if "premium" in t_lower and ("ongoing" in t_lower or "maintain" in t_lower or "pay to" in t_lower):
-                    left_lbl = "PREMIUM"
-                    left_val = "Ongoing cost to maintain policy"
-                if "deductible" in t_lower and ("share" in t_lower or "claim" in t_lower or "making" in t_lower):
-                    right_lbl = "DEDUCTIBLE"
-                    right_val = "Your share of cost on covered claim"
+                    val1 = def1 if def1 else e1.title()
+                    val2 = def2 if def2 else e2.title()
 
-                if len(payload_labels) >= 2:
-                    left_lbl = payload_labels[0]
-                    right_lbl = payload_labels[1]
-                if payload_items and isinstance(payload_items, list) and len(payload_items) >= 2:
-                    if isinstance(payload_items[0], dict) and payload_items[0].get("value"):
-                        left_val = str(payload_items[0]["value"])
-                    if isinstance(payload_items[1], dict) and payload_items[1].get("value"):
-                        right_val = str(payload_items[1]["value"])
+                    is_e1_hl = e1.lower() in t_lower and e2.lower() not in t_lower
+                    is_e2_hl = e2.lower() in t_lower and e1.lower() not in t_lower
+                    if not is_e1_hl and not is_e2_hl:
+                        is_e1_hl = True
+                        is_e2_hl = False
 
-                is_left_highlight = "premium" in t_lower and "deductible" not in t_lower
-                is_right_highlight = "deductible" in t_lower and "premium" not in t_lower
-                if not is_left_highlight and not is_right_highlight:
-                    is_left_highlight = True
-                    is_right_highlight = False
-
-                props = {
-                    "headline": headline or "PREMIUM VS DEDUCTIBLE",
-                    "eyebrow": eyebrow or "CONCEPT COMPARISON",
-                    "items": [
-                        {"label": left_lbl, "value": left_val, "highlight": is_left_highlight},
-                        {"label": right_lbl, "value": right_val, "highlight": is_right_highlight},
-                    ],
-                    "variant": variant,
-                    "layout_archetype": variant,
-                }
-                return True, props, None
-            return False, {}, "Comparison rejected: requires at least 2 comparison items or explicit comparison relation."
+                    props = {
+                        "headline": headline or f"{e1.upper()} VS {e2.upper()}",
+                        "eyebrow": eyebrow or "CONCEPT COMPARISON",
+                        "items": [
+                            {"label": e1.upper(), "value": val1, "highlight": is_e1_hl},
+                            {"label": e2.upper(), "value": val2, "highlight": is_e2_hl},
+                        ],
+                        "variant": variant,
+                        "layout_archetype": variant,
+                    }
+                    return True, props, None
+            return False, {}, "Comparison rejected: requires at least 2 comparison items or grounded comparison entities in narration."
 
         # 11. BREAKDOWN VALIDATION
         if grammar == VisualGrammar.breakdown:
@@ -684,9 +767,9 @@ class DataVisualizationDirector:
             if abs(v0 - parts_sum) > 1.0:
                 return False, {}, f"Breakdown rejected: math mismatch ({v0} != {parts_sum})."
 
-            lbl0 = payload_labels[0] if len(payload_labels) > 0 else "Total Repair"
-            lbl1 = payload_labels[1] if len(payload_labels) > 1 else "Deductible / You Pay"
-            lbl2 = payload_labels[2] if len(payload_labels) > 2 else "Insurance Coverage"
+            lbl0 = payload_labels[0] if len(payload_labels) > 0 else "Total"
+            lbl1 = payload_labels[1] if len(payload_labels) > 1 else "Part 1"
+            lbl2 = payload_labels[2] if len(payload_labels) > 2 else "Part 2"
             items = [
                 {"label": lbl0, "value": facts[0].display, "numeric_value": facts[0].value},
                 {"label": lbl1, "value": unique_parts[0].display, "numeric_value": unique_parts[0].value},
@@ -694,7 +777,7 @@ class DataVisualizationDirector:
             ]
             props = {
                 "headline": headline,
-                "eyebrow": eyebrow or "COST BREAKDOWN",
+                "eyebrow": eyebrow or "BREAKDOWN",
                 "items": items,
                 "variant": variant,
                 "layout_archetype": variant,

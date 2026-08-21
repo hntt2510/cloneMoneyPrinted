@@ -22,7 +22,11 @@ from app.models.project import (
     VisualType,
 )
 from app.services import llm
-from app.services.data_visualization_director import DataVisualizationDirector
+from app.services.data_visualization_director import (
+    DataVisualizationDirector,
+    extract_grounded_comparison_entities,
+    extract_grounded_entity_definition,
+)
 from app.services.numeric_parser import (
     CanonicalNumericFact,
     extract_canonical_numeric_facts,
@@ -38,7 +42,7 @@ _DOCUMENT_RE = re.compile(
     re.IGNORECASE,
 )
 _COMPARISON_RE = re.compile(
-    r"\b(versus|vs|compare|compared|different\s+from|very\s+different\s+from|unlike|not\s+the\s+same\s+as|ongoing\s+cost|claim-time\s+cost|share\s+of\s+the\s+cost|premium\s+is|deductible\s+is|more than|less than|higher than|lower than|increase|decrease|growth|decline|cost breakdown|premium vs|deductible vs|limit vs)\b",
+    r"\b(versus|vs\.?|compare|compared|different\s+from|very\s+different\s+from|unlike|not\s+the\s+same\s+as|one\s+is|while\s+the\s+other|in\s+contrast\s+to|on\s+the\s+other\s+hand|whereas|more\s+than|less\s+than|higher\s+than|lower\s+than|increase|decrease|growth|decline)\b",
     re.IGNORECASE,
 )
 
@@ -673,54 +677,76 @@ def _apply_diversity(
                         continue
         i += 1
 
-    # 2. Detect multi-cue conceptual comparison sequences (e.g. Premium vs Deductible across 3 cues)
+    # 2. Detect multi-cue conceptual comparison sequences generically across any domain
     i = 0
     while i < n - 1:
         if i + 2 < n:
             window = [decisions[i], decisions[i + 1], decisions[i + 2]]
-            w_narrs = [(c.narration or "").lower() for c in window]
-            if (
-                any(w in w_narrs[0] for w in ("different from", "very different", "unlike", "not the same"))
-                and any(w in w_narrs[1] for w in ("premium", "ongoing cost", "maintain the policy"))
-                and any(w in w_narrs[2] for w in ("deductible", "share of the cost", "claim"))
-            ):
-                gid = window[0].visual_group_id or "vg_premium_vs_deductible"
-                for c_idx, c in enumerate(window):
-                    c.visual_group_id = gid
-                    c.visual_type = VisualType.data
-                    c.purpose = VisualPurpose.compare
-                    if c_idx == 0:
-                        h_val = "PREMIUM VS DEDUCTIBLE"
+            c0_narr = (window[0].narration or "")
+            c1_narr = (window[1].narration or "")
+            c2_narr = (window[2].narration or "")
+
+            ents = extract_grounded_comparison_entities(c0_narr)
+            if not ents and _COMPARISON_RE.search(c0_narr.lower()):
+                ents = extract_grounded_comparison_entities(f"{c0_narr} {c1_narr}")
+
+            if ents:
+                ent1, ent2 = ents
+                # Extract definitions from adjacent cues
+                def_c1_e1 = extract_grounded_entity_definition(ent1, c1_narr)
+                def_c1_e2 = extract_grounded_entity_definition(ent2, c1_narr)
+                def_c2_e1 = extract_grounded_entity_definition(ent1, c2_narr)
+                def_c2_e2 = extract_grounded_entity_definition(ent2, c2_narr)
+
+                e1_defined = def_c1_e1 or def_c2_e1
+                e2_defined = def_c1_e2 or def_c2_e2
+
+                if e1_defined or e2_defined or (ent1.lower() in c1_narr.lower() and ent2.lower() in c2_narr.lower()) or (ent2.lower() in c1_narr.lower() and ent1.lower() in c2_narr.lower()):
+                    if def_c1_e2 or (ent2.lower() in c1_narr.lower() and ent1.lower() not in c1_narr.lower()):
+                        primary_e1 = ent2
+                        primary_e2 = ent1
+                        val1 = def_c1_e2 or def_c2_e2 or extract_grounded_entity_definition(ent2, c0_narr) or ent2.title()
+                        val2 = def_c2_e1 or def_c1_e1 or extract_grounded_entity_definition(ent1, c0_narr) or ent1.title()
+                    else:
+                        primary_e1 = ent1
+                        primary_e2 = ent2
+                        val1 = def_c1_e1 or def_c2_e1 or extract_grounded_entity_definition(ent1, c0_narr) or ent1.title()
+                        val2 = def_c2_e2 or def_c1_e2 or extract_grounded_entity_definition(ent2, c0_narr) or ent2.title()
+
+                    gid = window[0].visual_group_id or f"vg_{re.sub(r'[^a-zA-Z0-9]', '_', primary_e1.lower())}_vs_{re.sub(r'[^a-zA-Z0-9]', '_', primary_e2.lower())}"
+
+                    for c_idx, c in enumerate(window):
+                        c.visual_group_id = gid
+                        c.visual_type = VisualType.data
+                        c.purpose = VisualPurpose.compare
+                        if c_idx == 0:
+                            h_val = f"{primary_e1.upper()} VS {primary_e2.upper()}"
+                            hl1, hl2 = True, False
+                        elif c_idx == 1:
+                            h_val = primary_e1.upper()
+                            hl1, hl2 = True, False
+                        elif c_idx == 2:
+                            h_val = primary_e2.upper()
+                            hl1, hl2 = False, True
+
                         items_val = [
-                            {"label": "PREMIUM", "value": "Ongoing cost to maintain policy", "highlight": True},
-                            {"label": "DEDUCTIBLE", "value": "Your share when making a claim", "highlight": False},
-                        ]
-                    elif c_idx == 1:
-                        h_val = "PREMIUM"
-                        items_val = [
-                            {"label": "PREMIUM", "value": "Ongoing cost to maintain policy", "highlight": True},
-                            {"label": "DEDUCTIBLE", "value": "Your share when making a claim", "highlight": False},
-                        ]
-                    elif c_idx == 2:
-                        h_val = "DEDUCTIBLE"
-                        items_val = [
-                            {"label": "PREMIUM", "value": "Ongoing cost to maintain policy", "highlight": False},
-                            {"label": "DEDUCTIBLE", "value": "Your share when making a claim", "highlight": True},
+                            {"label": primary_e1.upper(), "value": val1, "highlight": hl1},
+                            {"label": primary_e2.upper(), "value": val2, "highlight": hl2},
                         ]
 
-                    c.payload = DataPayload(
-                        template=DataTemplate.comparison,
-                        headline=h_val,
-                        data={
-                            "items": items_val,
-                            "eyebrow": "CONCEPT COMPARISON",
-                        },
-                        layout_archetype="split_compare",
-                        data_intent="category_comparison",
-                        visual_grammar="comparison",
-                    ).model_dump(mode="json")
-                i += 3
-                continue
+                        c.payload = DataPayload(
+                            template=DataTemplate.comparison,
+                            headline=h_val,
+                            data={
+                                "items": items_val,
+                                "eyebrow": "CONCEPT COMPARISON",
+                            },
+                            layout_archetype="split_compare",
+                            data_intent="category_comparison",
+                            visual_grammar="comparison",
+                        ).model_dump(mode="json")
+                    i += 3
+                    continue
         i += 1
 
     # Canonicalize visual groups (VG001, VG002...) for contiguous groups
