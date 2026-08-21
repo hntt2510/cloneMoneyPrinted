@@ -229,12 +229,18 @@ def render_scene_motion(
                 except Exception:
                     pass
 
+    props_payload = dict(scene_spec.props)
+    if scene_spec.animation_plan and "animation_plan" not in props_payload:
+        props_payload["animation_plan"] = scene_spec.animation_plan.model_dump()
+    if scene_spec.layout_archetype and "layout_archetype" not in props_payload:
+        props_payload["layout_archetype"] = scene_spec.layout_archetype
+
     # Prepare spec JSON for Remotion
     spec_dict = {
         "scene_id": scene_spec.scene_id,
         "visual_type": scene_spec.visual_type,
         "template": scene_spec.rendered_template,
-        "props": scene_spec.props,
+        "props": props_payload,
         "duration_in_frames": scene_spec.duration_frames,
         "fps": scene_spec.fps,
         "width": scene_spec.width,
