@@ -216,6 +216,7 @@ class TestG18SemanticHardening(unittest.TestCase):
     def test_two_cue_threshold_sequence_grouping(self) -> None:
         """Validate that a 2-cue threshold sequence ($25k coverage limit vs $40k damage)
         is automatically grouped and adapted into threshold data templates without domain hardcoding.
+        Assert that headline/labels come from narration rather than hardcoded constants.
         """
         cues = [
             TimelineCue(id="C037", order=37, start=128.8, end=133.8, narration="Imagine you have twenty-five thousand dollars of property damage liability coverage,"),
@@ -241,6 +242,62 @@ class TestG18SemanticHardening(unittest.TestCase):
             self.assertEqual(c.payload.get("template"), "threshold")
             self.assertEqual(c.payload.get("data", {}).get("threshold_value"), 25000.0)
             self.assertEqual(c.payload.get("data", {}).get("current_value"), 40000.0)
+            self.assertEqual(c.payload.get("data", {}).get("threshold_label"), "Coverage Limit")
+
+        # Grounded subject extracted from narration
+        self.assertEqual(adapted[0].payload.get("headline"), "PROPERTY DAMAGE LIABILITY")
+        self.assertEqual(adapted[1].payload.get("headline"), "PROPERTY DAMAGE LIABILITY EXCEEDED")
+
+    def test_generic_threshold_sequence_grouping_zero_domain_leakage(self) -> None:
+        """Task 4: Generic threshold test (Server API request limit).
+        Input:
+          "The API request limit is ten thousand requests."
+          "Traffic reaches fifteen thousand requests."
+        Expected:
+          10000 / 15000, threshold template, same group,
+          and zero leakage of: insurance, coverage, property damage, liability.
+        """
+        cues = [
+            TimelineCue(id="C001", order=1, start=0.0, end=3.5, narration="The API request limit is ten thousand requests."),
+            TimelineCue(id="C002", order=2, start=3.5, end=7.0, narration="Traffic reaches fifteen thousand requests."),
+        ]
+        decisions = [
+            VisualCue(id="C001", order=1, visual_type=VisualType.data, purpose=VisualPurpose.explain, start=0.0, end=3.5, narration=cues[0].narration, payload={"template": "number", "headline": "API LIMIT"}),
+            VisualCue(id="C002", order=2, visual_type=VisualType.data, purpose=VisualPurpose.explain, start=3.5, end=7.0, narration=cues[1].narration, payload={"template": "number", "headline": "TRAFFIC"}),
+        ]
+        project = ProjectSpec.model_validate({
+            "schema_version": "1.0",
+            "project": {"title": "API Traffic Monitor", "aspect_ratio": "16:9", "fps": 30},
+            "script": {"subject": "API limits", "script": "The API request limit is ten thousand requests."},
+            "narration": {"mode": "tts"},
+            "production": {"video_source": "pexels"},
+        })
+
+        adapted = _apply_diversity(project, cues, decisions)
+        self.assertIsNotNone(adapted[0].visual_group_id)
+        self.assertEqual(adapted[0].visual_group_id, adapted[1].visual_group_id)
+
+        for c in adapted:
+            self.assertEqual(c.visual_type, VisualType.data)
+            self.assertEqual(c.payload.get("template"), "threshold")
+            self.assertEqual(c.payload.get("data", {}).get("threshold_value"), 10000.0)
+            self.assertEqual(c.payload.get("data", {}).get("current_value"), 15000.0)
+
+            # Grounded threshold label
+            self.assertEqual(c.payload.get("data", {}).get("threshold_label"), "Request Limit")
+
+            # Check for ZERO insurance domain leakage
+            all_text = (
+                str(c.payload.get("headline", "")) + " " +
+                str(c.payload.get("data", {})) + " " +
+                str(c.payload.get("eyebrow", ""))
+            ).lower()
+
+            for forbidden in ["insurance", "coverage", "property damage", "liability"]:
+                self.assertNotIn(forbidden, all_text)
+
+        self.assertIn("API REQUESTS", adapted[0].payload.get("headline", "").upper())
+
 
 
     def test_hard_broll_progression_skips_weak_candidates_and_selects_strong(self) -> None:

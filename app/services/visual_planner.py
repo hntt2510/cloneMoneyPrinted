@@ -26,6 +26,7 @@ from app.services.data_visualization_director import (
     DataVisualizationDirector,
     extract_grounded_comparison_entities,
     extract_grounded_entity_definition,
+    extract_grounded_threshold_labels,
 )
 from app.services.numeric_parser import (
     CanonicalNumericFact,
@@ -758,28 +759,36 @@ def _apply_diversity(
         f0 = extract_canonical_numeric_facts(c0.narration or "")
         f1 = extract_canonical_numeric_facts(c1.narration or "")
         if f0 and f1:
-            is_c0_limit = any(w in n0 for w in ("coverage", "limit", "cap", "threshold", "maximum", "policy limit"))
-            is_c1_actual = any(w in n1 for w in ("damage", "cause", "claim", "actual", "cost", "loss", "exceed", "covered damage"))
-            is_c1_limit = any(w in n1 for w in ("coverage", "limit", "cap", "threshold", "maximum", "policy limit"))
-            is_c0_actual = any(w in n0 for w in ("damage", "cause", "claim", "actual", "cost", "loss", "exceed", "covered damage"))
+            is_c0_limit = any(w in n0 for w in ("coverage", "limit", "cap", "threshold", "maximum", "quota", "budget", "allowance", "ceiling"))
+            is_c1_actual = any(w in n1 for w in ("damage", "cause", "claim", "actual", "cost", "loss", "exceed", "reach", "reaches", "traffic", "spending", "usage", "load", "files", "transactions"))
+            is_c1_limit = any(w in n1 for w in ("coverage", "limit", "cap", "threshold", "maximum", "quota", "budget", "allowance", "ceiling"))
+            is_c0_actual = any(w in n0 for w in ("damage", "cause", "claim", "actual", "cost", "loss", "exceed", "reach", "reaches", "traffic", "spending", "usage", "load", "files", "transactions"))
 
             if (is_c0_limit and is_c1_actual) or (is_c0_actual and is_c1_limit):
                 if is_c0_limit:
+                    limit_cue, act_cue = c0, c1
                     limit_fact, act_fact = f0[0], f1[0]
                 else:
+                    limit_cue, act_cue = c1, c0
                     limit_fact, act_fact = f1[0], f0[0]
 
-                gid = c0.visual_group_id or c1.visual_group_id or "vg_coverage_threshold"
+                thresh_info = extract_grounded_threshold_labels(limit_cue.narration or "", act_cue.narration or "")
+                subj = thresh_info["subject"]
+                t_label = thresh_info["threshold_label"]
+
+                gid = c0.visual_group_id or c1.visual_group_id or f"vg_{re.sub(r'[^a-zA-Z0-9]', '_', subj.lower())}_threshold"
+                is_exceeded = act_fact.value > limit_fact.value
+
                 for c_idx, c in enumerate([c0, c1]):
                     c.visual_group_id = gid
                     c.visual_type = VisualType.data
                     c.purpose = VisualPurpose.explain
-                    if c_idx == 0:
-                        h_val = "COVERAGE LIMIT"
-                        eyebrow_val = "POLICY LIMIT"
+                    if c == limit_cue:
+                        h_val = subj
+                        eyebrow_val = t_label.upper()
                     else:
-                        h_val = "DAMAGE EXCEEDS LIMIT" if act_fact.value > limit_fact.value else "COVERED DAMAGE"
-                        eyebrow_val = "LIMIT EXCEEDED" if act_fact.value > limit_fact.value else "WITHIN LIMIT"
+                        h_val = f"{subj} EXCEEDED" if is_exceeded else subj
+                        eyebrow_val = "LIMIT EXCEEDED" if is_exceeded else "WITHIN LIMIT"
 
                     c.payload = DataPayload(
                         template=DataTemplate.threshold,
@@ -787,10 +796,9 @@ def _apply_diversity(
                         data={
                             "threshold_value": limit_fact.value,
                             "threshold_display": limit_fact.display,
-                            "threshold_label": "Coverage Limit",
+                            "threshold_label": t_label,
                             "current_value": act_fact.value,
                             "current_display": act_fact.display,
-                            "subtext": "Property Damage Liability",
                             "eyebrow": eyebrow_val,
                         },
                         layout_archetype="threshold_v2",

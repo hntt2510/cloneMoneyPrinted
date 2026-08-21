@@ -127,6 +127,88 @@ def extract_grounded_entity_definition(entity: str, text: str) -> str | None:
     return None
 
 
+_THRESHOLD_STOPWORDS = {"the", "that", "this", "a", "an", "your", "our", "my", "their", "its", "you", "we", "they", "it", "have", "has", "is", "are", "with", "of", "in", "for", "to", "at", "by", "on"}
+
+
+def _clean_threshold_subject(raw: str) -> str:
+    """Clean extracted threshold subject by stripping lead-ins, stopwords, numbers and units."""
+    s = raw.strip().rstrip(".,;:")
+    s = re.sub(r"^(?:imagine\s+(?:that\s+)?(?:you\s+have\s+)?|suppose\s+(?:that\s+)?(?:you\s+have\s+)?)\s*", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(r"^(?:the|that|your|our|my|a|an|this)\s+", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(r"^(?:have|has|is|are|with)\s+", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(r"^(?:(?:\$|\b\d+[\d,\.]*|\b[a-zA-Z\-]+\b)\s+)+(?:dollars|requests|units|users|percent|%|hours|miles|gb|mb)\s+(?:of\s+|in\s+)?", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(r"^(?:of\s+|in\s+|for\s+)", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(r"\s+(?:limit|cap|threshold|maximum)\b.*$", "", s, flags=re.IGNORECASE).strip()
+    words = [w for w in s.split() if w.lower() not in _THRESHOLD_STOPWORDS or len(s.split()) == 1]
+    if len(words) > 4:
+        words = words[-4:]
+    res = " ".join(words).strip()
+    if res.lower() in _THRESHOLD_STOPWORDS:
+        return ""
+    return res
+
+
+def extract_grounded_threshold_labels(limit_text: str, actual_text: str = "") -> dict[str, str]:
+    """Extract grounded subject headline and threshold label from threshold narration without domain bias."""
+    t = (limit_text or "").strip()
+
+    subject = ""
+    limit_label = "Limit"
+
+    # 1. Pattern: "<subject> (request|requests|budget|coverage|quota|speed|storage|bandwidth|cost) limit/cap/threshold"
+    m1 = re.search(r"([a-zA-Z0-9_\- ]+?)\s+(request|requests|budget|coverage|quota|speed|storage|bandwidth|cost)?\s*(?:limit|cap|threshold|maximum)\b", t, re.IGNORECASE)
+    if m1:
+        raw_subj = _clean_threshold_subject(m1.group(1))
+        lim_type = (m1.group(2) or "").strip()
+        if lim_type:
+            lt_lower = lim_type.lower()
+            if lt_lower in ("request", "requests"):
+                limit_label = "Request Limit"
+                subject = f"{raw_subj} REQUESTS".strip().upper() if raw_subj else "API REQUESTS"
+            elif lt_lower == "coverage":
+                limit_label = "Coverage Limit"
+                subject = raw_subj.upper() if raw_subj else "COVERAGE LIMIT"
+            elif lt_lower == "budget":
+                limit_label = "Budget Limit"
+                subject = f"{raw_subj} BUDGET".strip().upper() if raw_subj else "BUDGET"
+            elif lt_lower == "quota":
+                limit_label = "Quota Limit"
+                subject = f"{raw_subj} QUOTA".strip().upper() if raw_subj else "QUOTA"
+            else:
+                limit_label = f"{lim_type.title()} Limit"
+                subject = f"{raw_subj} {lim_type}".strip().upper() if raw_subj else f"{lim_type.upper()} LIMIT"
+        else:
+            limit_label = "Limit"
+            subject = raw_subj.upper() if raw_subj else "LIMIT"
+
+    # 2. Pattern without the explicit word "limit" (e.g. "twenty-five thousand dollars of property damage liability coverage")
+    if not subject or subject == "LIMIT":
+        m2 = re.search(r"(?:dollars\s+of|of|in)?\s*([a-zA-Z0-9_\- ]+?)\s+(coverage|budget|quota|allowance)\b", t, re.IGNORECASE)
+        if m2:
+            raw_subj = _clean_threshold_subject(m2.group(1))
+            kw = m2.group(2).strip().lower()
+            if kw == "coverage":
+                limit_label = "Coverage Limit"
+                subject = raw_subj.upper() if raw_subj else "COVERAGE LIMIT"
+            elif kw == "budget":
+                limit_label = "Budget Limit"
+                subject = f"{raw_subj} BUDGET".strip().upper() if raw_subj else "BUDGET"
+            elif kw == "quota":
+                limit_label = "Quota Limit"
+                subject = f"{raw_subj} QUOTA".strip().upper() if raw_subj else "QUOTA"
+            else:
+                limit_label = f"{kw.title()} Limit"
+                subject = f"{raw_subj} {kw}".strip().upper()
+
+    if not subject or subject.lower() in _THRESHOLD_STOPWORDS:
+        subject = "LIMIT"
+
+    return {
+        "subject": subject,
+        "threshold_label": limit_label,
+    }
+
+
 class VisualDiversityMemory:
     """Tracks recently used DATA visual grammars and variants to avoid repetitive visual slides."""
 
@@ -664,11 +746,13 @@ class DataVisualizationDirector:
                 limit_val, act_val = f1.value, f0.value
                 limit_disp, act_disp = f1.display, f0.display
 
-            thresh_label = payload_data.get("threshold_label") or "Coverage Limit"
-            subtext_val = payload_data.get("subtext") or "Policy Limit"
+            thresh_info = extract_grounded_threshold_labels(narration)
+            thresh_label = payload_data.get("threshold_label") or thresh_info.get("threshold_label") or "Limit"
+            subtext_val = payload_data.get("subtext")
+            is_exceeded = act_val > limit_val
             props = {
-                "headline": headline,
-                "eyebrow": eyebrow or "POLICY THRESHOLD",
+                "headline": headline or thresh_info.get("subject") or "THRESHOLD",
+                "eyebrow": eyebrow or (f"{thresh_label.upper()} EXCEEDED" if is_exceeded else thresh_label.upper()),
                 "current_value": act_val,
                 "current_display": act_disp,
                 "threshold_value": limit_val,
