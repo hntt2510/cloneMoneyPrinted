@@ -23,10 +23,20 @@ class MotionRenderValidationError(ValueError):
     """Raised when rendered motion output fails resolution, fps, duration, or audio checks."""
 
 
+def serialize_motion_scene_props(scene_spec: MotionSceneSpec) -> dict[str, Any]:
+    """Canonical serialization helper for motion scene props, preserving animation_plan and layout_archetype."""
+    props = dict(scene_spec.props or {})
+    if scene_spec.animation_plan and "animation_plan" not in props:
+        props["animation_plan"] = scene_spec.animation_plan.model_dump()
+    if scene_spec.layout_archetype and "layout_archetype" not in props:
+        props["layout_archetype"] = scene_spec.layout_archetype
+    return props
+
+
 def compute_scene_fingerprint(scene_spec: MotionSceneSpec) -> str:
     """Compute deterministic SHA-256 fingerprint of a single MotionSceneSpec."""
     canonical = {
-        "motion_engine_version": "8",
+        "motion_engine_version": "9",
         "scene_id": scene_spec.scene_id,
         "visual_type": scene_spec.visual_type,
         "rendered_template": scene_spec.rendered_template,
@@ -49,7 +59,7 @@ def compute_group_fingerprint(group_spec: MotionGroupSpec) -> str:
     """Compute deterministic SHA-256 fingerprint of a MotionGroupSpec."""
     base_start = group_spec.start_frame
     canonical = {
-        "motion_engine_version": "8",
+        "motion_engine_version": "9",
         "group_id": group_spec.group_id,
         "duration_frames": group_spec.duration_frames,
         "fps": group_spec.fps,
@@ -229,11 +239,7 @@ def render_scene_motion(
                 except Exception:
                     pass
 
-    props_payload = dict(scene_spec.props)
-    if scene_spec.animation_plan and "animation_plan" not in props_payload:
-        props_payload["animation_plan"] = scene_spec.animation_plan.model_dump()
-    if scene_spec.layout_archetype and "layout_archetype" not in props_payload:
-        props_payload["layout_archetype"] = scene_spec.layout_archetype
+    props_payload = serialize_motion_scene_props(scene_spec)
 
     # Prepare spec JSON for Remotion
     spec_dict = {
@@ -362,10 +368,12 @@ def render_group_motion(
                 "scene_id": s.scene_id,
                 "visual_type": s.visual_type,
                 "template": s.rendered_template,
-                "props": s.props,
+                "props": serialize_motion_scene_props(s),
                 "start_frame": s.start_frame,
                 "end_frame": s.end_frame,
                 "duration_frames": s.duration_frames,
+                "animation_plan": s.animation_plan.model_dump() if s.animation_plan else None,
+                "layout_archetype": s.layout_archetype,
             }
             for s in group_spec.scenes
         ],

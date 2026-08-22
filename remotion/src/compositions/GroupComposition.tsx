@@ -59,6 +59,7 @@ export const GroupComposition: React.FC<GroupCompositionProps> = ({
           >
             <Component
               {...(scene.props || {})}
+              animation_plan={scene.animation_plan || scene.props?.animation_plan}
               theme={theme}
               isGrouped={true}
               isFirstInGroup={isFirstInGroup}

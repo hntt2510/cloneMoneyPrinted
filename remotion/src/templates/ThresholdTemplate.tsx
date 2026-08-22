@@ -422,44 +422,55 @@ export const ThresholdTemplate: React.FC<ThresholdProps> = ({
       </div>
 
       {/* ZONE 3: PHASE E STATUS / CONSEQUENCE BADGE */}
-      {hasOverflow && (
-        <div
-          style={{
-            position: 'absolute',
-            top: trackTop + trackHeight + 90,
-            left: safe.chartZone.x,
-            width: safe.chartZone.width,
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            opacity: resolveSpr,
-            transform: `scale(${interpolate(resolveSpr, [0, 1], [0.9, 1])})`,
-            zIndex: 6,
-          }}
-        >
+      {hasOverflow && (() => {
+        const diffVal = Math.max(0, curVal - thresVal);
+        const sampleDisplay = current_display || threshold_display || '';
+        const hasDollarPrefix = sampleDisplay.trim().startsWith('$');
+        const unitMatch = sampleDisplay.trim().match(/[a-zA-Z%]+$/);
+        const unitSuffix = unitMatch ? ` ${unitMatch[0].toUpperCase()}` : '';
+        const excessDisplay = hasDollarPrefix
+          ? `$${diffVal.toLocaleString()}`
+          : `${diffVal.toLocaleString()}${unitSuffix}`;
+
+        return (
           <div
             style={{
-              display: 'inline-flex',
+              position: 'absolute',
+              top: trackTop + trackHeight + 90,
+              left: safe.chartZone.x,
+              width: safe.chartZone.width,
+              display: 'flex',
+              justifyContent: 'center',
               alignItems: 'center',
-              gap: 10,
-              padding: '10px 24px',
-              borderRadius: 24,
-              backgroundColor: `${statusColor}1A`,
-              border: `1.5px solid ${statusColor}`,
-              color: statusColor,
-              fontSize: isPortrait ? 14 : 17,
-              fontWeight: 900,
-              letterSpacing: '0.06em',
-              textTransform: 'uppercase',
-              boxShadow: `0 0 20px ${statusColor}33`,
-              maxWidth: trackWidth,
-              textAlign: 'center',
+              opacity: resolveSpr,
+              transform: `scale(${interpolate(resolveSpr, [0, 1], [0.9, 1])})`,
+              zIndex: 6,
             }}
           >
-            ⚠️ EXCEEDS {threshold_label.toUpperCase()} BY ${(curVal - thresVal).toLocaleString()}
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '10px 24px',
+                borderRadius: 24,
+                backgroundColor: `${statusColor}1A`,
+                border: `1.5px solid ${statusColor}`,
+                color: statusColor,
+                fontSize: isPortrait ? 14 : 17,
+                fontWeight: 900,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                boxShadow: `0 0 20px ${statusColor}33`,
+                maxWidth: trackWidth,
+                textAlign: 'center',
+              }}
+            >
+              ⚠️ EXCEEDS {threshold_label.toUpperCase()} BY {excessDisplay}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </Layout>
   );
 };
