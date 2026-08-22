@@ -329,7 +329,7 @@ def classify_narration(narration: str) -> VisualType:
         return VisualType.data
 
     t_lower = text.lower()
-    if any(k in t_lower for k in ("deductible vs", "premium vs", "policy limit vs", "cost breakdown", "versus")):
+    if any(k in t_lower for k in ("deductible vs", "premium vs", "policy limit vs", "cost breakdown", "versus", "flows through", "flow through", "pipeline", "architecture", "querying the database", "cache before", "step 1", "step 2")):
         return VisualType.data
 
     return VisualType.broll
@@ -751,6 +751,46 @@ def _apply_diversity(
                         ).model_dump(mode="json")
                     i += 3
                     continue
+
+        # Check 2-cue comparison window
+        if i + 1 < n:
+            c0, c1 = decisions[i], decisions[i + 1]
+            c0_narr = c0.narration or ""
+            c1_narr = c1.narration or ""
+            c1_lower = c1_narr.lower()
+            if any(w in c1_lower for w in ("in contrast", "on the other hand", "whereas", "while", "compared to", "versus")):
+                e0_match = re.search(r"\b([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\s+(?:offers|provides|features|gives|delivers|has|is|enables)\b", c0_narr, re.I)
+                e1_match = re.search(r"\b(?:in contrast,?\s+|on the other hand,?\s+|whereas\s+|while\s+)?([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\s+(?:minimizes|maximizes|reduces|offers|provides|features|gives|delivers|has|is|enables)\b", c1_narr, re.I)
+                ent0 = (e0_match.group(1).strip() if e0_match else c0_narr.split()[0]).upper()
+                ent1 = (e1_match.group(1).strip() if e1_match else (c1_narr.split()[2] if len(c1_narr.split()) > 2 else "ALTERNATIVE")).upper()
+                gid = c0.visual_group_id or c1.visual_group_id or f"vg_{re.sub(r'[^a-zA-Z0-9]', '_', ent0.lower())}_vs_{re.sub(r'[^a-zA-Z0-9]', '_', ent1.lower())}"
+
+                v0_desc = re.sub(r"^.*?\b(?:offers|provides|features|gives|delivers|is|enables)\s+", "", c0_narr, flags=re.I).strip(" .") or ent0.title()
+                v1_desc = re.sub(r"^.*?\b(?:minimizes|maximizes|reduces|offers|provides|features|gives|delivers|is|enables)\s+", "", c1_narr, flags=re.I).strip(" .") or ent1.title()
+
+                for c_idx, c in enumerate([c0, c1]):
+                    c.visual_group_id = gid
+                    c.visual_type = VisualType.data
+                    c.purpose = VisualPurpose.compare
+                    h_val = ent0 if c_idx == 0 else ent1
+                    c_items = [
+                        {"label": ent0, "value": v0_desc.title(), "highlight": (c_idx == 0)},
+                        {"label": ent1, "value": v1_desc.title(), "highlight": (c_idx == 1)},
+                    ]
+                    c.payload = DataPayload(
+                        template=DataTemplate.comparison,
+                        headline=h_val,
+                        data={
+                            "items": c_items,
+                            "eyebrow": "ARCHITECTURE COMPARISON",
+                        },
+                        layout_archetype="split_compare",
+                        data_intent="category_comparison",
+                        visual_grammar="comparison",
+                    ).model_dump(mode="json")
+                i += 2
+                continue
+
         i += 1
 
     # 3. Detect multi-cue threshold sequences (e.g. limit in cue 0, damage in cue 1)
@@ -840,6 +880,13 @@ def _apply_diversity(
             text = (decision.payload.get("headline") or "").strip()
             if not text:
                 decision.payload["headline"] = cue.narration[:120]
+        elif decision.visual_type == VisualType.data:
+            tmpl = decision.payload.get("template")
+            is_single_metric = tmpl in ("number", "counter", "hybrid_broll") or decision.payload.get("data_intent") == "single_metric"
+            if is_single_metric and not decision.visual_group_id:
+                decision.payload["hybrid_eligible"] = True
+                if not decision.payload.get("search_query"):
+                    decision.payload["search_query"] = project.script.subject or cue.narration[:60]
     return decisions
 
 

@@ -9,6 +9,7 @@ Deterministically decides:
 
 from __future__ import annotations
 
+from pathlib import Path
 import re
 from typing import Any
 
@@ -302,11 +303,13 @@ class VisualRendererDirector:
             return decision
 
         # 10. SINGLE METRIC OR HYBRID B-ROLL DATA
-        if (
-            template in ("hybrid_broll", "hybrid")
-            or visual_grammar == VisualGrammar.hybrid_broll
-            or has_strong_broll
-        ):
+        resolved_candidate_path = broll_candidate_path or props.get("asset_path")
+        has_valid_file = bool(resolved_candidate_path and Path(resolved_candidate_path).exists())
+        is_user_provided = bool(props.get("asset_origin") == "user_provided" or props.get("is_user_provided") is True)
+        is_trusted_user_media = is_user_provided and has_valid_file
+        has_confident_stock = bool(broll_candidate_confidence >= 0.70 and has_valid_file)
+
+        if is_trusted_user_media or has_confident_stock:
             decision = RendererDecision(
                 renderer_family=RendererFamily.hybrid_broll_data,
                 storytelling_technique=StorytellingTechnique.hybrid_metric,
@@ -317,21 +320,19 @@ class VisualRendererDirector:
                 density=InformationDensity.low,
                 camera_motion="subtle_push",
                 asset_mode="video",
-                asset_path=broll_candidate_path or props.get("asset_path"),
-                asset_confidence=broll_candidate_confidence or 0.9,
-                reason="Strong B-roll footage paired with metric hero as hybrid_metric",
+                asset_path=resolved_candidate_path,
+                asset_confidence=1.0 if is_trusted_user_media else broll_candidate_confidence,
+                asset_origin="user_provided" if is_trusted_user_media else "stock_search",
+                reason="User-provided local asset paired with data hero" if is_trusted_user_media else f"Stock footage (confidence={broll_candidate_confidence:.2f}) paired with metric hero as hybrid_metric",
             )
         else:
-            # Diversity check for metric presentations
-            delta_keywords = bool(re.search(r"\b(?:grew|increased|dropped|fell|rose|from\s+\$?\d+\s+to\s+\$?\d+)\b", narration, re.I))
-            if delta_keywords:
+            # Diversity check for metric presentations (metric_delta requires grounded change semantics)
+            delta_keywords = bool(re.search(r"\b(?:grew|grown|grow|grows|growing|increase|increased|increases|increasing|rose|risen|rise|rises|rising|jumped|jumps|jumping|surged|surges|surging|climb|climbed|climbs|climbing|fell|fall|falls|falling|dropped|drop|drops|dropping|decrease|decreased|decreases|decreasing|decline|declined|declines|declining|down from|up from|from\s+\$?\d+.*to\s+\$?\d+)\b", narration, re.I))
+            if delta_keywords or props.get("delta_direction"):
                 technique = StorytellingTechnique.metric_delta
                 pattern = CompositionPattern.split_screen
             elif recent_techniques and recent_techniques[-1] == StorytellingTechnique.metric_punch:
                 technique = StorytellingTechnique.metric_context
-                pattern = CompositionPattern.centered_hero
-            elif recent_techniques and recent_techniques[-1] == StorytellingTechnique.metric_context:
-                technique = StorytellingTechnique.metric_delta
                 pattern = CompositionPattern.centered_hero
             else:
                 technique = StorytellingTechnique.metric_punch

@@ -33,6 +33,7 @@ from app.models.motion import (
     RankedListItem,
     RankedListProps,
     RendererDecision,
+    RendererFamily,
     SemanticDataIntent,
     StackedBarProps,
     StackedBarSegment,
@@ -58,21 +59,26 @@ def _parse_float(val: Any) -> float | None:
     if isinstance(val, (int, float)):
         return float(val)
     if isinstance(val, str):
-        cleaned = val.strip()
-        if not cleaned:
+        v_str = val.strip()
+        if not v_str:
             return None
-        # Remove currency symbols ($ and others like €£¥), commas, spaces
-        cleaned = re.sub(r"[\$, €£¥]", "", cleaned).strip()
+        # Check special time units like ms / s first
+        if v_str.lower().endswith("ms") or v_str.lower().endswith("sec") or v_str.lower().endswith("s"):
+            pure = re.search(r"[-+]?\d*\.?\d+", v_str)
+            if pure:
+                try:
+                    return float(pure.group(0))
+                except ValueError:
+                    return None
+        cleaned = re.sub(r"[^\d\.\-kmgtbKMGTB]", "", v_str)
         if not cleaned:
+            pure = re.search(r"[-+]?\d*\.?\d+", v_str)
+            if pure:
+                try:
+                    return float(pure.group(0))
+                except ValueError:
+                    return None
             return None
-
-        # Check percentage
-        if cleaned.endswith("%"):
-            num_part = cleaned[:-1].strip()
-            try:
-                return float(num_part)
-            except ValueError:
-                return None
 
         # Check scale suffixes K, M, B (case-insensitive)
         multiplier = 1.0
@@ -838,14 +844,28 @@ def normalize_motion_spec(
         data_panel_payload = (
             data.get("data_panel")
             or raw_payload.get("data_panel")
-            or {k: v for k, v in data.items() if k not in ("asset_path", "broll_path", "asset_mode", "layout", "broll_confidence")}
+            or {k: v for k, v in data.items() if k not in ("asset_path", "broll_path", "asset_mode", "layout", "broll_confidence", "asset_origin")}
         )
         layout_mode = str(data.get("layout") or raw_payload.get("layout") or "asset_left_data_right").strip()
         asset_mode_val = str(data.get("asset_mode") or raw_payload.get("asset_mode") or "video").strip()
         eyebrow_val = data.get("eyebrow") or raw_payload.get("eyebrow")
         subtext_val = data.get("subtext") or raw_payload.get("subtext")
+        is_user_provided = bool(
+            data.get("asset_origin") == "user_provided"
+            or raw_payload.get("asset_origin") == "user_provided"
+            or data.get("is_user_provided") is True
+        )
+        broll_conf = float(
+            raw_payload.get("broll_confidence", 0.0)
+            or data.get("broll_confidence", 0.0)
+            or raw_payload.get("asset_confidence", 0.0)
+            or data.get("asset_confidence", 0.0)
+            or 0.0
+        )
+        has_confident_stock = bool(broll_conf >= 0.70 and asset_exists)
+        is_trusted_user_media = bool(is_user_provided and asset_exists)
 
-        if asset_exists:
+        if is_trusted_user_media or has_confident_stock:
             props_dict = HybridAssetProps(
                 headline=headline,
                 asset_path=raw_asset_path,
@@ -853,6 +873,8 @@ def normalize_motion_spec(
                 layout=layout_mode,
                 eyebrow=eyebrow_val,
                 asset_mode=asset_mode_val,
+                asset_origin="user_provided" if is_trusted_user_media else "stock_search",
+                asset_confidence=1.0 if is_trusted_user_media else broll_conf,
                 subtext=subtext_val,
             ).model_dump(mode="json")
             rendered_template = "hybrid_broll"
@@ -878,7 +900,7 @@ def normalize_motion_spec(
                     subtext=subtext_val,
                     eyebrow=eyebrow_val,
                 ).model_dump(mode="json")
-                fallback_reason = "Hybrid B-roll asset missing or not found on disk; fell back to editorial number"
+                fallback_reason = f"Hybrid B-roll asset missing or confidence {broll_conf:.2f} below threshold 0.70; fell back to editorial number"
                 data_intent = SemanticDataIntent.single_metric
                 visual_grammar = VisualGrammar.metric
             else:
@@ -888,7 +910,7 @@ def normalize_motion_spec(
                     emphasis=str(data.get("emphasis") or "").strip() or None,
                     subtext=subtext_val,
                 ).model_dump(mode="json")
-                fallback_reason = "Hybrid B-roll asset missing or not found on disk; fell back to editorial callout"
+                fallback_reason = f"Hybrid B-roll asset missing or confidence {broll_conf:.2f} below threshold 0.70; fell back to editorial callout"
                 data_intent = SemanticDataIntent.takeaway
                 visual_grammar = VisualGrammar.kinetic_statement
 
@@ -918,6 +940,51 @@ def normalize_motion_spec(
     if rendered_template in ("number", "counter") and props_dict:
         props_dict["eyebrow"] = mc.eyebrow
         props_dict["context_label"] = mc.label
+        narr = cue.narration or ""
+        delta_match = re.search(
+            r"\bfrom\s+(\$?\d+[\d,\.]*\s*(?:%|[a-zA-Z]+)?)\s+to\s+(\$?\d+[\d,\.]*\s*(?:%|[a-zA-Z]+)?)\b",
+            narr,
+            re.I,
+        )
+        if delta_match:
+            b_str, a_str = delta_match.group(1), delta_match.group(2)
+            props_dict["before_value"] = b_str
+            props_dict["after_value"] = a_str
+            b_num = _parse_float(b_str)
+            a_num = _parse_float(a_str)
+            if b_num is not None and a_num is not None:
+                suffix = ""
+                for s_cand in ("%", "ms", "s", "M", "K", "B"):
+                    if a_str.upper().endswith(s_cand.upper()):
+                        suffix = s_cand
+                        break
+                prefix = "$" if "$" in a_str or "$" in b_str else ""
+
+                scale = 1.0
+                if suffix == "M":
+                    scale = 1_000_000.0
+                elif suffix == "K":
+                    scale = 1_000.0
+                elif suffix == "B":
+                    scale = 1_000_000_000.0
+
+                if a_num > b_num:
+                    props_dict["delta_direction"] = "positive"
+                    diff = (a_num - b_num) / scale
+                    props_dict["delta_value"] = f"+{prefix}{diff:g}{suffix}"
+                    props_dict["delta_display"] = f"+{prefix}{diff:g}{suffix}"
+                elif a_num < b_num:
+                    props_dict["delta_direction"] = "negative"
+                    diff = (b_num - a_num) / scale
+                    props_dict["delta_value"] = f"-{prefix}{diff:g}{suffix}"
+                    props_dict["delta_display"] = f"-{prefix}{diff:g}{suffix}"
+                else:
+                    props_dict["delta_direction"] = "neutral"
+        else:
+            if re.search(r"\b(?:grew|grown|grow|increase|increased|increases|increasing|rose|risen|rise|rises|rising|jumped|surged|climb|climbed|up from)\b", narr, re.I):
+                props_dict["delta_direction"] = "positive"
+            elif re.search(r"\b(?:fell|fall|falls|falling|dropped|drop|drops|dropping|decrease|decreased|decreases|decreasing|decline|declined|declines|declining|down from)\b", narr, re.I):
+                props_dict["delta_direction"] = "negative"
 
     layout_archetype = raw_payload.get("layout_archetype") or props_dict.get("variant")
     if not layout_archetype:
@@ -985,12 +1052,29 @@ def normalize_motion_spec(
         duration_frames=duration_frames,
         fps=fps,
         aspect_ratio="9:16" if height > width else "16:9",
-        broll_candidate_confidence=float(raw_payload.get("broll_confidence", 0.0) or 0.0),
-        broll_candidate_path=raw_payload.get("broll_path"),
+        broll_candidate_confidence=float(
+            raw_payload.get("broll_confidence", 0.0)
+            or (data.get("broll_confidence") if isinstance(data, dict) else 0.0)
+            or raw_payload.get("asset_confidence", 0.0)
+            or (data.get("asset_confidence") if isinstance(data, dict) else 0.0)
+            or 0.0
+        ),
+        broll_candidate_path=(
+            raw_payload.get("broll_path")
+            or raw_payload.get("asset_path")
+            or (data.get("asset_path") if isinstance(data, dict) else None)
+            or (data.get("broll_path") if isinstance(data, dict) else None)
+        ),
         is_grouped=bool(cue.visual_group_id),
         visual_group_id=cue.visual_group_id,
     )
     props_dict["renderer_decision"] = renderer_decision.model_dump(mode="json")
+    if renderer_decision.renderer_family == RendererFamily.hybrid_broll_data:
+        rendered_template = "hybrid_broll"
+        fallback_reason = None
+        props_dict["asset_path"] = renderer_decision.asset_path
+        props_dict["asset_origin"] = renderer_decision.asset_origin
+        props_dict["asset_confidence"] = renderer_decision.asset_confidence
 
     return MotionSceneSpec(
         scene_id=cue.id,

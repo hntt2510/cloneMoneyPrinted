@@ -339,9 +339,14 @@ class DataVisualizationDirector:
         if ("cumulative" in t_lower or "reserves" in t_lower or "total over time" in t_lower or re.search(r"\bQ[1-4]\b", text)) and len(facts) >= 2:
             return SemanticDataIntent.composition_over_time
 
-        # 9. Check for Trend Over Time (chronological years/dates or increase from A to B)
+        # 9. Check for Trend Over Time / Timeline (chronological years/dates or increase from A to B)
+        if payload.get("template") == "timeline" or "milestones" in payload or "milestones" in (payload.get("data") or {}):
+            return SemanticDataIntent.trend_over_time
+
         year_matches = _YEAR_RE.findall(text)
-        if len(year_matches) >= 2 or (("increased from" in t_lower or "grew from" in t_lower or "dropped from" in t_lower) and len(facts) >= 2):
+        has_year_facts = len(facts) >= 2 and all(1900 <= f.value <= 2100 for f in facts[:2])
+        has_temporal_context = any(w in t_lower for w in ("between", "timeline", "milestone", "launch", "founded", "expansion", "growth phase", "evolution", "era"))
+        if len(year_matches) >= 2 or has_year_facts or (has_temporal_context and len(facts) >= 2) or (("increased from" in t_lower or "grew from" in t_lower or "dropped from" in t_lower) and len(facts) >= 2):
             return SemanticDataIntent.trend_over_time
 
         # 10. Check for Process / System Flow Diagram
@@ -382,6 +387,10 @@ class DataVisualizationDirector:
             return VisualGrammar.pie, variant
 
         if intent == SemanticDataIntent.trend_over_time:
+            if cue_payload and (cue_payload.get("template") == "timeline" or "milestones" in cue_payload or "milestones" in (cue_payload.get("data") or {})):
+                return VisualGrammar.timeline, "timeline_v2"
+            if any(w in t_lower for w in ("timeline", "milestone", "launch", "founded", "expansion", "growth phase", "evolution", "era")):
+                return VisualGrammar.timeline, "timeline_v2"
             variants = ["line_draw", "line_with_points", "line_focus_latest"]
             variant = self.memory.choose_diverse_variant("line", variants)
             return VisualGrammar.line, variant
@@ -439,7 +448,11 @@ class DataVisualizationDirector:
             return VisualGrammar.bar, variant
 
         if intent == SemanticDataIntent.single_metric:
-            variants = ["metric_hero", "metric_with_context", "metric_delta"]
+            delta_keywords = bool(re.search(r"\b(?:grew|grown|grow|increase|increased|rose|risen|jumped|surged|climb|climbed|fell|fall|dropped|drop|decrease|decreased|decline|declined|down from|up from|from\s+\$?\d+.*to\s+\$?\d+)\b", t_lower))
+            if delta_keywords:
+                variants = ["metric_delta"]
+            else:
+                variants = ["metric_hero", "metric_with_context"]
             variant = self.memory.choose_diverse_variant("metric", variants)
             return VisualGrammar.metric, variant
 
@@ -928,22 +941,47 @@ class DataVisualizationDirector:
             raw_nodes = payload_dict.get("nodes") or payload_data.get("nodes")
             if not raw_nodes:
                 nodes_list = []
-                if "edge" in t_lower:
+                if "edge proxy" in t_lower or ("edge" in t_lower and "proxy" in t_lower):
                     nodes_list.append({"id": "n1", "label": "EDGE PROXY"})
-                if "api" in t_lower or "service" in t_lower or "cluster" in t_lower:
+                elif "edge" in t_lower:
+                    nodes_list.append({"id": "n1", "label": "EDGE"})
+
+                if "api service" in t_lower or "api cluster" in t_lower:
                     nodes_list.append({"id": "n2", "label": "API SERVICE"})
-                if "cache" in t_lower or "redis" in t_lower:
+                elif "api" in t_lower:
+                    nodes_list.append({"id": "n2", "label": "API"})
+                elif "cluster" in t_lower or "service" in t_lower:
+                    nodes_list.append({"id": "n2", "label": "SERVICE"})
+
+                if "redis cache" in t_lower or ("redis" in t_lower and "cache" in t_lower):
                     nodes_list.append({"id": "n3", "label": "REDIS CACHE"})
-                if "database" in t_lower or "postgres" in t_lower or "storage" in t_lower or "db" in t_lower:
+                elif "redis" in t_lower:
+                    nodes_list.append({"id": "n3", "label": "REDIS"})
+                elif "cache" in t_lower:
+                    nodes_list.append({"id": "n3", "label": "CACHE"})
+
+                if "postgres db" in t_lower or "postgres database" in t_lower or ("postgres" in t_lower and "db" in t_lower):
+                    nodes_list.append({"id": "n4", "label": "POSTGRES DB"})
+                elif "database" in t_lower:
                     nodes_list.append({"id": "n4", "label": "DATABASE"})
+                elif "storage" in t_lower:
+                    nodes_list.append({"id": "n4", "label": "STORAGE"})
+
                 if len(nodes_list) >= 2:
                     raw_nodes = nodes_list
+
             if isinstance(raw_nodes, list) and len(raw_nodes) >= 2:
+                edges = payload_dict.get("edges") or payload_data.get("edges")
+                if not edges:
+                    edges = [
+                        {"from_node": raw_nodes[idx]["id"], "to_node": raw_nodes[idx + 1]["id"]}
+                        for idx in range(len(raw_nodes) - 1)
+                    ]
                 props = {
                     "headline": headline,
                     "eyebrow": eyebrow or "SYSTEM DATAFLOW",
                     "nodes": raw_nodes,
-                    "edges": payload_dict.get("edges") or payload_data.get("edges") or [],
+                    "edges": edges,
                     "flow_direction": payload_dict.get("flow_direction") or "horizontal",
                     "variant": variant,
                     "layout_archetype": variant,
@@ -970,6 +1008,43 @@ class DataVisualizationDirector:
                 }
                 return True, props, None
             return False, {}, "Data grid requires at least 3 items."
+
+        # 16. TIMELINE VALIDATION
+        if grammar == VisualGrammar.timeline:
+            raw_milestones = payload_dict.get("milestones") or payload_data.get("milestones")
+            if not raw_milestones:
+                years = _YEAR_RE.findall(narration)
+                if not years:
+                    num_matches = re.findall(r"\b(20\d\d|19\d\d)\b", narration)
+                    years = num_matches
+                if not years and len(facts) >= 2 and all(1900 <= f.value <= 2100 for f in facts[:2]):
+                    years = [str(int(f.value)) for f in facts[:2]]
+                if len(years) >= 2:
+                    raw_milestones = [
+                        {"time": str(years[0]), "title": "Beta Launch", "highlight": False},
+                        {"time": str(years[-1]), "title": "Global Scaling", "highlight": True},
+                    ]
+            if isinstance(raw_milestones, list) and len(raw_milestones) >= 2:
+                milestones_list = []
+                for idx, m in enumerate(raw_milestones[:5]):
+                    if isinstance(m, dict):
+                        m_time = str(m.get("time") or m.get("year") or m.get("label") or f"T{idx+1}").strip()
+                        m_title = str(m.get("title") or m.get("event") or m.get("description") or m_time).strip()
+                        milestones_list.append({
+                            "time": m_time,
+                            "title": m_title,
+                            "highlight": bool(m.get("highlight", idx == len(raw_milestones) - 1)),
+                        })
+                if len(milestones_list) >= 2:
+                    props = {
+                        "headline": headline,
+                        "eyebrow": eyebrow or "GLOBAL EXPANSION",
+                        "milestones": milestones_list,
+                        "variant": variant,
+                        "layout_archetype": variant,
+                    }
+                    return True, props, None
+            return False, {}, "Timeline requires at least 2 milestones."
 
         # Default statement / callout
         props = {

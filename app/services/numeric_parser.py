@@ -135,6 +135,10 @@ def parse_spoken_number_phrase(tokens: list[str]) -> tuple[float, bool, bool] | 
     valid = False
 
     for tok in cleaned_tokens:
+        # Check spoken year syntax (e.g., "twenty twenty-two" -> 2000 + 22 = 2022, "nineteen ninety-nine" -> 1900 + 99 = 1999)
+        if current in (18, 19, 20, 21) and ("-" in tok or tok in _WORD_TENS or (tok in _WORD_UNITS and _WORD_UNITS[tok] > 0)):
+            current *= 100
+
         # Check hyphenated compound (e.g. twenty-five)
         if "-" in tok:
             parts = tok.split("-")
