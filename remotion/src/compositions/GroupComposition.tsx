@@ -2,6 +2,7 @@ import React from 'react';
 import { Sequence, useVideoConfig } from 'remotion';
 import { Layout } from '../components/Layout';
 import { BreakdownGroupMaster, resolveBreakdownData } from '../templates/BreakdownTemplate';
+import { ThresholdGroupMaster } from '../templates/ThresholdTemplate';
 import { getTemplateComponent } from '../templates/registry';
 import { GroupCompositionProps } from '../types';
 
@@ -35,6 +36,28 @@ export const GroupComposition: React.FC<GroupCompositionProps> = ({
           theme={theme}
           durationInFrames={durationInFrames}
           breakdownData={breakdownData}
+        />
+      </Layout>
+    );
+  }
+
+  // Detect if this is a multi-cue threshold group
+  const isThresholdGroup =
+    scenes.length >= 2 &&
+    scenes.every(
+      (s) =>
+        s.template === 'threshold' ||
+        s.props?.layout_archetype === 'threshold_v2' ||
+        s.props?.layout_archetype === 'threshold'
+    );
+
+  if (isThresholdGroup) {
+    return (
+      <Layout theme={theme} isGrouped={true}>
+        <ThresholdGroupMaster
+          scenes={scenes}
+          theme={theme}
+          durationInFrames={durationInFrames}
         />
       </Layout>
     );
