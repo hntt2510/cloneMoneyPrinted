@@ -344,15 +344,23 @@ class DataVisualizationDirector:
         if len(year_matches) >= 2 or (("increased from" in t_lower or "grew from" in t_lower or "dropped from" in t_lower) and len(facts) >= 2):
             return SemanticDataIntent.trend_over_time
 
-        # 10. Check for Before / After
+        # 10. Check for Process / System Flow Diagram
+        if (
+            ("request" in t_lower and "cache" in t_lower and "database" in t_lower)
+            or ("flow" in t_lower and "through" in t_lower and "into" in t_lower)
+            or (payload.get("template") == "diagram" or "nodes" in payload)
+        ):
+            return SemanticDataIntent.sequence
+
+        # 11. Check for Before / After
         if _BEFORE_AFTER_RE.search(t_lower) and ("before" in t_lower or "previously" in t_lower or "old" in t_lower) and ("after" in t_lower or "now" in t_lower or "new" in t_lower) and len(facts) >= 2:
             return SemanticDataIntent.before_after
 
-        # 11. Multi-category comparison or conceptual comparison
+        # 12. Multi-category comparison or conceptual comparison or multi-metric telemetry
         if len(facts) >= 2 or _COMPARISON_RE.search(t_lower) or any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to ", "different from", "unlike", "not the same as", "ongoing cost"]):
             return SemanticDataIntent.category_comparison
 
-        # 12. Single metric fallback
+        # 13. Single metric fallback
         if len(facts) == 1:
             return SemanticDataIntent.single_metric
 
@@ -408,10 +416,17 @@ class DataVisualizationDirector:
             variant = self.memory.choose_diverse_variant("before_after", variants)
             return VisualGrammar.before_after, variant
 
+        if intent == SemanticDataIntent.sequence:
+            return VisualGrammar.diagram, "flow_diagram"
+
         if intent == SemanticDataIntent.breakdown:
             return VisualGrammar.breakdown, "stacked_breakdown"
 
         if intent == SemanticDataIntent.category_comparison:
+            if cue_payload and (cue_payload.get("template") == "data_grid" or "metrics" in cue_payload):
+                return VisualGrammar.data_grid, "data_grid_matrix"
+            if len(facts) >= 4 and any(w in t_lower for w in ("uptime", "latency", "requests", "signals", "telemetry", "error rate", "indicators")):
+                return VisualGrammar.data_grid, "data_grid_matrix"
             if any(w in t_lower for w in [" versus ", " vs ", " vs. ", " compared to ", "different from", "unlike", "not the same as", "ongoing cost", "deductible", "covers", "premium"]):
                 variants = ["split_compare", "compare_two"]
                 variant = self.memory.choose_diverse_variant("comparison", variants)
@@ -907,6 +922,54 @@ class DataVisualizationDirector:
                 "layout_archetype": variant,
             }
             return True, props, None
+
+        # 14. DIAGRAM VALIDATION
+        if grammar == VisualGrammar.diagram:
+            raw_nodes = payload_dict.get("nodes") or payload_data.get("nodes")
+            if not raw_nodes:
+                nodes_list = []
+                if "edge" in t_lower:
+                    nodes_list.append({"id": "n1", "label": "EDGE PROXY"})
+                if "api" in t_lower or "service" in t_lower or "cluster" in t_lower:
+                    nodes_list.append({"id": "n2", "label": "API SERVICE"})
+                if "cache" in t_lower or "redis" in t_lower:
+                    nodes_list.append({"id": "n3", "label": "REDIS CACHE"})
+                if "database" in t_lower or "postgres" in t_lower or "storage" in t_lower or "db" in t_lower:
+                    nodes_list.append({"id": "n4", "label": "DATABASE"})
+                if len(nodes_list) >= 2:
+                    raw_nodes = nodes_list
+            if isinstance(raw_nodes, list) and len(raw_nodes) >= 2:
+                props = {
+                    "headline": headline,
+                    "eyebrow": eyebrow or "SYSTEM DATAFLOW",
+                    "nodes": raw_nodes,
+                    "edges": payload_dict.get("edges") or payload_data.get("edges") or [],
+                    "flow_direction": payload_dict.get("flow_direction") or "horizontal",
+                    "variant": variant,
+                    "layout_archetype": variant,
+                }
+                return True, props, None
+            return False, {}, "Diagram requires at least 2 sequence nodes."
+
+        # 15. DATA GRID VALIDATION
+        if grammar == VisualGrammar.data_grid:
+            raw_items = payload_dict.get("items") or payload_data.get("items")
+            if not raw_items and len(facts) >= 3:
+                raw_items = [
+                    {"label": f"Metric {i + 1}", "value": f.display, "numeric_value": f.value}
+                    for i, f in enumerate(facts[:6])
+                ]
+            if isinstance(raw_items, list) and len(raw_items) >= 3:
+                props = {
+                    "headline": headline,
+                    "eyebrow": eyebrow or "PLATFORM TELEMETRY",
+                    "items": raw_items,
+                    "columns": int(payload_dict.get("columns") or 2),
+                    "variant": variant,
+                    "layout_archetype": variant,
+                }
+                return True, props, None
+            return False, {}, "Data grid requires at least 3 items."
 
         # Default statement / callout
         props = {

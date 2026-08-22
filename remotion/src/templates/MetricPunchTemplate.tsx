@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Background } from '../components/Background';
 import { CameraPush, UnderlineDraw } from '../components/EditorialPrimitives';
@@ -155,68 +155,225 @@ export const MetricPunchTemplate: React.FC<NumberProps> = ({
             />
           </div>
 
-          {/* Punch Hero Metric */}
-          <div
-            style={{
-              display: 'inline-flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              opacity: punchSpr,
-              transform: `scale(${interpolate(punchSpr, [0, 1], [0.88, 1])})`,
-            }}
-          >
+          {/* TECHNIQUE BRANCHING */}
+          {technique === 'metric_context' ? (
+            /* Context Card Mode */
             <div
               style={{
-                fontSize: metricFontSize,
-                fontWeight: 900,
-                lineHeight: 1.05,
-                letterSpacing: '-0.03em',
-                color: theme.primary,
-                textShadow: `0 0 28px ${theme.primary}55`,
+                maxWidth: width * (isPortrait ? 0.90 : 0.65),
+                padding: isPortrait ? '24px 20px' : '36px 48px',
+                borderRadius: 24,
+                backgroundColor: `${theme.surface}E6`,
+                border: `1.5px solid ${theme.surfaceBorder}`,
+                boxShadow: `0 16px 48px rgba(0,0,0,0.4), 0 0 24px ${theme.primary}18`,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                textAlign: 'center',
+                opacity: punchSpr,
+                transform: `scale(${interpolate(punchSpr, [0, 1], [0.92, 1])})`,
               }}
             >
-              {animatedValueStr}
-            </div>
-
-            {/* Kinetic Underline */}
-            <div style={{ width: '85%', maxWidth: 360 }}>
-              <UnderlineDraw progress={underlineProgress} color={theme.accent} height={4} />
-            </div>
-
-            {/* Micro Label / Context */}
-            {label && (
               <div
                 style={{
-                  fontSize: isPortrait ? 13 : 16,
-                  fontWeight: 800,
-                  color: theme.muted,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.10em',
-                  marginTop: 14,
+                  fontSize: metricFontSize * 0.9,
+                  fontWeight: 900,
+                  lineHeight: 1.05,
+                  letterSpacing: '-0.03em',
+                  color: theme.primary,
+                  textShadow: `0 0 24px ${theme.primary}44`,
                 }}
               >
-                {label}
+                {animatedValueStr}
               </div>
-            )}
-          </div>
 
-          {/* Supporting Subtext */}
-          {subtext && (
+              {label && (
+                <div
+                  style={{
+                    display: 'inline-block',
+                    fontSize: isPortrait ? 12 : 14,
+                    fontWeight: 800,
+                    color: theme.accent,
+                    backgroundColor: `${theme.accent}18`,
+                    border: `1px solid ${theme.accent}44`,
+                    padding: '4px 14px',
+                    borderRadius: 20,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.10em',
+                    marginTop: 12,
+                  }}
+                >
+                  {label}
+                </div>
+              )}
+
+              {subtext && (
+                <div
+                  style={{
+                    marginTop: 16,
+                    fontSize: isPortrait ? 14 : 16,
+                    fontWeight: 600,
+                    color: theme.muted,
+                    lineHeight: 1.45,
+                    maxWidth: 540,
+                    opacity: interpolate(frame, [holdStartFrame, holdStartFrame + 12], [0, 1], {
+                      extrapolateLeft: 'clamp',
+                      extrapolateRight: 'clamp',
+                    }),
+                  }}
+                >
+                  {subtext}
+                </div>
+              )}
+            </div>
+          ) : technique === 'metric_delta' ? (
+            /* Delta Change Indicator Mode */
             <div
               style={{
-                maxWidth: 680,
-                marginTop: 20,
-                fontSize: isPortrait ? 14 : 18,
-                fontWeight: 600,
-                color: theme.muted,
-                lineHeight: 1.4,
-                opacity: interpolate(frame, [holdStartFrame, holdStartFrame + 15], [0, 1], {
-                  extrapolateLeft: 'clamp',
-                  extrapolateRight: 'clamp',
-                }),
+                display: 'inline-flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                opacity: punchSpr,
+                transform: `scale(${interpolate(punchSpr, [0, 1], [0.90, 1])})`,
               }}
             >
-              {subtext}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div
+                  style={{
+                    fontSize: metricFontSize,
+                    fontWeight: 900,
+                    lineHeight: 1.05,
+                    letterSpacing: '-0.03em',
+                    color: theme.primary,
+                    textShadow: `0 0 28px ${theme.primary}55`,
+                  }}
+                >
+                  {animatedValueStr}
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 16px',
+                    borderRadius: 24,
+                    backgroundColor: `${theme.accent}22`,
+                    border: `1.5px solid ${theme.accent}`,
+                    color: theme.accent,
+                    fontSize: isPortrait ? 14 : 18,
+                    fontWeight: 900,
+                    letterSpacing: '0.04em',
+                    boxShadow: `0 0 16px ${theme.accent}33`,
+                  }}
+                >
+                  <span>▲</span>
+                  <span>DELTA</span>
+                </div>
+              </div>
+
+              {/* Kinetic Underline */}
+              <div style={{ width: '85%', maxWidth: 380, marginTop: 8 }}>
+                <UnderlineDraw progress={underlineProgress} color={theme.accent} height={4} />
+              </div>
+
+              {label && (
+                <div
+                  style={{
+                    fontSize: isPortrait ? 13 : 16,
+                    fontWeight: 800,
+                    color: theme.muted,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.10em',
+                    marginTop: 14,
+                  }}
+                >
+                  {label}
+                </div>
+              )}
+
+              {subtext && (
+                <div
+                  style={{
+                    maxWidth: 680,
+                    marginTop: 18,
+                    fontSize: isPortrait ? 14 : 18,
+                    fontWeight: 600,
+                    color: theme.muted,
+                    lineHeight: 1.4,
+                    opacity: interpolate(frame, [holdStartFrame, holdStartFrame + 15], [0, 1], {
+                      extrapolateLeft: 'clamp',
+                      extrapolateRight: 'clamp',
+                    }),
+                  }}
+                >
+                  {subtext}
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Default Metric Punch Mode */
+            <div
+              style={{
+                display: 'inline-flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                opacity: punchSpr,
+                transform: `scale(${interpolate(punchSpr, [0, 1], [0.88, 1])})`,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: metricFontSize,
+                  fontWeight: 900,
+                  lineHeight: 1.05,
+                  letterSpacing: '-0.03em',
+                  color: theme.primary,
+                  textShadow: `0 0 28px ${theme.primary}55`,
+                }}
+              >
+                {animatedValueStr}
+              </div>
+
+              {/* Kinetic Underline */}
+              <div style={{ width: '85%', maxWidth: 360 }}>
+                <UnderlineDraw progress={underlineProgress} color={theme.accent} height={4} />
+              </div>
+
+              {/* Micro Label / Context */}
+              {label && (
+                <div
+                  style={{
+                    fontSize: isPortrait ? 13 : 16,
+                    fontWeight: 800,
+                    color: theme.muted,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.10em',
+                    marginTop: 14,
+                  }}
+                >
+                  {label}
+                </div>
+              )}
+
+              {/* Supporting Subtext */}
+              {subtext && (
+                <div
+                  style={{
+                    maxWidth: 680,
+                    marginTop: 20,
+                    fontSize: isPortrait ? 14 : 18,
+                    fontWeight: 600,
+                    color: theme.muted,
+                    lineHeight: 1.4,
+                    opacity: interpolate(frame, [holdStartFrame, holdStartFrame + 15], [0, 1], {
+                      extrapolateLeft: 'clamp',
+                      extrapolateRight: 'clamp',
+                    }),
+                  }}
+                >
+                  {subtext}
+                </div>
+              )}
             </div>
           )}
         </div>

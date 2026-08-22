@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import re
 from typing import Any
 
@@ -16,7 +17,13 @@ from app.models.motion import (
     ComparisonItem,
     ComparisonProps,
     CounterProps,
+    DataGridItem,
+    DataGridProps,
+    DiagramEdge,
+    DiagramNode,
+    DiagramProps,
     GaugeProps,
+    HybridAssetProps,
     LineChartPoint,
     LineChartProps,
     MotionSceneSpec,
@@ -722,6 +729,169 @@ def normalize_motion_spec(
             data_intent = SemanticDataIntent.takeaway
             visual_grammar = VisualGrammar.kinetic_statement
 
+    elif requested_template == "diagram":
+        raw_nodes = data.get("nodes") or raw_payload.get("nodes") or []
+        raw_edges = data.get("edges") or raw_payload.get("edges") or []
+        nodes: list[DiagramNode] = []
+        node_ids: set[str] = set()
+        if isinstance(raw_nodes, list) and 2 <= len(raw_nodes) <= 6:
+            for n in raw_nodes:
+                if isinstance(n, dict) and n.get("id") and n.get("label"):
+                    n_id = str(n["id"]).strip()
+                    n_lbl = str(n["label"]).strip()
+                    if n_id and n_lbl and n_id not in node_ids:
+                        node_ids.add(n_id)
+                        nodes.append(
+                            DiagramNode(
+                                id=n_id,
+                                label=n_lbl,
+                                icon=n.get("icon"),
+                                sublabel=n.get("sublabel"),
+                                highlight=bool(n.get("highlight")),
+                            )
+                        )
+        edges: list[DiagramEdge] = []
+        if isinstance(raw_edges, list):
+            for e in raw_edges:
+                if isinstance(e, dict) and e.get("from_node") and e.get("to_node"):
+                    fn = str(e["from_node"]).strip()
+                    tn = str(e["to_node"]).strip()
+                    if fn in node_ids and tn in node_ids:
+                        edges.append(
+                            DiagramEdge(
+                                from_node=fn,
+                                to_node=tn,
+                                label=e.get("label"),
+                                style=str(e.get("style") or "solid"),
+                            )
+                        )
+        if len(nodes) >= 2:
+            flow_dir = str(data.get("flow_direction") or raw_payload.get("flow_direction") or "horizontal").strip().lower()
+            if flow_dir not in ("horizontal", "vertical"):
+                flow_dir = "horizontal"
+            props_dict = DiagramProps(
+                headline=headline,
+                nodes=nodes,
+                edges=edges,
+                eyebrow=data.get("eyebrow") or raw_payload.get("eyebrow"),
+                flow_direction=flow_dir,
+                subtext=data.get("subtext") or raw_payload.get("subtext"),
+            ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.sequence
+            visual_grammar = VisualGrammar.diagram
+            rendered_template = "diagram"
+        else:
+            rendered_template = "callout"
+            fallback_reason = "Diagram template requires 2-6 valid nodes with unique IDs and valid labels"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
+
+    elif requested_template == "data_grid":
+        raw_items = data.get("items") or raw_payload.get("items") or data.get("metrics") or []
+        grid_items: list[DataGridItem] = []
+        if isinstance(raw_items, list) and 3 <= len(raw_items) <= 6:
+            for it in raw_items:
+                if isinstance(it, dict) and (it.get("label") or it.get("title")) and (it.get("value") is not None or it.get("display_value") is not None):
+                    lbl = str(it.get("label") or it.get("title")).strip()
+                    val = str(it.get("value") if it.get("value") is not None else it.get("display_value")).strip()
+                    if lbl and val:
+                        grid_items.append(
+                            DataGridItem(
+                                label=lbl,
+                                value=val,
+                                numeric_value=_parse_float(it.get("numeric_value") if it.get("numeric_value") is not None else val),
+                                unit=it.get("unit"),
+                                status=it.get("status"),
+                                subtext=it.get("subtext"),
+                                highlight=bool(it.get("highlight")),
+                            )
+                        )
+        if len(grid_items) >= 3:
+            cols = _parse_int(data.get("columns") or raw_payload.get("columns")) or 2
+            if cols < 2 or cols > 3:
+                cols = 2
+            props_dict = DataGridProps(
+                headline=headline,
+                items=grid_items,
+                columns=cols,
+                eyebrow=data.get("eyebrow") or raw_payload.get("eyebrow"),
+                subtext=data.get("subtext") or raw_payload.get("subtext"),
+            ).model_dump(mode="json")
+            data_intent = SemanticDataIntent.category_comparison
+            visual_grammar = VisualGrammar.data_grid
+            rendered_template = "data_grid"
+        else:
+            rendered_template = "callout"
+            fallback_reason = "Data grid template requires 3-6 valid items with labels and values"
+            data_intent = SemanticDataIntent.takeaway
+            visual_grammar = VisualGrammar.kinetic_statement
+
+    elif requested_template in ("hybrid_broll", "hybrid"):
+        raw_asset_path = str(
+            data.get("asset_path")
+            or data.get("broll_path")
+            or raw_payload.get("broll_path")
+            or raw_payload.get("asset_path")
+            or ""
+        ).strip()
+        asset_exists = bool(raw_asset_path and Path(raw_asset_path).exists())
+        data_panel_payload = (
+            data.get("data_panel")
+            or raw_payload.get("data_panel")
+            or {k: v for k, v in data.items() if k not in ("asset_path", "broll_path", "asset_mode", "layout", "broll_confidence")}
+        )
+        layout_mode = str(data.get("layout") or raw_payload.get("layout") or "asset_left_data_right").strip()
+        asset_mode_val = str(data.get("asset_mode") or raw_payload.get("asset_mode") or "video").strip()
+        eyebrow_val = data.get("eyebrow") or raw_payload.get("eyebrow")
+        subtext_val = data.get("subtext") or raw_payload.get("subtext")
+
+        if asset_exists:
+            props_dict = HybridAssetProps(
+                headline=headline,
+                asset_path=raw_asset_path,
+                data_panel=data_panel_payload,
+                layout=layout_mode,
+                eyebrow=eyebrow_val,
+                asset_mode=asset_mode_val,
+                subtext=subtext_val,
+            ).model_dump(mode="json")
+            rendered_template = "hybrid_broll"
+            visual_grammar = VisualGrammar.hybrid_broll
+            data_intent = SemanticDataIntent.single_metric
+        else:
+            # Fallback to equivalent editorial DATA composition
+            val_in_panel = (
+                data_panel_payload.get("value")
+                or data_panel_payload.get("amount")
+                or data_panel_payload.get("pct")
+                or data.get("value")
+            )
+            if val_in_panel is not None and str(val_in_panel).strip():
+                rendered_template = "number"
+                props_dict = NumberProps(
+                    headline=headline,
+                    value=str(val_in_panel).strip(),
+                    numeric_value=_parse_float(data_panel_payload.get("numeric_value") or val_in_panel),
+                    prefix=data_panel_payload.get("prefix"),
+                    suffix=data_panel_payload.get("suffix"),
+                    label=data_panel_payload.get("label") or data.get("label"),
+                    subtext=subtext_val,
+                    eyebrow=eyebrow_val,
+                ).model_dump(mode="json")
+                fallback_reason = "Hybrid B-roll asset missing or not found on disk; fell back to editorial number"
+                data_intent = SemanticDataIntent.single_metric
+                visual_grammar = VisualGrammar.metric
+            else:
+                rendered_template = "callout"
+                props_dict = CalloutProps(
+                    headline=headline,
+                    emphasis=str(data.get("emphasis") or "").strip() or None,
+                    subtext=subtext_val,
+                ).model_dump(mode="json")
+                fallback_reason = "Hybrid B-roll asset missing or not found on disk; fell back to editorial callout"
+                data_intent = SemanticDataIntent.takeaway
+                visual_grammar = VisualGrammar.kinetic_statement
+
     elif requested_template == "callout":
         emphasis = _get_first_present(data, ["emphasis", "highlight", "value", "amount", "pct"])
         props_dict = CalloutProps(
@@ -789,6 +959,12 @@ def normalize_motion_spec(
             layout_archetype = "threshold_v2"
         elif rendered_template == "timeline":
             layout_archetype = "timeline_v2"
+        elif rendered_template == "diagram":
+            layout_archetype = "flow_diagram"
+        elif rendered_template == "data_grid":
+            layout_archetype = "data_grid_matrix"
+        elif rendered_template == "hybrid_broll":
+            layout_archetype = props_dict.get("layout", "asset_left_data_right")
         elif rendered_template == "callout":
             layout_archetype = "statement_reveal"
         else:

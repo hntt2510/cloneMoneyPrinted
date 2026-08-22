@@ -1,6 +1,7 @@
 import React from 'react';
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Background } from '../components/Background';
+import { describeArc } from '../components/D3Geometry';
 import { Layout } from '../components/Layout';
 import { getSafeArea, fitText, resolveCategoryColor, getItemFocusState } from '../layout';
 import { resolveTheme } from '../theme/theme';
@@ -45,6 +46,8 @@ export const PieTemplate: React.FC<PieProps> = (props) => {
   const radius = size * 0.38;
   const strokeWidth = variant === 'pie_focus' ? radius : (size * 0.12);
   const normalizedRadius = variant === 'pie_focus' ? radius / 2 : radius - strokeWidth / 2;
+  const innerRadius = variant === 'pie_focus' ? 0 : Math.max(10, normalizedRadius - strokeWidth / 2);
+  const outerRadius = normalizedRadius + strokeWidth / 2;
   const circumference = 2 * Math.PI * normalizedRadius;
 
   // Base ring entrance
@@ -62,6 +65,7 @@ export const PieTemplate: React.FC<PieProps> = (props) => {
       ? item.percentage
       : (totalValue > 0 ? (rawVal / totalValue) * 100 : 100 / items.length);
     const sliceAngle = (pct / 100) * 360;
+    const startAngle = accumulatedAngle;
     const sliceCircumference = (pct / 100) * circumference;
 
     const sliceSpr = spring({
@@ -86,6 +90,8 @@ export const PieTemplate: React.FC<PieProps> = (props) => {
       item,
       pct,
       color,
+      startAngle,
+      sliceAngle,
       sliceCircumference,
       currentOffset,
       sliceSpr,
@@ -197,23 +203,23 @@ export const PieTemplate: React.FC<PieProps> = (props) => {
               opacity={baseSpr * 0.6}
             />
 
-            {/* Colored Slices */}
+            {/* Colored D3 Slices */}
             {sliceData.map((s, idx) => {
-              const strokeDash = `${s.sliceCircumference * s.sliceSpr} ${circumference}`;
-              const strokeOffset = -s.currentOffset;
+              const currentEndAngle = s.startAngle + s.sliceAngle * s.sliceSpr;
+              const arcD = describeArc(
+                size / 2,
+                size / 2,
+                outerRadius,
+                s.startAngle,
+                currentEndAngle,
+                innerRadius
+              );
 
               return (
-                <circle
+                <path
                   key={idx}
-                  cx={size / 2}
-                  cy={size / 2}
-                  r={normalizedRadius}
-                  fill="none"
-                  stroke={s.color}
-                  strokeWidth={s.focus.isActive ? strokeWidth * 1.12 : strokeWidth}
-                  strokeDasharray={strokeDash}
-                  strokeDashoffset={strokeOffset}
-                  strokeLinecap={variant === 'segmented_ring' ? 'round' : 'butt'}
+                  d={arcD}
+                  fill={s.color}
                   style={{
                     transition: 'all 0.2s ease',
                     opacity: s.focus.opacity,

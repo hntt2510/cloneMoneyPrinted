@@ -1,5 +1,6 @@
 import React from 'react';
-import { getTemplateComponent } from '../templates/registry';
+import { DataSceneRouter } from '../router/DataSceneRouter';
+import { TextTemplate } from '../templates/TextTemplate';
 import { SceneCompositionProps } from '../types';
 
 export const SceneComposition: React.FC<SceneCompositionProps> = ({
@@ -7,7 +8,16 @@ export const SceneComposition: React.FC<SceneCompositionProps> = ({
   props,
   theme,
 }) => {
-  const layoutArchetype = props?.layout_archetype;
-  const Component = getTemplateComponent(template, layoutArchetype);
-  return <Component {...(props || {})} theme={theme} />;
+  const tpl = (template || '').trim().toLowerCase();
+  if (tpl === 'text') {
+    return <TextTemplate headline="" {...(props || {})} theme={theme} />;
+  }
+
+  return (
+    <DataSceneRouter
+      template={template}
+      props={props || {}}
+      theme={theme}
+    />
+  );
 };

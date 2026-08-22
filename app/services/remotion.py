@@ -38,7 +38,7 @@ def serialize_motion_scene_props(scene_spec: MotionSceneSpec) -> dict[str, Any]:
 def compute_scene_fingerprint(scene_spec: MotionSceneSpec) -> str:
     """Compute deterministic SHA-256 fingerprint of a single MotionSceneSpec."""
     canonical = {
-        "motion_engine_version": "11",
+        "motion_engine_version": "12",
         "scene_id": scene_spec.scene_id,
         "visual_type": scene_spec.visual_type,
         "rendered_template": scene_spec.rendered_template,
@@ -63,7 +63,7 @@ def compute_group_fingerprint(group_spec: MotionGroupSpec) -> str:
     """Compute deterministic SHA-256 fingerprint of a MotionGroupSpec."""
     base_start = group_spec.start_frame
     canonical = {
-        "motion_engine_version": "11",
+        "motion_engine_version": "12",
         "group_id": group_spec.group_id,
         "duration_frames": group_spec.duration_frames,
         "fps": group_spec.fps,
@@ -246,6 +246,14 @@ def render_scene_motion(
 
     props_payload = serialize_motion_scene_props(scene_spec)
 
+    # Validate that hybrid scenes have a valid local asset before rendering
+    if scene_spec.rendered_template == "hybrid_broll":
+        asset_p = str(props_payload.get("asset_path") or "").strip()
+        if not asset_p or not Path(asset_p).exists():
+            raise MotionRenderValidationError(
+                f"Hybrid B-roll scene {scene_spec.scene_id} cannot be rendered without a valid existing asset_path on disk (got: '{asset_p}')"
+            )
+
     # Prepare spec JSON for Remotion
     spec_dict = {
         "scene_id": scene_spec.scene_id,
@@ -358,6 +366,14 @@ def render_group_motion(
     master_path = groups_dir / "master.mp4"
     group_spec_path = groups_dir / "spec.json"
     group_meta_path = groups_dir / "metadata.json"
+
+    for s in group_spec.scenes:
+        if s.rendered_template == "hybrid_broll":
+            asset_p = str(s.props.get("asset_path") or "").strip()
+            if not asset_p or not Path(asset_p).exists():
+                raise MotionRenderValidationError(
+                    f"Group hybrid scene {s.scene_id} cannot be rendered without a valid existing asset_path on disk (got: '{asset_p}')"
+                )
 
     expected_group_fp = compute_group_fingerprint(group_spec)
 

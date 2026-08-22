@@ -28,6 +28,10 @@ const ALLOWED_TEMPLATES = new Set([
   'area_chart',
   'before_after',
   'stacked_bar',
+  'diagram',
+  'data_grid',
+  'hybrid_broll',
+  'metric_punch',
 ]);
 
 function isPlainObject(obj) {
@@ -156,15 +160,52 @@ async function main() {
     process.exit(1);
   }
 
-  // Ensure output directory exists
+  // Ensure output and public directories exist
   const outDir = path.dirname(absoluteOutputPath);
   fs.mkdirSync(outDir, { recursive: true });
+
+  const publicDir = path.resolve(__dirname, '../public');
+  if (!fs.existsSync(publicDir)) {
+    fs.mkdirSync(publicDir, { recursive: true });
+  }
+
+  function resolveLocalAsset(props) {
+    if (!props || !props.asset_path) return;
+    const rawPath = props.asset_path;
+    if (rawPath.startsWith('http://') || rawPath.startsWith('https://') || rawPath.startsWith('data:')) {
+      return;
+    }
+    let cleanPath = rawPath;
+    if (cleanPath.startsWith('file:///')) {
+      cleanPath = cleanPath.slice(8);
+    } else if (cleanPath.startsWith('file://')) {
+      cleanPath = cleanPath.slice(7);
+    }
+    if (fs.existsSync(cleanPath)) {
+      const ext = path.extname(cleanPath) || '.mp4';
+      const baseName = path.basename(cleanPath, ext);
+      const targetName = `asset_${Date.now()}_${baseName}${ext}`;
+      const targetPath = path.join(publicDir, targetName);
+      fs.copyFileSync(cleanPath, targetPath);
+      props.asset_path = targetName;
+    }
+  }
+
+  if (specData.props) {
+    resolveLocalAsset(specData.props);
+  }
+  if (Array.isArray(specData.scenes)) {
+    for (const s of specData.scenes) {
+      if (s.props) resolveLocalAsset(s.props);
+    }
+  }
 
   const entryPoint = path.resolve(__dirname, '../src/index.ts');
 
   // Bundle Remotion project
   const bundleLocation = await bundle({
     entryPoint,
+    publicDir,
     webpackOverride: (config) => config,
   });
 
@@ -188,6 +229,13 @@ async function main() {
     muted: true,
     disallowParallelEncoding: false,
     scale: 1,
+    chromiumOptions: {
+      args: [
+        '--allow-file-access-from-files',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+      ],
+    },
   });
 
   if (!fs.existsSync(absoluteOutputPath) || fs.statSync(absoluteOutputPath).size === 0) {
