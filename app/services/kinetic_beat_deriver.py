@@ -826,3 +826,91 @@ def resolve_threshold_copy_state(
         "consequence_visible": consequence_visible,
         "is_full_conclusion_visible": active_headline_words == [w for w in headline.split() if w],
     }
+
+
+def resolve_threshold_group_state(
+    scenes: list[dict[str, Any]],
+    duration_frames: int,
+    frame: int,
+) -> dict[str, Any]:
+    """Deterministically resolve the multi-cue ThresholdGroupMaster visual & copy state at `frame`."""
+    s0 = scenes[0].get("props", {}) if scenes else {}
+    s1 = scenes[1].get("props", {}) if len(scenes) > 1 else s0
+
+    cur_val = float(s1.get("current_value") if s1.get("current_value") is not None else s0.get("current_value", 0.0))
+    thres_val = float(s0.get("threshold_value") if s0.get("threshold_value") is not None else s1.get("threshold_value", 0.0))
+    has_overflow = cur_val > thres_val
+
+    s0_dur = scenes[0].get("duration_frames", round(duration_frames / 2)) if scenes else round(duration_frames / 2)
+    s1_dur = scenes[1].get("duration_frames", duration_frames - s0_dur) if len(scenes) > 1 else (duration_frames - s0_dur)
+    s1_offset = s0_dur
+
+    plan0 = scenes[0].get("animation_plan") or s0.get("animation_plan") or {}
+    plan1 = (scenes[1].get("animation_plan") or s1.get("animation_plan") or {}) if len(scenes) > 1 else plan0
+
+    beats0 = plan0.get("beats", []) if isinstance(plan0, dict) else (plan0.beats if hasattr(plan0, "beats") else [])
+    beats1 = plan1.get("beats", []) if isinstance(plan1, dict) else (plan1.beats if hasattr(plan1, "beats") else [])
+
+    def _get_kind(b: Any) -> str:
+        k = getattr(b, "kind", None) or (b.get("kind") if isinstance(b, dict) else "")
+        return str(getattr(k, "value", k))
+
+    def _get_id(b: Any) -> str:
+        return str(getattr(b, "id", None) or (b.get("id") if isinstance(b, dict) else ""))
+
+    def _get_start(b: Any) -> int:
+        return int(getattr(b, "start_frame", None) if getattr(b, "start_frame", None) is not None else (b.get("start_frame", 0) if isinstance(b, dict) else 0))
+
+    def _get_end(b: Any) -> int:
+        return int(getattr(b, "end_frame", None) if getattr(b, "end_frame", None) is not None else (b.get("end_frame", 0) if isinstance(b, dict) else 0))
+
+    limit_beat = next((b for b in beats0 if _get_kind(b) == "threshold" or "limit" in _get_id(b)), None)
+    grow_beat = next((b for b in beats1 if "grow" in _get_id(b) or _get_kind(b) == "number"), None)
+    cross_beat = next((b for b in beats1 if "cross" in _get_id(b) or _get_kind(b) == "highlight"), None)
+    resolve_beat = next((b for b in beats1 if "resolve" in _get_id(b) or _get_kind(b) == "resolve"), None)
+
+    phase1_setup = 0
+    phase2_limit = (
+        max(0, _get_start(limit_beat) + round((_get_end(limit_beat) - _get_start(limit_beat)) * 0.35))
+        if limit_beat
+        else round(s0_dur * 0.12)
+    )
+    phase3_grow_start = s1_offset + _get_start(grow_beat) if grow_beat else s1_offset + round(s1_dur * 0.25)
+    phase3_grow_end = s1_offset + _get_end(grow_beat) if grow_beat else s1_offset + round(s1_dur * 0.70)
+    phase4_cross = s1_offset + _get_start(cross_beat) if cross_beat else phase3_grow_end + 3
+    phase5_resolve = s1_offset + _get_start(resolve_beat) if resolve_beat else s1_offset + round(s1_dur * 0.82)
+
+    limit_marker_visible = frame >= phase1_setup
+    limit_value_visible = frame >= phase2_limit
+    track_visible = True
+
+    if frame < phase3_grow_start:
+        base_progress = 0.0
+    elif frame >= phase3_grow_end:
+        base_progress = 1.0
+    else:
+        base_progress = (frame - phase3_grow_start) / max(1, (phase3_grow_end - phase3_grow_start))
+
+    headline0 = str(s0.get("headline") or "THRESHOLD")
+    headline1 = str(s1.get("headline") or headline0)
+
+    show_conclusion = has_overflow and frame >= phase4_cross
+
+    if show_conclusion:
+        active_headline_words = resolve_progressive_copy(headline1, phase4_cross, phase5_resolve, frame, mode="word")
+    else:
+        active_headline_words = resolve_progressive_copy(headline0, phase1_setup, phase2_limit, frame, mode="word")
+
+    consequence_visible = has_overflow and frame >= phase5_resolve
+
+    return {
+        "frame": frame,
+        "limitMarkerVisible": limit_marker_visible,
+        "limitValueVisible": limit_value_visible,
+        "trackVisible": track_visible,
+        "baseProgress": base_progress,
+        "headlineSubject": " ".join(active_headline_words),
+        "headline_words": active_headline_words,
+        "showConclusion": show_conclusion,
+        "consequenceVisible": consequence_visible,
+    }
