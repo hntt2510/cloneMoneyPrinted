@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { AgeMarkerTemplate } from './AgeMarkerTemplate';
 import { AreaChartTemplate } from './AreaChartTemplate';
 import { BarChartTemplate } from './BarChartTemplate';
@@ -7,8 +7,12 @@ import { BreakdownTemplate } from './BreakdownTemplate';
 import { CalloutTemplate } from './CalloutTemplate';
 import { ComparisonTemplate } from './ComparisonTemplate';
 import { CounterTemplate } from './CounterTemplate';
+import { DataGridTemplate } from './DataGridTemplate';
+import { DiagramTemplate } from './DiagramTemplate';
 import { GaugeTemplate } from './GaugeTemplate';
+import { HybridBrollTemplate } from './HybridBrollTemplate';
 import { LineChartTemplate } from './LineChartTemplate';
+import { MetricPunchTemplate } from './MetricPunchTemplate';
 import { NumberTemplate } from './NumberTemplate';
 import { PieTemplate } from './PieTemplate';
 import { RankedListTemplate } from './RankedListTemplate';
@@ -19,7 +23,8 @@ import { TimelineTemplate } from './TimelineTemplate';
 import { WaterfallTemplate } from './WaterfallTemplate';
 
 export const templateRegistry: Record<string, React.FC<any>> = {
-  number: NumberTemplate,
+  number: MetricPunchTemplate,
+  metric_punch: MetricPunchTemplate,
   counter: CounterTemplate,
   comparison: ComparisonTemplate,
   timeline: TimelineTemplate,
@@ -39,6 +44,9 @@ export const templateRegistry: Record<string, React.FC<any>> = {
   area_chart: AreaChartTemplate,
   before_after: BeforeAfterTemplate,
   stacked_bar: StackedBarTemplate,
+  diagram: DiagramTemplate,
+  data_grid: DataGridTemplate,
+  hybrid_broll: HybridBrollTemplate,
 };
 
 export function getTemplateComponent(templateName: string, layoutArchetype?: string): React.FC<any> {
@@ -46,6 +54,18 @@ export function getTemplateComponent(templateName: string, layoutArchetype?: str
   const normalizedLayout = (layoutArchetype || '').trim().toLowerCase();
 
   // Layout-first resolution for editorial components
+  if (normalizedTpl === 'diagram' || normalizedLayout === 'flow_diagram' || normalizedLayout === 'diagram_reveal') {
+    return DiagramTemplate;
+  }
+  if (normalizedTpl === 'data_grid' || normalizedLayout === 'data_grid_matrix' || normalizedLayout === 'data_grid') {
+    return DataGridTemplate;
+  }
+  if (normalizedTpl === 'hybrid_broll' || normalizedLayout.startsWith('asset_') || normalizedLayout === 'hybrid_metric') {
+    return HybridBrollTemplate;
+  }
+  if (normalizedLayout === 'metric_punch' || normalizedLayout === 'metric_context' || normalizedLayout === 'metric_hero') {
+    return MetricPunchTemplate;
+  }
   if (normalizedLayout === 'stacked_breakdown' || normalizedLayout === 'breakdown' || normalizedTpl === 'breakdown') {
     return BreakdownTemplate;
   }
@@ -107,9 +127,6 @@ export function getTemplateComponent(templateName: string, layoutArchetype?: str
   if (normalizedLayout === 'split_compare') {
     return ComparisonTemplate;
   }
-  if (normalizedLayout === 'metric_hero') {
-    return NumberTemplate;
-  }
   if (normalizedLayout === 'bar_chart_v2' || normalizedTpl === 'bar_chart') {
     return BarChartTemplate;
   }
@@ -129,5 +146,5 @@ export function getTemplateComponent(templateName: string, layoutArchetype?: str
     return CalloutTemplate;
   }
 
-  return templateRegistry[normalizedTpl] || CalloutTemplate;
+  return templateRegistry[normalizedTpl] || MetricPunchTemplate;
 }

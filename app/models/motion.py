@@ -344,6 +344,177 @@ class VisualGrammar(str, Enum):
     ranked_list = "ranked_list"
     before_after = "before_after"
     kinetic_statement = "kinetic_statement"
+    diagram = "diagram"
+    data_grid = "data_grid"
+    hybrid_broll = "hybrid_broll"
+
+
+# --- G19 Adaptive Visual Renderer Models ---
+
+class RendererFamily(str, Enum):
+    standard_remotion = "standard_remotion"
+    editorial_remotion = "editorial_remotion"
+    d3_remotion = "d3_remotion"
+    hybrid_broll_data = "hybrid_broll_data"
+    diagram_remotion = "diagram_remotion"
+
+
+class StorytellingTechnique(str, Enum):
+    metric_punch = "metric_punch"
+    metric_context = "metric_context"
+    metric_delta = "metric_delta"
+    progressive_breakdown = "progressive_breakdown"
+    narrative_chart = "narrative_chart"
+    focus_sequence = "focus_sequence"
+    split_comparison = "split_comparison"
+    threshold_story = "threshold_story"
+    timeline_story = "timeline_story"
+    ranked_reveal = "ranked_reveal"
+    diagram_reveal = "diagram_reveal"
+    data_grid = "data_grid"
+    kinetic_statement = "kinetic_statement"
+    hybrid_annotation = "hybrid_annotation"
+    hybrid_metric = "hybrid_metric"
+    hybrid_comparison = "hybrid_comparison"
+
+
+class CompositionPattern(str, Enum):
+    centered_hero = "centered_hero"
+    split_screen = "split_screen"
+    flow_diagram = "flow_diagram"
+    data_grid_matrix = "data_grid_matrix"
+    timeline_track = "timeline_track"
+    threshold_gauge = "threshold_gauge"
+    asset_left_data_right = "asset_left_data_right"
+    asset_right_data_left = "asset_right_data_left"
+    asset_fullbleed_overlay = "asset_fullbleed_overlay"
+    asset_center_annotation = "asset_center_annotation"
+    asset_background_metric = "asset_background_metric"
+
+
+class MotionPattern(str, Enum):
+    punch_in = "punch_in"
+    focus_step = "focus_step"
+    progressive_draw = "progressive_draw"
+    stagger_cascade = "stagger_cascade"
+    divider_reveal = "divider_reveal"
+    camera_push = "camera_push"
+    settled_hold = "settled_hold"
+
+
+class FocusStrategy(str, Enum):
+    all_visible = "all_visible"
+    sequential_focus = "sequential_focus"
+    spotlight_active = "spotlight_active"
+    dim_inactive = "dim_inactive"
+    zoom_active = "zoom_active"
+
+
+class BackgroundTreatment(str, Enum):
+    radial_light = "radial_light"
+    soft_grid = "soft_grid"
+    gradient_field = "gradient_field"
+    spotlight = "spotlight"
+    subtle_texture = "subtle_texture"
+    asset_blur = "asset_blur"
+    neutral_flat = "neutral_flat"
+
+
+class InformationDensity(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
+class RendererDecision(MotionModel):
+    renderer_family: RendererFamily
+    storytelling_technique: StorytellingTechnique
+    composition_pattern: CompositionPattern
+    motion_pattern: MotionPattern
+    focus_strategy: FocusStrategy = FocusStrategy.all_visible
+    background_treatment: BackgroundTreatment = BackgroundTreatment.radial_light
+    density: InformationDensity = InformationDensity.medium
+    camera_motion: str = "subtle_push"
+    asset_mode: str = "none"
+    asset_path: str | None = None
+    asset_confidence: float = 0.0
+    reason: str = ""
+
+
+class DiagramNode(MotionModel):
+    id: str
+    label: str
+    icon: str | None = None
+    sublabel: str | None = None
+    highlight: bool = False
+
+
+class DiagramEdge(MotionModel):
+    from_node: str
+    to_node: str
+    label: str | None = None
+    style: str = "solid"
+
+
+class DiagramProps(MotionModel):
+    headline: str
+    nodes: list[DiagramNode] = Field(min_length=2, max_length=6)
+    edges: list[DiagramEdge] = Field(default_factory=list)
+    eyebrow: str | None = None
+    flow_direction: str = "horizontal"
+    subtext: str | None = None
+
+    @field_validator("headline")
+    @classmethod
+    def require_headline(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("headline must not be empty")
+        return val
+
+
+class DataGridItem(MotionModel):
+    label: str
+    value: str
+    numeric_value: float | None = None
+    unit: str | None = None
+    status: str | None = None
+    subtext: str | None = None
+    highlight: bool = False
+
+
+class DataGridProps(MotionModel):
+    headline: str
+    items: list[DataGridItem] = Field(min_length=3, max_length=6)
+    columns: int = 2
+    eyebrow: str | None = None
+    subtext: str | None = None
+
+    @field_validator("headline")
+    @classmethod
+    def require_headline(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("headline must not be empty")
+        return val
+
+
+class HybridAssetProps(MotionModel):
+    headline: str
+    asset_path: str
+    data_panel: dict[str, Any] = Field(default_factory=dict)
+    layout: str = "asset_left_data_right"
+    eyebrow: str | None = None
+    asset_mode: str = "video"
+    subtext: str | None = None
+
+    @field_validator("headline", "asset_path")
+    @classmethod
+    def require_non_empty(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("must not be empty")
+        return val
 
 
 class PieSliceItem(MotionModel):
@@ -584,6 +755,7 @@ class MotionSceneSpec(MotionModel):
     data_intent: SemanticDataIntent | None = None
     visual_grammar: VisualGrammar | None = None
     grounded_facts: list[dict[str, Any]] = Field(default_factory=list)
+    renderer_decision: RendererDecision | None = None
 
 
 class MotionGroupSpec(MotionModel):

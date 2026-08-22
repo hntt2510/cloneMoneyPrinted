@@ -169,6 +169,9 @@ class DataTemplate(str, Enum):
     area = "area"
     before_after = "before_after"
     stacked_bar = "stacked_bar"
+    diagram = "diagram"
+    data_grid = "data_grid"
+    hybrid_broll = "hybrid_broll"
 
 
 class JobStatus(str, Enum):

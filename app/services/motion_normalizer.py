@@ -25,6 +25,7 @@ from app.models.motion import (
     PieSliceItem,
     RankedListItem,
     RankedListProps,
+    RendererDecision,
     SemanticDataIntent,
     StackedBarProps,
     StackedBarSegment,
@@ -40,6 +41,7 @@ from app.models.project import ProjectSpec, VisualCue, VisualType
 from app.services.data_visualization_director import DataVisualizationDirector
 from app.services.kinetic_beat_deriver import derive_kinetic_beats
 from app.services.motion_copy_extractor import extract_motion_copy, _truncate_motion_headline
+from app.services.visual_renderer_director import VisualRendererDirector
 
 
 
@@ -106,6 +108,7 @@ def normalize_motion_spec(
     project: ProjectSpec,
     timing_source: str | None = None,
     director: DataVisualizationDirector | None = None,
+    renderer_director: VisualRendererDirector | None = None,
 ) -> MotionSceneSpec:
     """Deterministically normalize a VisualCue (DATA or TEXT) into a typed MotionSceneSpec.
 
@@ -796,6 +799,23 @@ def normalize_motion_spec(
 
     props_dict["layout_archetype"] = layout_archetype
 
+    active_renderer_director = renderer_director or VisualRendererDirector()
+    renderer_decision = active_renderer_director.decide_renderer(
+        data_intent=data_intent or SemanticDataIntent.single_metric,
+        visual_grammar=visual_grammar or VisualGrammar.metric,
+        template=rendered_template,
+        props=props_dict,
+        narration=cue.narration or "",
+        duration_frames=duration_frames,
+        fps=fps,
+        aspect_ratio="9:16" if height > width else "16:9",
+        broll_candidate_confidence=float(raw_payload.get("broll_confidence", 0.0) or 0.0),
+        broll_candidate_path=raw_payload.get("broll_path"),
+        is_grouped=bool(cue.visual_group_id),
+        visual_group_id=cue.visual_group_id,
+    )
+    props_dict["renderer_decision"] = renderer_decision.model_dump(mode="json")
+
     return MotionSceneSpec(
         scene_id=cue.id,
         order=cue.order,
@@ -826,4 +846,5 @@ def normalize_motion_spec(
         motion_copy=mc.__dict__,
         data_intent=data_intent or SemanticDataIntent.single_metric,
         visual_grammar=visual_grammar or VisualGrammar.metric,
+        renderer_decision=renderer_decision,
     )

@@ -141,3 +141,168 @@ export const ComparisonTemplate: React.FC<ComparisonProps> = ({
     </Layout>
   );
 };
+
+export interface ComparisonGroupMasterProps {
+  scenes: any[];
+  theme?: Partial<any>;
+  durationInFrames: number;
+}
+
+export const ComparisonGroupMaster: React.FC<ComparisonGroupMasterProps> = ({
+  scenes = [],
+  theme: customTheme,
+  durationInFrames,
+}) => {
+  const frame = useCurrentFrame();
+  const { fps, width, height } = useVideoConfig();
+  const theme = resolveTheme(customTheme);
+  const isPortrait = height > width;
+
+  const s0 = scenes[0]?.props || {};
+  const s1 = scenes[1]?.props || scenes[0]?.props || {};
+
+  const headline0 = s0.headline || 'COMPARISON';
+  const headline1 = s1.headline || headline0;
+
+  const rawItems0 = s0.items || [];
+  const rawItems1 = s1.items || [];
+
+  const item0 = rawItems0[0] || { label: 'ITEM A', value: '' };
+  const item1 = rawItems1[1] || rawItems0[1] || rawItems1[0] || { label: 'ITEM B', value: '' };
+
+  const s0Dur = scenes[0]?.duration_frames || Math.round(durationInFrames / 2);
+  const s1Offset = s0Dur;
+
+  const isCue1 = frame >= s1Offset;
+
+  const isLongValue0 = (item0.value?.length ?? 0) > 8;
+  const isLongValue1 = (item1.value?.length ?? 0) > 8;
+  const labelSize = isPortrait ? 20 : 28;
+  const valueSize0 = isLongValue0 ? (isPortrait ? 22 : 32) : (isPortrait ? 48 : 64);
+  const valueSize1 = isLongValue1 ? (isPortrait ? 22 : 32) : (isPortrait ? 48 : 64);
+
+  return (
+    <Layout theme={theme} isGrouped={true}>
+      <Background variant="split_tone" theme={theme} subtle_motion />
+
+      {/* Header */}
+      <div
+        style={{
+          position: 'absolute',
+          top: '10%',
+          width: '100%',
+          textAlign: 'center',
+          fontSize: isPortrait ? 28 : 42,
+          fontWeight: 800,
+          color: theme.text,
+        }}
+      >
+        {isCue1 ? headline1 : headline0}
+      </div>
+
+      {/* Left Item */}
+      <div
+        style={{
+          position: 'absolute',
+          top: isPortrait ? '25%' : '35%',
+          left: isPortrait ? '10%' : '14%',
+          width: isPortrait ? '80%' : '32%',
+          textAlign: isPortrait ? 'center' : 'left',
+          transform: `scale(${isCue1 ? 0.95 : 1.0})`,
+          transition: 'all 0.3s ease',
+        }}
+      >
+        <div
+          style={{
+            fontSize: labelSize,
+            fontWeight: 800,
+            color: !isCue1 ? theme.accent : theme.muted,
+            textTransform: 'uppercase',
+            marginBottom: 12,
+            letterSpacing: '0.08em',
+          }}
+        >
+          {item0.label}
+        </div>
+        <div
+          style={{
+            fontSize: valueSize0,
+            fontWeight: 900,
+            color: !isCue1 ? theme.text : `${theme.text}AA`,
+            lineHeight: isLongValue0 ? 1.3 : 1.1,
+          }}
+        >
+          {item0.value}
+        </div>
+      </div>
+
+      {/* Divider VS */}
+      <div
+        style={{
+          position: 'absolute',
+          top: isPortrait ? '50%' : '32%',
+          left: isPortrait ? '15%' : '50%',
+          width: isPortrait ? '70%' : 2,
+          height: isPortrait ? 2 : '40%',
+          backgroundColor: theme.surfaceBorder,
+          transform: isPortrait ? 'none' : 'translateX(-50%)',
+        }}
+      >
+        <div
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            background: theme.background,
+            padding: '6px 12px',
+            color: theme.accent,
+            fontWeight: 900,
+            fontSize: 16,
+            borderRadius: 8,
+            border: `1px solid ${theme.surfaceBorder}`,
+          }}
+        >
+          VS
+        </div>
+      </div>
+
+      {/* Right Item */}
+      <div
+        style={{
+          position: 'absolute',
+          top: isPortrait ? '65%' : '35%',
+          right: isPortrait ? undefined : '14%',
+          left: isPortrait ? '10%' : undefined,
+          width: isPortrait ? '80%' : '32%',
+          textAlign: isPortrait ? 'center' : 'right',
+          transform: `scale(${isCue1 ? 1.0 : 0.95})`,
+          transition: 'all 0.3s ease',
+        }}
+      >
+        <div
+          style={{
+            fontSize: labelSize,
+            fontWeight: 800,
+            color: isCue1 ? theme.accent : theme.muted,
+            textTransform: 'uppercase',
+            marginBottom: 12,
+            letterSpacing: '0.08em',
+          }}
+        >
+          {item1.label}
+        </div>
+        <div
+          style={{
+            fontSize: valueSize1,
+            fontWeight: 900,
+            color: isCue1 ? theme.text : `${theme.text}AA`,
+            lineHeight: isLongValue1 ? 1.3 : 1.1,
+          }}
+        >
+          {item1.value}
+        </div>
+      </div>
+    </Layout>
+  );
+};
