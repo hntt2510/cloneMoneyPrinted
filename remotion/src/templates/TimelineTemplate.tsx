@@ -234,3 +234,131 @@ export const TimelineTemplate: React.FC<TimelineProps> = ({
     </Layout>
   );
 };
+
+export interface TimelineGroupMasterProps {
+  scenes: any[];
+  theme?: Partial<any>;
+  durationInFrames: number;
+}
+
+export const TimelineGroupMaster: React.FC<TimelineGroupMasterProps> = ({
+  scenes = [],
+  theme: customTheme,
+  durationInFrames,
+}) => {
+  const frame = useCurrentFrame();
+  const { fps, width, height } = useVideoConfig();
+  const theme = resolveTheme(customTheme);
+  const isPortrait = height > width;
+
+  const allMilestones: any[] = [];
+  scenes.forEach((s) => {
+    const ms = s.props?.milestones || [];
+    ms.forEach((m: any) => {
+      if (!allMilestones.some((existing) => existing.time === m.time && existing.title === m.title)) {
+        allMilestones.push(m);
+      }
+    });
+  });
+
+  const headline = scenes[0]?.props?.headline || 'TIMELINE';
+  const layout = computeTimelineLayout({
+    width,
+    height,
+    headline,
+    milestones: allMilestones.length > 0 ? allMilestones : [{ time: 'STAGE 1', title: 'Start' }, { time: 'STAGE 2', title: 'Complete' }],
+    isPortrait,
+  });
+
+  const { titleBounds, titleFit, milestones: layoutMilestones, trackBounds } = layout;
+  const headerSpr = spring({ frame, fps, config: { damping: 16, stiffness: 120 } });
+  const trackSpr = spring({ frame: Math.max(0, frame - 4), fps, config: { damping: 18, stiffness: 90 } });
+
+  const numItems = layoutMilestones.length;
+
+  return (
+    <Layout theme={theme} isGrouped={true}>
+      <Background variant="soft_grid" theme={theme} subtle_motion />
+
+      {/* Header */}
+      <div
+        style={{
+          position: 'absolute',
+          left: titleBounds.x,
+          top: titleBounds.y,
+          width: titleBounds.width,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          textAlign: 'center',
+          opacity: headerSpr,
+          transform: `translateY(${interpolate(headerSpr, [0, 1], [16, 0])}px)`,
+          zIndex: 10,
+        }}
+      >
+        <h1
+          style={{
+            margin: 0,
+            fontSize: titleFit.fontSize,
+            lineHeight: `${titleFit.lineHeight}px`,
+            fontWeight: 800,
+            color: theme.text,
+            letterSpacing: '-0.02em',
+          }}
+        >
+          {headline}
+        </h1>
+      </div>
+
+      {/* Track & Milestones */}
+      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+        {layoutMilestones.map((m, idx) => {
+          const itemStartFrame = idx === 0 ? 0 : Math.round((idx / Math.max(1, numItems)) * durationInFrames);
+          const spr = spring({
+            frame: Math.max(0, frame - itemStartFrame),
+            fps,
+            config: { damping: 14, stiffness: 120 },
+          });
+
+          return (
+            <div
+              key={idx}
+              style={{
+                position: 'absolute',
+                left: m.cardLeft,
+                top: m.cardTop,
+                width: m.cardWidth,
+                opacity: spr,
+                transform: `scale(${interpolate(spr, [0, 1], [0.85, 1])})`,
+                textAlign: isPortrait ? 'left' : 'center',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: m.timeFit.fontSize,
+                  fontWeight: 900,
+                  color: theme.accent,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  marginBottom: 3,
+                }}
+              >
+                {m.timeFit.lines.join(' ')}
+              </div>
+              <div
+                style={{
+                  fontSize: m.titleFit.fontSize,
+                  lineHeight: `${m.titleFit.lineHeight}px`,
+                  fontWeight: 800,
+                  color: theme.text,
+                }}
+              >
+                {m.titleFit.lines.join(' ')}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Layout>
+  );
+};

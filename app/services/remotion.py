@@ -24,19 +24,21 @@ class MotionRenderValidationError(ValueError):
 
 
 def serialize_motion_scene_props(scene_spec: MotionSceneSpec) -> dict[str, Any]:
-    """Canonical serialization helper for motion scene props, preserving animation_plan and layout_archetype."""
+    """Canonical serialization helper for motion scene props, preserving animation_plan, layout_archetype, and renderer_decision."""
     props = dict(scene_spec.props or {})
     if scene_spec.animation_plan and "animation_plan" not in props:
         props["animation_plan"] = scene_spec.animation_plan.model_dump()
     if scene_spec.layout_archetype and "layout_archetype" not in props:
         props["layout_archetype"] = scene_spec.layout_archetype
+    if scene_spec.renderer_decision and "renderer_decision" not in props:
+        props["renderer_decision"] = scene_spec.renderer_decision.model_dump()
     return props
 
 
 def compute_scene_fingerprint(scene_spec: MotionSceneSpec) -> str:
     """Compute deterministic SHA-256 fingerprint of a single MotionSceneSpec."""
     canonical = {
-        "motion_engine_version": "10",
+        "motion_engine_version": "11",
         "scene_id": scene_spec.scene_id,
         "visual_type": scene_spec.visual_type,
         "rendered_template": scene_spec.rendered_template,
@@ -51,6 +53,8 @@ def compute_scene_fingerprint(scene_spec: MotionSceneSpec) -> str:
     }
     if scene_spec.animation_plan:
         canonical["animation_plan"] = scene_spec.animation_plan.model_dump()
+    if scene_spec.renderer_decision:
+        canonical["renderer_decision"] = scene_spec.renderer_decision.model_dump()
     dumped = json.dumps(canonical, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
 
@@ -59,7 +63,7 @@ def compute_group_fingerprint(group_spec: MotionGroupSpec) -> str:
     """Compute deterministic SHA-256 fingerprint of a MotionGroupSpec."""
     base_start = group_spec.start_frame
     canonical = {
-        "motion_engine_version": "10",
+        "motion_engine_version": "11",
         "group_id": group_spec.group_id,
         "duration_frames": group_spec.duration_frames,
         "fps": group_spec.fps,
@@ -77,6 +81,7 @@ def compute_group_fingerprint(group_spec: MotionGroupSpec) -> str:
                 "rel_end_frame": s.end_frame - base_start,
                 "duration_frames": s.duration_frames,
                 "animation_plan": s.animation_plan.model_dump() if s.animation_plan else None,
+                "renderer_decision": s.renderer_decision.model_dump() if s.renderer_decision else None,
             }
             for s in group_spec.scenes
         ],

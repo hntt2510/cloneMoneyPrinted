@@ -54,6 +54,86 @@ export interface MotionAnimationPlan {
   motion_engine_version?: string;
 }
 
+export type RendererFamily =
+  | "standard_remotion"
+  | "editorial_remotion"
+  | "d3_remotion"
+  | "hybrid_broll_data"
+  | "diagram_remotion";
+
+export type StorytellingTechnique =
+  | "metric_punch"
+  | "metric_context"
+  | "metric_delta"
+  | "progressive_breakdown"
+  | "narrative_chart"
+  | "focus_sequence"
+  | "split_comparison"
+  | "threshold_story"
+  | "timeline_story"
+  | "ranked_reveal"
+  | "diagram_reveal"
+  | "data_grid"
+  | "kinetic_statement"
+  | "hybrid_annotation"
+  | "hybrid_metric"
+  | "hybrid_comparison";
+
+export type CompositionPattern =
+  | "centered_hero"
+  | "split_screen"
+  | "flow_diagram"
+  | "data_grid_matrix"
+  | "timeline_track"
+  | "threshold_gauge"
+  | "asset_left_data_right"
+  | "asset_right_data_left"
+  | "asset_fullbleed_overlay"
+  | "asset_center_annotation"
+  | "asset_background_metric";
+
+export type MotionPattern =
+  | "punch_in"
+  | "focus_step"
+  | "progressive_draw"
+  | "stagger_cascade"
+  | "divider_reveal"
+  | "camera_push"
+  | "settled_hold";
+
+export type FocusStrategy =
+  | "all_visible"
+  | "sequential_focus"
+  | "spotlight_active"
+  | "dim_inactive"
+  | "zoom_active";
+
+export type BackgroundTreatment =
+  | "radial_light"
+  | "soft_grid"
+  | "gradient_field"
+  | "spotlight"
+  | "subtle_texture"
+  | "asset_blur"
+  | "neutral_flat";
+
+export type InformationDensity = "low" | "medium" | "high";
+
+export interface RendererDecision {
+  renderer_family: RendererFamily;
+  storytelling_technique: StorytellingTechnique;
+  composition_pattern: CompositionPattern;
+  motion_pattern: MotionPattern;
+  focus_strategy?: FocusStrategy;
+  background_treatment?: BackgroundTreatment;
+  density?: InformationDensity;
+  camera_motion?: string;
+  asset_mode?: string;
+  asset_path?: string | null;
+  asset_confidence?: number;
+  reason?: string;
+}
+
 export interface BaseTemplateProps {
   theme?: Partial<Theme>;
   isGrouped?: boolean;
@@ -65,6 +145,7 @@ export interface BaseTemplateProps {
   motion_style?: 'subtle' | 'standard' | 'energetic';
   motion_copy?: Record<string, string | null> | null;
   eyebrow?: string | null;
+  renderer_decision?: RendererDecision | null;
 }
 
 export interface NumberProps extends BaseTemplateProps {
@@ -298,6 +379,58 @@ export interface StackedBarProps extends BaseTemplateProps {
   segments: StackedBarSegment[];
   variant?: "stacked_bar_reveal" | "stacked_bar_composition" | string;
   eyebrow?: string | null;
+}
+
+export interface DiagramNode {
+  id: string;
+  label: string;
+  icon?: string | null;
+  sublabel?: string | null;
+  highlight?: boolean;
+}
+
+export interface DiagramEdge {
+  from_node: string;
+  to_node: string;
+  label?: string | null;
+  style?: string;
+}
+
+export interface DiagramProps extends BaseTemplateProps {
+  headline: string;
+  nodes: DiagramNode[];
+  edges?: DiagramEdge[];
+  eyebrow?: string | null;
+  flow_direction?: "horizontal" | "vertical";
+  subtext?: string | null;
+}
+
+export interface DataGridItem {
+  label: string;
+  value: string;
+  numeric_value?: number | null;
+  unit?: string | null;
+  status?: string | null;
+  subtext?: string | null;
+  highlight?: boolean;
+}
+
+export interface DataGridProps extends BaseTemplateProps {
+  headline: string;
+  items: DataGridItem[];
+  columns?: number;
+  eyebrow?: string | null;
+  subtext?: string | null;
+}
+
+export interface HybridAssetProps extends BaseTemplateProps {
+  headline: string;
+  asset_path: string;
+  data_panel: Record<string, any>;
+  layout?: "asset_left_data_right" | "asset_right_data_left" | "asset_fullbleed_overlay" | "asset_center_annotation" | "asset_background_metric" | string;
+  eyebrow?: string | null;
+  asset_mode?: "video" | "image" | string;
+  subtext?: string | null;
 }
 
 export interface SceneCompositionProps {

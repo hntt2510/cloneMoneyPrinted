@@ -1,8 +1,10 @@
-import React from 'react';
+﻿import React from 'react';
 import { Sequence, useVideoConfig } from 'remotion';
 import { Layout } from '../components/Layout';
 import { BreakdownGroupMaster, resolveBreakdownData } from '../templates/BreakdownTemplate';
+import { ComparisonGroupMaster } from '../templates/ComparisonTemplate';
 import { ThresholdGroupMaster } from '../templates/ThresholdTemplate';
+import { TimelineGroupMaster } from '../templates/TimelineTemplate';
 import { getTemplateComponent } from '../templates/registry';
 import { GroupCompositionProps } from '../types';
 
@@ -16,7 +18,7 @@ export const GroupComposition: React.FC<GroupCompositionProps> = ({
     return null;
   }
 
-  // Detect if this is an explicit breakdown group with valid grounded data
+  // 1. Detect if this is an explicit breakdown group with valid grounded data
   const hasBreakdownArchetype = scenes.some(
     (s) =>
       s.props?.layout_archetype === 'stacked_breakdown' ||
@@ -41,7 +43,7 @@ export const GroupComposition: React.FC<GroupCompositionProps> = ({
     );
   }
 
-  // Detect if this is a multi-cue threshold group
+  // 2. Detect if this is a multi-cue threshold group
   const isThresholdGroup =
     scenes.length >= 2 &&
     scenes.every(
@@ -63,7 +65,51 @@ export const GroupComposition: React.FC<GroupCompositionProps> = ({
     );
   }
 
-  // Generic sequential group composition
+  // 3. Detect if this is a multi-cue comparison group
+  const isComparisonGroup =
+    scenes.length >= 2 &&
+    scenes.every(
+      (s) =>
+        s.template === 'comparison' ||
+        s.props?.layout_archetype === 'split_compare' ||
+        s.props?.layout_archetype === 'comparison'
+    );
+
+  if (isComparisonGroup) {
+    return (
+      <Layout theme={theme} isGrouped={true}>
+        <ComparisonGroupMaster
+          scenes={scenes}
+          theme={theme}
+          durationInFrames={durationInFrames}
+        />
+      </Layout>
+    );
+  }
+
+  // 4. Detect if this is a multi-cue timeline group
+  const isTimelineGroup =
+    scenes.length >= 2 &&
+    scenes.every(
+      (s) =>
+        s.template === 'timeline' ||
+        s.props?.layout_archetype === 'timeline_v2' ||
+        s.props?.layout_archetype === 'timeline'
+    );
+
+  if (isTimelineGroup) {
+    return (
+      <Layout theme={theme} isGrouped={true}>
+        <TimelineGroupMaster
+          scenes={scenes}
+          theme={theme}
+          durationInFrames={durationInFrames}
+        />
+      </Layout>
+    );
+  }
+
+  // 5. Generic sequential group composition
   const baseStartFrame = scenes[0].start_frame;
 
   return (
