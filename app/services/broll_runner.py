@@ -9,11 +9,14 @@ from loguru import logger
 from app.models.project import (
     AssetJob,
     BrollManifest,
+    BrollPayload,
     JobStatus,
     ProjectManifest,
     ProjectSpec,
     ProjectStatus,
     SelectedBrollAsset,
+    VisualCue,
+    VisualPurpose,
     VisualType,
 )
 from app.services.broll import BrollAcquisitionError, BrollSelectionContext, acquire_broll_scene
@@ -67,11 +70,37 @@ def run_broll_acquisition(
     failed_scenes: list[dict[str, Any]] = []
     broll_asset_jobs: list[AssetJob] = []
 
-    # Process BROLL cues only - G05 creates AssetJobs ONLY for VisualType.broll
+    # Process BROLL cues and hybrid-eligible DATA cues
     broll_cues = [cue for cue in planned_project.visual_cues if cue.visual_type == VisualType.broll]
+    hybrid_eligible_cues = [
+        cue for cue in planned_project.visual_cues
+        if cue.visual_type == VisualType.data and (
+            cue.payload.get("hybrid_eligible") is True
+            or cue.payload.get("template") in ("hybrid_broll", "hybrid")
+        )
+    ]
     logger.info(
-        f"Starting autonomous B-roll acquisition for task {run_task_id} ({len(broll_cues)} B-roll scenes)"
+        f"Starting autonomous B-roll acquisition for task {run_task_id} ({len(broll_cues)} B-roll scenes, {len(hybrid_eligible_cues)} hybrid-eligible DATA scenes)"
     )
+
+    def make_progress_handler(target_job: AssetJob):
+        def handle_progress(event: dict[str, Any]) -> None:
+            new_status = event.get("status")
+            if new_status:
+                status_str = new_status.value if hasattr(new_status, "value") else str(new_status)
+                target_job.status = new_status
+                history = target_job.metadata.setdefault("status_history", [])
+                if not history or history[-1] != status_str:
+                    history.append(status_str)
+            if "attempt" in event:
+                target_job.attempts = event["attempt"]
+            if "provider" in event:
+                target_job.provider = event["provider"]
+            if "query" in event:
+                target_job.query = event["query"]
+            if "error" in event:
+                target_job.error = event["error"]
+        return handle_progress
 
     for cue in broll_cues:
         job = AssetJob(
@@ -82,26 +111,6 @@ def run_broll_acquisition(
             attempts=0,
             metadata={"status_history": ["planned"]},
         )
-
-        def make_progress_handler(target_job: AssetJob):
-            def handle_progress(event: dict[str, Any]) -> None:
-                new_status = event.get("status")
-                if new_status:
-                    status_str = new_status.value if hasattr(new_status, "value") else str(new_status)
-                    target_job.status = new_status
-                    history = target_job.metadata.setdefault("status_history", [])
-                    if not history or history[-1] != status_str:
-                        history.append(status_str)
-                if "attempt" in event:
-                    target_job.attempts = event["attempt"]
-                if "provider" in event:
-                    target_job.provider = event["provider"]
-                if "query" in event:
-                    target_job.query = event["query"]
-                if "error" in event:
-                    target_job.error = event["error"]
-            return handle_progress
-
         progress_callback = make_progress_handler(job)
 
         try:
@@ -157,7 +166,107 @@ def run_broll_acquisition(
 
         broll_asset_jobs.append(job)
 
-    # In G05, project.assets.json contains ONLY BROLL asset jobs
+    # Acquire B-roll footage for hybrid-eligible DATA cues using existing infrastructure
+    for cue in hybrid_eligible_cues:
+        data_dict = cue.payload.get("data", {}) if isinstance(cue.payload.get("data"), dict) else {}
+        user_asset_path = cue.payload.get("asset_path") or data_dict.get("asset_path")
+        is_user_provided = bool(
+            cue.payload.get("asset_origin") == "user_provided"
+            or data_dict.get("asset_origin") == "user_provided"
+            or cue.payload.get("is_user_provided") is True
+        )
+        if is_user_provided and user_asset_path and Path(user_asset_path).exists():
+            job = AssetJob(
+                id=f"A{cue.order:03d}",
+                scene_id=cue.id,
+                kind="broll",
+                status=JobStatus.ready,
+                attempts=1,
+                source=str(user_asset_path),
+                output=str(user_asset_path),
+                provider="local_user",
+                metadata={"score": 1.0, "asset_origin": "user_provided", "status_history": ["ready"]},
+            )
+            broll_asset_jobs.append(job)
+            continue
+
+        job = AssetJob(
+            id=f"A{cue.order:03d}",
+            scene_id=cue.id,
+            kind="broll",
+            status=JobStatus.planned,
+            attempts=0,
+            metadata={"status_history": ["planned"]},
+        )
+        progress_callback = make_progress_handler(job)
+        broll_query = (
+            cue.payload.get("search_query")
+            or cue.payload.get("headline")
+            or planned_project.script.subject
+            or cue.narration[:60]
+        )
+        broll_cue = VisualCue(
+            id=cue.id,
+            order=cue.order,
+            visual_type=VisualType.broll,
+            purpose=VisualPurpose.context,
+            start=cue.start,
+            end=cue.end,
+            narration=cue.narration,
+            payload=BrollPayload(search_query=broll_query).model_dump(mode="json"),
+        )
+        try:
+            selected_asset = acquire_broll_scene(
+                cue=broll_cue,
+                project=planned_project,
+                task_directory=task_directory,
+                context=context,
+                on_progress=progress_callback,
+            )
+            if selected_asset.score >= 0.70 and Path(selected_asset.rendered_file).exists():
+                ready_assets.append(selected_asset)
+                job.status = JobStatus.ready
+                job.provider = selected_asset.provider
+                job.query = selected_asset.query_used
+                job.source = selected_asset.source_file
+                job.output = selected_asset.rendered_file
+                job.metadata.update(
+                    {
+                        "score": selected_asset.score,
+                        "score_breakdown": selected_asset.score_breakdown,
+                        "source_duration": selected_asset.source_duration,
+                        "trim_start": selected_asset.trim_start,
+                        "trim_end": selected_asset.trim_end,
+                        "scene_duration": selected_asset.scene_duration,
+                        "candidate_metadata": selected_asset.metadata.get("candidate_metadata", {}),
+                    }
+                )
+                cue.payload["asset_path"] = selected_asset.rendered_file
+                cue.payload["broll_path"] = selected_asset.rendered_file
+                cue.payload["broll_confidence"] = selected_asset.score
+                cue.payload["broll_provider"] = selected_asset.provider
+                cue.payload["broll_provenance"] = selected_asset.metadata
+                cue.payload["asset_origin"] = "stock_search"
+            else:
+                logger.info(
+                    f"Hybrid acquisition score ({selected_asset.score:.2f}) < 0.70 for DATA cue {cue.id}; falling back to editorial DATA"
+                )
+                job.status = JobStatus.ready
+                job.metadata.update({"score": selected_asset.score, "hybrid_fallback": "low_confidence"})
+                cue.payload["broll_confidence"] = selected_asset.score
+                cue.payload["hybrid_eligible"] = False
+                cue.payload["asset_path"] = None
+        except Exception as exc:
+            logger.info(f"Hybrid B-roll acquisition skipped for DATA cue {cue.id}: {exc}")
+            job.status = JobStatus.ready
+            job.metadata.update({"error": str(exc), "hybrid_fallback": "acquisition_failed"})
+            cue.payload["broll_confidence"] = 0.0
+            cue.payload["hybrid_eligible"] = False
+            cue.payload["asset_path"] = None
+
+        broll_asset_jobs.append(job)
+
+    # Save updated asset jobs in planned_project
     planned_project.asset_jobs = broll_asset_jobs
 
     # Save project.assets.json

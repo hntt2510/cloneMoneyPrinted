@@ -92,6 +92,11 @@ class NumberProps(MotionModel):
     subtext: str | None = None
     eyebrow: str | None = None
     context_label: str | None = None
+    delta_direction: str | None = None
+    before_value: str | None = None
+    after_value: str | None = None
+    delta_value: str | None = None
+    delta_display: str | None = None
 
     @field_validator("headline", "value")
     @classmethod
@@ -438,6 +443,7 @@ class RendererDecision(MotionModel):
     asset_mode: str = "none"
     asset_path: str | None = None
     asset_confidence: float = 0.0
+    asset_origin: str = "none"
     reason: str = ""
 
 
@@ -506,6 +512,8 @@ class HybridAssetProps(MotionModel):
     layout: str = "asset_left_data_right"
     eyebrow: str | None = None
     asset_mode: str = "video"
+    asset_origin: str | None = None
+    asset_confidence: float | None = None
     subtext: str | None = None
 
     @field_validator("headline", "asset_path")

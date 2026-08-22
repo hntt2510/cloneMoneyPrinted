@@ -234,6 +234,14 @@ class DataPayload(ProjectModel):
     layout_archetype: str | None = None
     data_intent: str | None = None
     visual_grammar: str | None = None
+    hybrid_eligible: bool | None = None
+    asset_path: str | None = None
+    broll_path: str | None = None
+    broll_confidence: float | None = None
+    broll_provider: str | None = None
+    broll_provenance: dict[str, Any] | None = None
+    asset_origin: str | None = None
+    search_query: str | None = None
 
     @field_validator("headline")
     @classmethod

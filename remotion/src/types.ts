@@ -131,6 +131,7 @@ export interface RendererDecision {
   asset_mode?: string;
   asset_path?: string | null;
   asset_confidence?: number;
+  asset_origin?: string;
   reason?: string;
 }
 
@@ -158,6 +159,11 @@ export interface NumberProps extends BaseTemplateProps {
   subtext?: string | null;
   eyebrow?: string | null;
   context_label?: string | null;
+  delta_direction?: 'positive' | 'negative' | 'neutral' | string;
+  before_value?: string | null;
+  after_value?: string | null;
+  delta_value?: string | null;
+  delta_display?: string | null;
 }
 
 export interface CounterProps extends BaseTemplateProps {
@@ -430,6 +436,8 @@ export interface HybridAssetProps extends BaseTemplateProps {
   layout?: "asset_left_data_right" | "asset_right_data_left" | "asset_fullbleed_overlay" | "asset_center_annotation" | "asset_background_metric" | string;
   eyebrow?: string | null;
   asset_mode?: "video" | "image" | string;
+  asset_origin?: "user_provided" | "stock_search" | string | null;
+  asset_confidence?: number | null;
   subtext?: string | null;
 }
 

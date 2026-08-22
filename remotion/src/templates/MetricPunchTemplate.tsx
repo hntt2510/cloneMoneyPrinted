@@ -18,6 +18,11 @@ export const MetricPunchTemplate: React.FC<NumberProps> = ({
   subtext,
   eyebrow,
   context_label,
+  delta_direction,
+  delta_value,
+  delta_display,
+  before_value,
+  after_value,
   theme: customTheme,
   isGrouped = false,
   animation_plan,
@@ -30,6 +35,11 @@ export const MetricPunchTemplate: React.FC<NumberProps> = ({
 
   const technique = renderer_decision?.storytelling_technique || 'metric_punch';
   const bgTreatment = renderer_decision?.background_treatment || 'radial_light';
+
+  const deltaDir = delta_direction || (delta_display?.startsWith('+') ? 'positive' : delta_display?.startsWith('-') ? 'negative' : 'neutral');
+  const deltaArrow = deltaDir === 'positive' ? '↑' : deltaDir === 'negative' ? '↓' : '';
+  const deltaText = delta_display || delta_value || (deltaDir === 'positive' ? 'INCREASE' : deltaDir === 'negative' ? 'DECREASE' : 'DELTA');
+  const deltaColor = deltaDir === 'negative' ? '#F87171' : theme.accent;
 
   // Kinetic beat timing
   const numberBeat = animation_plan?.beats?.find((b) => b.kind === 'number' || b.id.includes('num') || b.id.includes('val'));
@@ -257,17 +267,17 @@ export const MetricPunchTemplate: React.FC<NumberProps> = ({
                     gap: 6,
                     padding: '6px 16px',
                     borderRadius: 24,
-                    backgroundColor: `${theme.accent}22`,
-                    border: `1.5px solid ${theme.accent}`,
-                    color: theme.accent,
+                    backgroundColor: `${deltaColor}22`,
+                    border: `1.5px solid ${deltaColor}`,
+                    color: deltaColor,
                     fontSize: isPortrait ? 14 : 18,
                     fontWeight: 900,
                     letterSpacing: '0.04em',
-                    boxShadow: `0 0 16px ${theme.accent}33`,
+                    boxShadow: `0 0 16px ${deltaColor}33`,
                   }}
                 >
-                  <span>▲</span>
-                  <span>DELTA</span>
+                  {deltaArrow && <span style={{ fontSize: isPortrait ? 16 : 20, lineHeight: 1 }}>{deltaArrow}</span>}
+                  <span>{deltaText}</span>
                 </div>
               </div>
 
