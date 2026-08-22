@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 import unittest
@@ -33,6 +33,7 @@ class TestG19DemoGallery(unittest.TestCase):
             payload={"template": "number", "headline": "ANNUAL RECURRING REVENUE", "data": {"value": "$12,000,000", "numeric_value": 12000000.0, "label": "FY2026 ARR"}},
         )
         spec = normalize_motion_spec(cue, project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(spec.rendered_template, "number")
         out_dir = self.demo_dir / "01_metric_punch_task"
         asset = render_scene_motion(spec, out_dir)
         clip = Path(asset.output_file)
@@ -49,6 +50,7 @@ class TestG19DemoGallery(unittest.TestCase):
             payload={"template": "number", "headline": "NET REVENUE RETENTION", "data": {"value": "124%", "numeric_value": 124.0, "eyebrow": "COHORT RETENTION", "subtext": "Exceeding enterprise benchmark of 115%"}},
         )
         spec = normalize_motion_spec(cue, project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(spec.rendered_template, "number")
         out_dir = self.demo_dir / "02_metric_context_task"
         asset = render_scene_motion(spec, out_dir)
         clip = Path(asset.output_file)
@@ -73,6 +75,8 @@ class TestG19DemoGallery(unittest.TestCase):
         ]
         s1 = normalize_motion_spec(cues[0], project=self.project_16_9, timing_source="user_srt")
         s2 = normalize_motion_spec(cues[1], project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(s1.rendered_template, "breakdown")
+        self.assertEqual(s2.rendered_template, "breakdown")
         group = form_motion_groups([s1, s2])[0]
         out_dir = self.demo_dir / "03_breakdown_task"
         render_group_motion(group, out_dir)
@@ -98,6 +102,8 @@ class TestG19DemoGallery(unittest.TestCase):
         ]
         s1 = normalize_motion_spec(cues[0], project=self.project_16_9, timing_source="user_srt")
         s2 = normalize_motion_spec(cues[1], project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(s1.rendered_template, "comparison")
+        self.assertEqual(s2.rendered_template, "comparison")
         group = form_motion_groups([s1, s2])[0]
         out_dir = self.demo_dir / "04_comparison_task"
         render_group_motion(group, out_dir)
@@ -115,6 +121,7 @@ class TestG19DemoGallery(unittest.TestCase):
             payload={"template": "donut", "headline": "TRAFFIC DISTRIBUTION", "data": {"items": [{"label": "Web App", "value": 55.0}, {"label": "Mobile SDK", "value": 30.0}, {"label": "Partners", "value": 15.0}]}},
         )
         spec = normalize_motion_spec(cue, project=self.project_16_9, timing_source="user_srt")
+        self.assertIn(spec.rendered_template, ("donut", "pie"))
         out_dir = self.demo_dir / "05_donut_task"
         asset = render_scene_motion(spec, out_dir)
         clip = Path(asset.output_file)
@@ -131,6 +138,7 @@ class TestG19DemoGallery(unittest.TestCase):
             payload={"template": "bar_chart", "headline": "QUARTERLY GROWTH", "data": {"items": [{"label": "Q1", "value": 2.4}, {"label": "Q2", "value": 3.8}, {"label": "Q3", "value": 5.1}, {"label": "Q4", "value": 7.6}]}},
         )
         spec = normalize_motion_spec(cue, project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(spec.rendered_template, "bar_chart")
         out_dir = self.demo_dir / "06_bar_task"
         asset = render_scene_motion(spec, out_dir)
         clip = Path(asset.output_file)
@@ -155,6 +163,8 @@ class TestG19DemoGallery(unittest.TestCase):
         ]
         s1 = normalize_motion_spec(cues[0], project=self.project_16_9, timing_source="user_srt")
         s2 = normalize_motion_spec(cues[1], project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(s1.rendered_template, "timeline")
+        self.assertEqual(s2.rendered_template, "timeline")
         group = form_motion_groups([s1, s2])[0]
         out_dir = self.demo_dir / "07_timeline_task"
         render_group_motion(group, out_dir)
@@ -180,6 +190,8 @@ class TestG19DemoGallery(unittest.TestCase):
         ]
         s1 = normalize_motion_spec(cues[0], project=self.project_16_9, timing_source="user_srt")
         s2 = normalize_motion_spec(cues[1], project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(s1.rendered_template, "threshold")
+        self.assertEqual(s2.rendered_template, "threshold")
         group = form_motion_groups([s1, s2])[0]
         out_dir = self.demo_dir / "08_threshold_task"
         render_group_motion(group, out_dir)
@@ -197,6 +209,7 @@ class TestG19DemoGallery(unittest.TestCase):
             payload={"template": "diagram", "headline": "SYSTEM DATAFLOW", "data": {"nodes": [{"id": "n1", "label": "EDGE"}, {"id": "n2", "label": "API"}, {"id": "n3", "label": "CACHE"}, {"id": "n4", "label": "DATABASE"}]}},
         )
         spec = normalize_motion_spec(cue, project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(spec.rendered_template, "diagram")
         out_dir = self.demo_dir / "09_diagram_task"
         asset = render_scene_motion(spec, out_dir)
         clip = Path(asset.output_file)
@@ -213,6 +226,7 @@ class TestG19DemoGallery(unittest.TestCase):
             payload={"template": "data_grid", "headline": "PLATFORM TELEMETRY", "data": {"items": [{"label": "AVAILABILITY", "value": "99.99%"}, {"label": "P99 LATENCY", "value": "24ms"}, {"label": "CONCURRENT USERS", "value": "85,000"}, {"label": "GLOBAL REGIONS", "value": "18"}]}},
         )
         spec = normalize_motion_spec(cue, project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(spec.rendered_template, "data_grid")
         out_dir = self.demo_dir / "10_data_grid_task"
         asset = render_scene_motion(spec, out_dir)
         clip = Path(asset.output_file)
@@ -223,12 +237,14 @@ class TestG19DemoGallery(unittest.TestCase):
         validate_rendered_motion_clip(dest, expected_duration_frames=105, expected_width=1920, expected_height=1080)
 
     def test_11_hybrid_broll_metric(self) -> None:
+        real_asset = str(Path("test/resources/1.png.mp4").resolve())
         cue = VisualCue(
             id="g19_demo_11", order=15, visual_type=VisualType.data, purpose=VisualPurpose.explain,
             start=0.0, end=3.0, narration="Datacenter throughput scales up to one hundred gigabits per second.",
-            payload={"template": "hybrid_broll", "headline": "NETWORK THROUGHPUT", "data": {"value": "100 Gbps", "label": "Backbone Bandwidth", "broll_confidence": 0.90, "broll_path": ""}},
+            payload={"template": "hybrid_broll", "headline": "NETWORK THROUGHPUT", "data": {"value": "100 Gbps", "label": "Backbone Bandwidth", "broll_confidence": 0.90, "asset_path": real_asset, "broll_path": real_asset}},
         )
         spec = normalize_motion_spec(cue, project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(spec.rendered_template, "hybrid_broll")
         out_dir = self.demo_dir / "11_hybrid_metric_task"
         asset = render_scene_motion(spec, out_dir)
         clip = Path(asset.output_file)
@@ -239,12 +255,14 @@ class TestG19DemoGallery(unittest.TestCase):
         validate_rendered_motion_clip(dest, expected_duration_frames=90, expected_width=1920, expected_height=1080)
 
     def test_12_hybrid_broll_annotation(self) -> None:
+        real_asset = str(Path("test/resources/1.png.mp4").resolve())
         cue = VisualCue(
             id="g19_demo_12", order=16, visual_type=VisualType.data, purpose=VisualPurpose.explain,
             start=0.0, end=3.0, narration="Edge nodes cache requests locally to minimize server load.",
-            payload={"template": "hybrid_broll", "headline": "EDGE ACCELERATION", "data": {"value": "94% Hit Rate", "label": "Edge Cache Efficiency", "broll_confidence": 0.85, "broll_path": ""}},
+            payload={"template": "hybrid_broll", "headline": "EDGE ACCELERATION", "data": {"value": "94% Hit Rate", "label": "Edge Cache Efficiency", "broll_confidence": 0.85, "asset_path": real_asset, "broll_path": real_asset}},
         )
         spec = normalize_motion_spec(cue, project=self.project_16_9, timing_source="user_srt")
+        self.assertEqual(spec.rendered_template, "hybrid_broll")
         out_dir = self.demo_dir / "12_hybrid_annotation_task"
         asset = render_scene_motion(spec, out_dir)
         clip = Path(asset.output_file)

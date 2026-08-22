@@ -1,6 +1,7 @@
 import React from 'react';
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Background } from '../components/Background';
+import { createLinearScale, generateSmoothPath } from '../components/D3Geometry';
 import { Layout } from '../components/Layout';
 import { getSafeArea, fitText } from '../layout';
 import { resolveTheme } from '../theme/theme';
@@ -59,15 +60,16 @@ export const LineChartTemplate: React.FC<LineChartProps> = ({
   const plotW = chartW - paddingX * 2;
   const plotH = chartH - paddingBottom - paddingTop;
 
+  const xScale = createLinearScale([0, Math.max(1, pts.length - 1)], [paddingX, paddingX + plotW]);
+  const yScale = createLinearScale([minVal, maxVal], [paddingTop + plotH, paddingTop]);
+
   const coords = pts.map((p, i) => {
-    const x = paddingX + (i / Math.max(1, pts.length - 1)) * plotW;
-    const y = paddingTop + plotH - (((Number(p.y_value) || 0) - minVal) / range) * plotH;
+    const x = xScale(i);
+    const y = yScale(Number(p.y_value) || 0);
     return { x, y, p };
   });
 
-  const pathD = coords.reduce((acc, curr, idx) => {
-    return acc + (idx === 0 ? `M ${curr.x},${curr.y}` : ` L ${curr.x},${curr.y}`);
-  }, '');
+  const pathD = generateSmoothPath(coords);
 
   const totalLength = chartW * 2;
   const drawPct = interpolate(frame, [8, Math.round(durationInFrames * 0.55)], [0, 1], {

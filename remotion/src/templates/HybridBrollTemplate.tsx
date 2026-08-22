@@ -1,5 +1,5 @@
-﻿import React from 'react';
-import { Img, interpolate, spring, useCurrentFrame, useVideoConfig, Video } from 'remotion';
+import React from 'react';
+import { Img, interpolate, OffthreadVideo, spring, staticFile, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Background } from '../components/Background';
 import { CameraPush, StatBadge } from '../components/EditorialPrimitives';
 import { Layout } from '../components/Layout';
@@ -25,6 +25,19 @@ export const HybridBrollTemplate: React.FC<HybridAssetProps> = ({
   const { fps, width, height, durationInFrames } = useVideoConfig();
   const theme = resolveTheme(customTheme);
   const isPortrait = height > width;
+
+  const normalizedAssetSrc = (() => {
+    if (!asset_path) return '';
+    const clean = asset_path.trim();
+    if (clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('data:')) {
+      return clean;
+    }
+    try {
+      return staticFile(clean);
+    } catch {
+      return clean;
+    }
+  })();
 
   const panelSpr = spring({
     frame: Math.max(0, frame - 5),
@@ -86,15 +99,15 @@ export const HybridBrollTemplate: React.FC<HybridAssetProps> = ({
               backgroundColor: theme.surface,
             }}
           >
-            {asset_path && asset_path.endsWith('.mp4') ? (
-              <Video
-                src={asset_path}
+            {normalizedAssetSrc && (normalizedAssetSrc.endsWith('.mp4') || asset_mode === 'video') ? (
+              <OffthreadVideo
+                src={normalizedAssetSrc}
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 volume={0}
               />
-            ) : asset_path ? (
+            ) : normalizedAssetSrc ? (
               <Img
-                src={asset_path}
+                src={normalizedAssetSrc}
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               />
             ) : (

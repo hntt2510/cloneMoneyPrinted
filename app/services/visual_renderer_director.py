@@ -301,8 +301,12 @@ class VisualRendererDirector:
             self.diversity_memory.record(decision)
             return decision
 
-        # 10. SINGLE METRIC (NUMBER / COUNTER / METRIC)
-        if has_strong_broll:
+        # 10. SINGLE METRIC OR HYBRID B-ROLL DATA
+        if (
+            template in ("hybrid_broll", "hybrid")
+            or visual_grammar == VisualGrammar.hybrid_broll
+            or has_strong_broll
+        ):
             decision = RendererDecision(
                 renderer_family=RendererFamily.hybrid_broll_data,
                 storytelling_technique=StorytellingTechnique.hybrid_metric,
@@ -313,8 +317,8 @@ class VisualRendererDirector:
                 density=InformationDensity.low,
                 camera_motion="subtle_push",
                 asset_mode="video",
-                asset_path=broll_candidate_path,
-                asset_confidence=broll_candidate_confidence,
+                asset_path=broll_candidate_path or props.get("asset_path"),
+                asset_confidence=broll_candidate_confidence or 0.9,
                 reason="Strong B-roll footage paired with metric hero as hybrid_metric",
             )
         else:
@@ -323,8 +327,11 @@ class VisualRendererDirector:
             if delta_keywords:
                 technique = StorytellingTechnique.metric_delta
                 pattern = CompositionPattern.split_screen
-            elif props.get("context_label") or props.get("eyebrow") or (recent_techniques and recent_techniques[-1] == StorytellingTechnique.metric_punch):
+            elif recent_techniques and recent_techniques[-1] == StorytellingTechnique.metric_punch:
                 technique = StorytellingTechnique.metric_context
+                pattern = CompositionPattern.centered_hero
+            elif recent_techniques and recent_techniques[-1] == StorytellingTechnique.metric_context:
+                technique = StorytellingTechnique.metric_delta
                 pattern = CompositionPattern.centered_hero
             else:
                 technique = StorytellingTechnique.metric_punch

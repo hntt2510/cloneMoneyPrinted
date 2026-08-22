@@ -18,6 +18,8 @@ logs/
 node_modules
 .remotion
 remotion/.remotion
+remotion/public/*
+!remotion/public/.gitkeep
 # VuePress 默认临时文件目录
 /sites/docs/.vuepress/.temp
 # VuePress 默认缓存目录

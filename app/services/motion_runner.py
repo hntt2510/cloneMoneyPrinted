@@ -27,6 +27,7 @@ from app.services.motion_grouper import form_motion_groups
 from app.services.motion_normalizer import normalize_motion_spec
 from app.services.motion_runner_loader import resolve_project_workspace
 from app.services.remotion import render_group_motion, render_scene_motion
+from app.services.visual_renderer_director import VisualDiversityMemoryV2, VisualRendererDirector
 
 
 def _transition_job(
@@ -117,9 +118,32 @@ def run_motion_render(
         )
         render_jobs[cue.id] = job
 
-    # Normalize specs with single project-level DataVisualizationDirector
+    # Build candidate B-roll lookup from project asset_jobs or broll_manifest.json
+    broll_lookup: dict[str, tuple[str, float]] = {}
+    for aj in getattr(project, "asset_jobs", []) or []:
+        if aj.status == JobStatus.ready and aj.output:
+            score = float(aj.metadata.get("score", 0.8) or 0.8)
+            out_p = str(Path(aj.output).resolve())
+            if Path(out_p).exists():
+                broll_lookup[aj.scene_id] = (out_p, score)
+
+    # Normalize specs with single project-level DataVisualizationDirector and shared VisualRendererDirector
     director = DataVisualizationDirector()
-    scene_specs = [normalize_motion_spec(cue, project, director=director) for cue in motion_cues]
+    renderer_director = VisualRendererDirector(VisualDiversityMemoryV2())
+    scene_specs: list[MotionSceneSpec] = []
+    for cue in motion_cues:
+        if cue.id in broll_lookup and not cue.payload.get("broll_path"):
+            b_path, b_conf = broll_lookup[cue.id]
+            if b_conf >= 0.70:
+                cue.payload["broll_path"] = b_path
+                cue.payload["broll_confidence"] = b_conf
+        spec = normalize_motion_spec(
+            cue,
+            project,
+            director=director,
+            renderer_director=renderer_director,
+        )
+        scene_specs.append(spec)
     grouped_items = form_motion_groups(scene_specs)
 
     rendered_assets: list[RenderedMotionAsset] = []

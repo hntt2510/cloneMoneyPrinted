@@ -1,11 +1,11 @@
-﻿import React from 'react';
+import React from 'react';
 import { Sequence, useVideoConfig } from 'remotion';
 import { Layout } from '../components/Layout';
 import { BreakdownGroupMaster, resolveBreakdownData } from '../templates/BreakdownTemplate';
 import { ComparisonGroupMaster } from '../templates/ComparisonTemplate';
 import { ThresholdGroupMaster } from '../templates/ThresholdTemplate';
 import { TimelineGroupMaster } from '../templates/TimelineTemplate';
-import { getTemplateComponent } from '../templates/registry';
+import { DataSceneRouter } from '../router/DataSceneRouter';
 import { GroupCompositionProps } from '../types';
 
 export const GroupComposition: React.FC<GroupCompositionProps> = ({
@@ -116,7 +116,6 @@ export const GroupComposition: React.FC<GroupCompositionProps> = ({
     <Layout theme={theme}>
       {scenes.map((scene, index) => {
         const relativeStart = Math.max(0, scene.start_frame - baseStartFrame);
-        const Component = getTemplateComponent(scene.template, scene.props?.layout_archetype);
         const isFirstInGroup = index === 0;
 
         return (
@@ -126,13 +125,17 @@ export const GroupComposition: React.FC<GroupCompositionProps> = ({
             durationInFrames={scene.duration_frames}
             layout="none"
           >
-            <Component
-              {...(scene.props || {})}
-              animation_plan={scene.animation_plan || scene.props?.animation_plan}
+            <DataSceneRouter
+              template={scene.template}
+              props={{
+                ...(scene.props || {}),
+                animation_plan: scene.animation_plan || scene.props?.animation_plan,
+              }}
               theme={theme}
               isGrouped={true}
               isFirstInGroup={isFirstInGroup}
               groupSceneIndex={index}
+              durationInFrames={scene.duration_frames}
             />
           </Sequence>
         );

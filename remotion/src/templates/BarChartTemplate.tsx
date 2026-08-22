@@ -1,6 +1,7 @@
 import React from 'react';
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Background } from '../components/Background';
+import { createBandScale, createLinearScale } from '../components/D3Geometry';
 import { Layout } from '../components/Layout';
 import { getSafeArea, fitText, resolveCategoryColor, getItemFocusState } from '../layout';
 import { resolveTheme } from '../theme/theme';
@@ -50,11 +51,15 @@ export const BarChartTemplate: React.FC<BarChartProps> = ({
   const chartTop = safe.chartZone.y + Math.round(safe.chartZone.height * 0.06);
 
   const maxVal = Math.max(...barItems.map((i) => Number(i.value) || 0), 10);
-  const gridLines = [0, maxVal * 0.33, maxVal * 0.66, maxVal];
-
   const numBars = barItems.length;
-  const barWidth = Math.min((chartW * 0.55) / numBars, isPortrait ? 64 : 110);
-  const spacing = (chartW - numBars * barWidth) / (numBars + 1);
+
+  const xScale = createBandScale(
+    barItems.map((_, i) => String(i)),
+    [20, chartW - 20],
+    0.32
+  );
+  const yScale = createLinearScale([0, maxVal], [chartH - 40, 40]);
+  const gridLines = yScale.ticks(3);
 
   return (
     <Layout theme={theme} isGrouped={isGrouped}>
@@ -122,7 +127,7 @@ export const BarChartTemplate: React.FC<BarChartProps> = ({
         <svg width={chartW} height={chartH} style={{ overflow: 'visible' }}>
           {/* Horizontal Grid lines */}
           {gridLines.map((gl, i) => {
-            const y = chartH - (gl / maxVal) * (chartH - 60) - 40;
+            const y = yScale(gl);
             return (
               <line
                 key={`grid-${i}`}
@@ -164,10 +169,11 @@ export const BarChartTemplate: React.FC<BarChartProps> = ({
               totalCategories: numBars,
             });
 
-            const barH = ((Number(item.value) || 0) / maxVal) * (chartH - 60);
-            const x = spacing + idx * (barWidth + spacing);
-            const currH = barSpr * barH;
-            const y = chartH - 40 - currH;
+            const fullBarH = (chartH - 40) - yScale(Number(item.value) || 0);
+            const x = xScale(String(idx));
+            const barWidth = xScale.bandwidth;
+            const currH = barSpr * fullBarH;
+            const y = (chartH - 40) - currH;
 
             const lblFit = fitText({
               text: item.label,

@@ -74,6 +74,9 @@ def grammar_to_data_template(grammar: Any) -> DataTemplate:
         "age_marker": DataTemplate.age_marker,
         "callout": DataTemplate.callout,
         "kinetic_statement": DataTemplate.callout,
+        "diagram": DataTemplate.diagram,
+        "data_grid": DataTemplate.data_grid,
+        "hybrid_broll": DataTemplate.hybrid_broll,
     }
     return mapping.get(val, DataTemplate.callout)
 
