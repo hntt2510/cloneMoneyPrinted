@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import unittest
+from pathlib import Path
 from typing import Any
+import unittest
 
 from app.models.motion import (
     BackgroundTreatment,
@@ -74,31 +75,36 @@ class TestG19RendererDirector(unittest.TestCase):
 
     def test_hybrid_broll_gate_strong_vs_weak(self) -> None:
         """Section 27 & 54: Strong B-roll allows HYBRID; weak B-roll falls back to editorial DATA."""
-        # Strong B-roll (confidence >= 0.70)
-        d_strong = self.director.decide_renderer(
-            data_intent=SemanticDataIntent.single_metric,
-            visual_grammar=VisualGrammar.metric,
-            template="number",
-            props={"headline": "COST", "value": "$6,000"},
-            narration="The total repair cost was six thousand dollars.",
-            broll_candidate_confidence=0.85,
-            broll_candidate_path="/path/to/car_damage.mp4",
-        )
-        self.assertEqual(d_strong.renderer_family, RendererFamily.hybrid_broll_data)
-        self.assertEqual(d_strong.storytelling_technique, StorytellingTechnique.hybrid_metric)
-        self.assertEqual(d_strong.asset_mode, "video")
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            real_broll = Path(tmp_dir) / "car_damage.mp4"
+            real_broll.write_bytes(b"\x00" * 1024)
 
-        # Weak B-roll (confidence < 0.70) -> fallback to EDITORIAL_REMOTION
-        d_weak = self.director.decide_renderer(
-            data_intent=SemanticDataIntent.single_metric,
-            visual_grammar=VisualGrammar.metric,
-            template="number",
-            props={"headline": "COST", "value": "$6,000"},
-            narration="The total repair cost was six thousand dollars.",
-            broll_candidate_confidence=0.45,
-            broll_candidate_path="/path/to/random_footage.mp4",
-        )
-        self.assertEqual(d_weak.renderer_family, RendererFamily.editorial_remotion)
+            # Strong B-roll (confidence >= 0.70)
+            d_strong = self.director.decide_renderer(
+                data_intent=SemanticDataIntent.single_metric,
+                visual_grammar=VisualGrammar.metric,
+                template="number",
+                props={"headline": "COST", "value": "$6,000"},
+                narration="The total repair cost was six thousand dollars.",
+                broll_candidate_confidence=0.85,
+                broll_candidate_path=str(real_broll),
+            )
+            self.assertEqual(d_strong.renderer_family, RendererFamily.hybrid_broll_data)
+            self.assertEqual(d_strong.storytelling_technique, StorytellingTechnique.hybrid_metric)
+            self.assertEqual(d_strong.asset_mode, "video")
+
+            # Weak B-roll (confidence < 0.70) -> fallback to EDITORIAL_REMOTION
+            d_weak = self.director.decide_renderer(
+                data_intent=SemanticDataIntent.single_metric,
+                visual_grammar=VisualGrammar.metric,
+                template="number",
+                props={"headline": "COST", "value": "$6,000"},
+                narration="The total repair cost was six thousand dollars.",
+                broll_candidate_confidence=0.45,
+                broll_candidate_path=str(real_broll),
+            )
+            self.assertEqual(d_weak.renderer_family, RendererFamily.editorial_remotion)
 
     def test_diagram_flow_decision(self) -> None:
         """Section 23 & 49: System flow narration maps to diagram_reveal."""

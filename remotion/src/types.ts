@@ -130,8 +130,9 @@ export interface RendererDecision {
   camera_motion?: string;
   asset_mode?: string;
   asset_path?: string | null;
-  asset_confidence?: number;
+  asset_confidence?: number | null;
   asset_origin?: string;
+  asset_score_source?: string | null;
   reason?: string;
 }
 
@@ -160,6 +161,7 @@ export interface NumberProps extends BaseTemplateProps {
   eyebrow?: string | null;
   context_label?: string | null;
   delta_direction?: 'positive' | 'negative' | 'neutral' | string;
+  delta_sentiment?: 'positive' | 'negative' | 'neutral' | 'unknown' | string | null;
   before_value?: string | null;
   after_value?: string | null;
   delta_value?: string | null;

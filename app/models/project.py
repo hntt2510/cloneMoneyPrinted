@@ -325,7 +325,7 @@ class BrollCandidate(ProjectModel):
 
 class SelectedBrollAsset(ProjectModel):
     scene_id: str
-    provider: Literal["pexels", "pixabay", "coverr"]
+    provider: Literal["pexels", "pixabay", "coverr", "local_user"]
     provider_asset_id: str
     query_used: str
     candidate_id: str
@@ -337,7 +337,7 @@ class SelectedBrollAsset(ProjectModel):
     scene_duration: float = Field(gt=0)
     width: int = Field(gt=0)
     height: int = Field(gt=0)
-    score: float = 0.0
+    score: float | None = None
     score_breakdown: dict[str, float] = Field(default_factory=dict)
     source_file: str
     rendered_file: str

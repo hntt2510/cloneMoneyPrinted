@@ -185,9 +185,38 @@ def run_broll_acquisition(
                 source=str(user_asset_path),
                 output=str(user_asset_path),
                 provider="local_user",
-                metadata={"score": 1.0, "asset_origin": "user_provided", "status_history": ["ready"]},
+                metadata={
+                    "score": None,
+                    "asset_confidence": None,
+                    "asset_origin": "user_provided",
+                    "asset_score_source": "not_scored_user_provided",
+                    "status_history": ["ready"],
+                },
             )
+            cue.payload["broll_confidence"] = None
+            cue.payload["asset_origin"] = "user_provided"
+            cue.payload["asset_score_source"] = "not_scored_user_provided"
             broll_asset_jobs.append(job)
+            ready_assets.append(
+                SelectedBrollAsset(
+                    scene_id=cue.id,
+                    provider="local_user",
+                    provider_asset_id=f"user_{cue.id}",
+                    query_used="user_provided",
+                    candidate_id=f"cand_user_{cue.id}",
+                    download_url="local://user_provided",
+                    source_duration=max(1.0, float(cue.end - cue.start)),
+                    trim_start=0.0,
+                    trim_end=max(1.0, float(cue.end - cue.start)),
+                    scene_duration=max(1.0, float(cue.end - cue.start)),
+                    width=1920,
+                    height=1080,
+                    score=None,
+                    source_file=str(user_asset_path),
+                    rendered_file=str(user_asset_path),
+                    metadata={"asset_origin": "user_provided", "asset_score_source": "not_scored_user_provided"},
+                )
+            )
             continue
 
         job = AssetJob(

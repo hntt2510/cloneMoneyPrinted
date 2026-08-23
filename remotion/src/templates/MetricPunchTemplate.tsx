@@ -19,6 +19,7 @@ export const MetricPunchTemplate: React.FC<NumberProps> = ({
   eyebrow,
   context_label,
   delta_direction,
+  delta_sentiment,
   delta_value,
   delta_display,
   before_value,
@@ -39,7 +40,13 @@ export const MetricPunchTemplate: React.FC<NumberProps> = ({
   const deltaDir = delta_direction || (delta_display?.startsWith('+') ? 'positive' : delta_display?.startsWith('-') ? 'negative' : 'neutral');
   const deltaArrow = deltaDir === 'positive' ? '↑' : deltaDir === 'negative' ? '↓' : '';
   const deltaText = delta_display || delta_value || (deltaDir === 'positive' ? 'INCREASE' : deltaDir === 'negative' ? 'DECREASE' : 'DELTA');
-  const deltaColor = deltaDir === 'negative' ? '#F87171' : theme.accent;
+
+  // Separate mathematical arrow direction from semantic color sentiment
+  const deltaColor = delta_sentiment === 'negative'
+    ? '#F87171'
+    : delta_sentiment === 'positive'
+    ? '#34D399'
+    : theme.accent;
 
   // Kinetic beat timing
   const numberBeat = animation_plan?.beats?.find((b) => b.kind === 'number' || b.id.includes('num') || b.id.includes('val'));
