@@ -321,8 +321,9 @@ class VisualRendererDirector:
                 camera_motion="subtle_push",
                 asset_mode="video",
                 asset_path=resolved_candidate_path,
-                asset_confidence=1.0 if is_trusted_user_media else broll_candidate_confidence,
+                asset_confidence=None if is_trusted_user_media else broll_candidate_confidence,
                 asset_origin="user_provided" if is_trusted_user_media else "stock_search",
+                asset_score_source="not_scored_user_provided" if is_trusted_user_media else "stock_search",
                 reason="User-provided local asset paired with data hero" if is_trusted_user_media else f"Stock footage (confidence={broll_candidate_confidence:.2f}) paired with metric hero as hybrid_metric",
             )
         else:

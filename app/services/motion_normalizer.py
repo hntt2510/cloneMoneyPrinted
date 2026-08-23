@@ -874,7 +874,7 @@ def normalize_motion_spec(
                 eyebrow=eyebrow_val,
                 asset_mode=asset_mode_val,
                 asset_origin="user_provided" if is_trusted_user_media else "stock_search",
-                asset_confidence=1.0 if is_trusted_user_media else broll_conf,
+                asset_confidence=None if is_trusted_user_media else broll_conf,
                 subtext=subtext_val,
             ).model_dump(mode="json")
             rendered_template = "hybrid_broll"
@@ -980,11 +980,20 @@ def normalize_motion_spec(
                     props_dict["delta_display"] = f"-{prefix}{diff:g}{suffix}"
                 else:
                     props_dict["delta_direction"] = "neutral"
-        else:
             if re.search(r"\b(?:grew|grown|grow|increase|increased|increases|increasing|rose|risen|rise|rises|rising|jumped|surged|climb|climbed|up from)\b", narr, re.I):
                 props_dict["delta_direction"] = "positive"
             elif re.search(r"\b(?:fell|fall|falls|falling|dropped|drop|drops|dropping|decrease|decreased|decreases|decreasing|decline|declined|declines|declining|down from)\b", narr, re.I):
                 props_dict["delta_direction"] = "negative"
+
+        # Determine semantic sentiment (separate from mathematical delta_direction)
+        if re.search(r"\b(?:improved|improves|improving|improvement|better|boosted|gains|profitable|savings|saved|cut costs|reduced error)\b", narr, re.I):
+            props_dict["delta_sentiment"] = "positive"
+        elif re.search(r"\b(?:worsened|worsens|worsening|deteriorated|loss|losses|deficit|crashed|spike in error|errors increased|incident|breach|outage)\b", narr, re.I):
+            props_dict["delta_sentiment"] = "negative"
+        elif props_dict.get("delta_direction") == "positive" and re.search(r"\b(?:revenue|sales|profit|arr|growth|users|subscribers|uptime)\b", narr, re.I):
+            props_dict["delta_sentiment"] = "positive"
+        else:
+            props_dict["delta_sentiment"] = "neutral"
 
     layout_archetype = raw_payload.get("layout_archetype") or props_dict.get("variant")
     if not layout_archetype:

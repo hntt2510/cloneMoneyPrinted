@@ -130,6 +130,144 @@ def extract_grounded_entity_definition(entity: str, text: str) -> str | None:
 _THRESHOLD_STOPWORDS = {"the", "that", "this", "a", "an", "your", "our", "my", "their", "its", "you", "we", "they", "it", "have", "has", "is", "are", "with", "of", "in", "for", "to", "at", "by", "on"}
 
 
+def _clean_event_title(raw: str) -> str:
+    """Clean raw event phrase for timeline milestone title."""
+    s = raw.strip().rstrip(".,;:")
+    s = re.sub(r"^(?:the|that|your|our|my|a|an|this)\s+", "", s, flags=re.IGNORECASE).strip()
+    words = s.split()
+    if len(words) > 3:
+        words = words[:3]
+    return " ".join(words).strip()
+
+
+_FORBIDDEN_GENERIC_MILESTONES = {
+    "beta launch",
+    "global scaling",
+    "global expansion",
+    "expansion",
+    "release",
+    "migration",
+    "v1 launch",
+    "v2 launch",
+}
+
+
+def extract_grounded_timeline_milestones(
+    narration: str,
+    raw_milestones: list[dict[str, Any]] | None = None,
+    facts: list[CanonicalNumericFact] | None = None,
+) -> list[dict[str, Any]]:
+    """Deterministically extract grounded timeline milestones.
+
+    NEVER fabricates ungrounded placeholder event titles like 'Beta Launch' or 'Global Scaling'.
+    Titles must strictly originate from narration tokens, quantitative values, or neutral indicators.
+    """
+    text = (narration or "").strip()
+    t_lower = text.lower()
+
+    # 1. If raw_milestones provided by planner, sanitize and validate grounding
+    if raw_milestones and isinstance(raw_milestones, list) and len(raw_milestones) >= 2:
+        sanitized: list[dict[str, Any]] = []
+        for idx, m in enumerate(raw_milestones[:5]):
+            if isinstance(m, dict):
+                m_time = str(m.get("time") or m.get("year") or m.get("label") or f"T{idx + 1}").strip()
+                m_title = str(m.get("title") or m.get("event") or m.get("description") or "").strip()
+                t_clean = m_title.lower().strip()
+                if t_clean in _FORBIDDEN_GENERIC_MILESTONES and t_clean not in t_lower:
+                    m_title = ""
+                sanitized.append({
+                    "time": m_time,
+                    "title": m_title,
+                    "highlight": bool(m.get("highlight", idx == len(raw_milestones) - 1)),
+                })
+        if all(bool(it["title"]) for it in sanitized):
+            return sanitized
+
+        extracted = _extract_milestones_from_text(text, facts)
+        for idx, it in enumerate(sanitized):
+            if not it["title"]:
+                if idx < len(extracted) and extracted[idx].get("title"):
+                    it["title"] = extracted[idx]["title"]
+                else:
+                    it["title"] = "START" if idx == 0 else ("END" if idx == len(sanitized) - 1 else f"PHASE {idx + 1}")
+        return sanitized
+
+    return _extract_milestones_from_text(text, facts)
+
+
+def _extract_milestones_from_text(
+    text: str,
+    facts: list[CanonicalNumericFact] | None = None,
+) -> list[dict[str, Any]]:
+    t_lower = text.lower()
+
+    years = _YEAR_RE.findall(text)
+    if not years and facts:
+        for f in facts:
+            if 1900 <= f.value <= 2100:
+                years.append(str(int(f.value)))
+
+    if not years:
+        spoken_years = {
+            "twenty twenty-two": "2022",
+            "twenty twenty-three": "2023",
+            "twenty twenty-four": "2024",
+            "twenty twenty-five": "2025",
+            "twenty twenty-six": "2026",
+            "twenty twenty-seven": "2027",
+            "twenty twenty-eight": "2028",
+            "twenty twenty-nine": "2029",
+            "twenty thirty": "2030",
+        }
+        for spk, yr in spoken_years.items():
+            if spk in t_lower and yr not in years:
+                years.append(yr)
+
+    if len(years) < 2:
+        return []
+
+    p_between = re.search(
+        r"(?:between|from)?\s*(?:twenty\s+twenty-[a-z]+|20\d\d|19\d\d)\s+([a-zA-Z0-9_\- ]+?)\s+(?:and|to)\s+(?:twenty\s+twenty-[a-z]+|20\d\d|19\d\d)\s+([a-zA-Z0-9_\- ]+?)(?:\.|$|,|;)",
+        text,
+        re.IGNORECASE,
+    )
+    p1_title, p2_title = None, None
+    if p_between:
+        cand1 = _clean_event_title(p_between.group(1))
+        cand2 = _clean_event_title(p_between.group(2))
+        stop_words = {"and", "to", "in", "was", "the", "revenue", "from"}
+        if cand1 and cand1.lower() not in stop_words:
+            p1_title = cand1.upper()
+        if cand2 and cand2.lower() not in stop_words:
+            p2_title = cand2.upper()
+
+    val_in_yr = re.findall(
+        r"(\$?\d+[\d,\.]*\s*(?:%|[a-zA-Z]+)?)\s+(?:in|by|during)\s+(?:twenty\s+twenty-[a-z]+|20\d\d|19\d\d)",
+        text,
+        re.IGNORECASE,
+    )
+
+    milestones: list[dict[str, Any]] = []
+    for idx, yr in enumerate(years[:5]):
+        title = ""
+        if idx == 0 and p1_title:
+            title = p1_title
+        elif idx == 1 and p2_title:
+            title = p2_title
+        elif idx < len(val_in_yr) and val_in_yr[idx]:
+            title = val_in_yr[idx].upper()
+        else:
+            title = "START" if idx == 0 else ("END" if idx == len(years) - 1 else f"PHASE {idx + 1}")
+
+        milestones.append({
+            "time": str(yr),
+            "title": title,
+            "highlight": (idx == len(years) - 1),
+        })
+
+    return milestones
+
+
 def _clean_threshold_subject(raw: str) -> str:
     """Clean extracted threshold subject by stripping lead-ins, stopwords, numbers and units."""
     s = raw.strip().rstrip(".,;:")
@@ -1012,38 +1150,20 @@ class DataVisualizationDirector:
         # 16. TIMELINE VALIDATION
         if grammar == VisualGrammar.timeline:
             raw_milestones = payload_dict.get("milestones") or payload_data.get("milestones")
-            if not raw_milestones:
-                years = _YEAR_RE.findall(narration)
-                if not years:
-                    num_matches = re.findall(r"\b(20\d\d|19\d\d)\b", narration)
-                    years = num_matches
-                if not years and len(facts) >= 2 and all(1900 <= f.value <= 2100 for f in facts[:2]):
-                    years = [str(int(f.value)) for f in facts[:2]]
-                if len(years) >= 2:
-                    raw_milestones = [
-                        {"time": str(years[0]), "title": "Beta Launch", "highlight": False},
-                        {"time": str(years[-1]), "title": "Global Scaling", "highlight": True},
-                    ]
-            if isinstance(raw_milestones, list) and len(raw_milestones) >= 2:
-                milestones_list = []
-                for idx, m in enumerate(raw_milestones[:5]):
-                    if isinstance(m, dict):
-                        m_time = str(m.get("time") or m.get("year") or m.get("label") or f"T{idx+1}").strip()
-                        m_title = str(m.get("title") or m.get("event") or m.get("description") or m_time).strip()
-                        milestones_list.append({
-                            "time": m_time,
-                            "title": m_title,
-                            "highlight": bool(m.get("highlight", idx == len(raw_milestones) - 1)),
-                        })
-                if len(milestones_list) >= 2:
-                    props = {
-                        "headline": headline,
-                        "eyebrow": eyebrow or "GLOBAL EXPANSION",
-                        "milestones": milestones_list,
-                        "variant": variant,
-                        "layout_archetype": variant,
-                    }
-                    return True, props, None
+            grounded_milestones = extract_grounded_timeline_milestones(
+                narration=narration,
+                raw_milestones=raw_milestones if isinstance(raw_milestones, list) else None,
+                facts=facts,
+            )
+            if len(grounded_milestones) >= 2:
+                props = {
+                    "headline": headline,
+                    "eyebrow": eyebrow or "GLOBAL EXPANSION",
+                    "milestones": grounded_milestones,
+                    "variant": variant,
+                    "layout_archetype": variant,
+                }
+                return True, props, None
             return False, {}, "Timeline requires at least 2 milestones."
 
         # Default statement / callout

@@ -93,6 +93,7 @@ class NumberProps(MotionModel):
     eyebrow: str | None = None
     context_label: str | None = None
     delta_direction: str | None = None
+    delta_sentiment: str | None = None
     before_value: str | None = None
     after_value: str | None = None
     delta_value: str | None = None
@@ -442,8 +443,9 @@ class RendererDecision(MotionModel):
     camera_motion: str = "subtle_push"
     asset_mode: str = "none"
     asset_path: str | None = None
-    asset_confidence: float = 0.0
+    asset_confidence: float | None = None
     asset_origin: str = "none"
+    asset_score_source: str | None = None
     reason: str = ""
 
 

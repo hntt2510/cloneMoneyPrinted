@@ -38,7 +38,7 @@ def serialize_motion_scene_props(scene_spec: MotionSceneSpec) -> dict[str, Any]:
 def compute_scene_fingerprint(scene_spec: MotionSceneSpec) -> str:
     """Compute deterministic SHA-256 fingerprint of a single MotionSceneSpec."""
     canonical = {
-        "motion_engine_version": "13",
+        "motion_engine_version": "14",
         "scene_id": scene_spec.scene_id,
         "visual_type": scene_spec.visual_type,
         "rendered_template": scene_spec.rendered_template,
@@ -63,7 +63,7 @@ def compute_group_fingerprint(group_spec: MotionGroupSpec) -> str:
     """Compute deterministic SHA-256 fingerprint of a MotionGroupSpec."""
     base_start = group_spec.start_frame
     canonical = {
-        "motion_engine_version": "13",
+        "motion_engine_version": "14",
         "group_id": group_spec.group_id,
         "duration_frames": group_spec.duration_frames,
         "fps": group_spec.fps,
