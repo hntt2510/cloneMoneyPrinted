@@ -986,12 +986,12 @@ def normalize_motion_spec(
                 props_dict["delta_direction"] = "negative"
 
         # Determine semantic sentiment (separate from mathematical delta_direction)
+        # Strict semantic grounding: Only explicit sentiment words (improved, better, worsened, etc.)
+        # Never infer sentiment merely from category metrics (revenue, users, uptime, etc.)
         if re.search(r"\b(?:improved|improves|improving|improvement|better|boosted|gains|profitable|savings|saved|cut costs|reduced error)\b", narr, re.I):
             props_dict["delta_sentiment"] = "positive"
         elif re.search(r"\b(?:worsened|worsens|worsening|deteriorated|loss|losses|deficit|crashed|spike in error|errors increased|incident|breach|outage)\b", narr, re.I):
             props_dict["delta_sentiment"] = "negative"
-        elif props_dict.get("delta_direction") == "positive" and re.search(r"\b(?:revenue|sales|profit|arr|growth|users|subscribers|uptime)\b", narr, re.I):
-            props_dict["delta_sentiment"] = "positive"
         else:
             props_dict["delta_sentiment"] = "neutral"
 

@@ -682,83 +682,93 @@ def _apply_diversity(
         i += 1
 
     # 2. Detect multi-cue conceptual comparison sequences generically across any domain
+    # 2. Detect multi-cue conceptual comparison sequences generically across any domain
     i = 0
     while i < n - 1:
+        matched_3 = False
         if i + 2 < n:
             window = [decisions[i], decisions[i + 1], decisions[i + 2]]
-            c0_narr = (window[0].narration or "")
-            c1_narr = (window[1].narration or "")
-            c2_narr = (window[2].narration or "")
+            if not any((c.payload or {}).get("template") in ("breakdown", "diagram", "timeline") for c in window):
+                c0_narr = (window[0].narration or "")
+                c1_narr = (window[1].narration or "")
+                c2_narr = (window[2].narration or "")
 
-            ents = extract_grounded_comparison_entities(c0_narr)
-            if not ents and _COMPARISON_RE.search(c0_narr.lower()):
-                ents = extract_grounded_comparison_entities(f"{c0_narr} {c1_narr}")
+                ents = extract_grounded_comparison_entities(c0_narr)
+                if not ents and _COMPARISON_RE.search(c0_narr.lower()):
+                    ents = extract_grounded_comparison_entities(f"{c0_narr} {c1_narr}")
 
-            if ents:
-                ent1, ent2 = ents
-                # Extract definitions from adjacent cues
-                def_c1_e1 = extract_grounded_entity_definition(ent1, c1_narr)
-                def_c1_e2 = extract_grounded_entity_definition(ent2, c1_narr)
-                def_c2_e1 = extract_grounded_entity_definition(ent1, c2_narr)
-                def_c2_e2 = extract_grounded_entity_definition(ent2, c2_narr)
+                if ents:
+                    ent1, ent2 = ents
+                    # Extract definitions from adjacent cues
+                    def_c1_e1 = extract_grounded_entity_definition(ent1, c1_narr)
+                    def_c1_e2 = extract_grounded_entity_definition(ent2, c1_narr)
+                    def_c2_e1 = extract_grounded_entity_definition(ent1, c2_narr)
+                    def_c2_e2 = extract_grounded_entity_definition(ent2, c2_narr)
 
-                e1_defined = def_c1_e1 or def_c2_e1
-                e2_defined = def_c1_e2 or def_c2_e2
+                    e1_defined = def_c1_e1 or def_c2_e1
+                    e2_defined = def_c1_e2 or def_c2_e2
 
-                if e1_defined or e2_defined or (ent1.lower() in c1_narr.lower() and ent2.lower() in c2_narr.lower()) or (ent2.lower() in c1_narr.lower() and ent1.lower() in c2_narr.lower()):
-                    if def_c1_e2 or (ent2.lower() in c1_narr.lower() and ent1.lower() not in c1_narr.lower()):
-                        primary_e1 = ent2
-                        primary_e2 = ent1
-                        val1 = def_c1_e2 or def_c2_e2 or extract_grounded_entity_definition(ent2, c0_narr) or ent2.title()
-                        val2 = def_c2_e1 or def_c1_e1 or extract_grounded_entity_definition(ent1, c0_narr) or ent1.title()
-                    else:
-                        primary_e1 = ent1
-                        primary_e2 = ent2
-                        val1 = def_c1_e1 or def_c2_e1 or extract_grounded_entity_definition(ent1, c0_narr) or ent1.title()
-                        val2 = def_c2_e2 or def_c1_e2 or extract_grounded_entity_definition(ent2, c0_narr) or ent2.title()
+                    if e1_defined or e2_defined or (ent1.lower() in c1_narr.lower() and ent2.lower() in c2_narr.lower()) or (ent2.lower() in c1_narr.lower() and ent1.lower() in c2_narr.lower()):
+                        if def_c1_e2 or (ent2.lower() in c1_narr.lower() and ent1.lower() not in c1_narr.lower()):
+                            primary_e1 = ent2
+                            primary_e2 = ent1
+                            val1 = def_c1_e2 or def_c2_e2 or extract_grounded_entity_definition(ent2, c0_narr) or ent2.title()
+                            val2 = def_c2_e1 or def_c1_e1 or extract_grounded_entity_definition(ent1, c0_narr) or ent1.title()
+                        else:
+                            primary_e1 = ent1
+                            primary_e2 = ent2
+                            val1 = def_c1_e1 or def_c2_e1 or extract_grounded_entity_definition(ent1, c0_narr) or ent1.title()
+                            val2 = def_c2_e2 or def_c1_e2 or extract_grounded_entity_definition(ent2, c0_narr) or ent2.title()
 
-                    gid = window[0].visual_group_id or f"vg_{re.sub(r'[^a-zA-Z0-9]', '_', primary_e1.lower())}_vs_{re.sub(r'[^a-zA-Z0-9]', '_', primary_e2.lower())}"
+                        gid = window[0].visual_group_id or f"vg_{re.sub(r'[^a-zA-Z0-9]', '_', primary_e1.lower())}_vs_{re.sub(r'[^a-zA-Z0-9]', '_', primary_e2.lower())}"
 
-                    for c_idx, c in enumerate(window):
-                        c.visual_group_id = gid
-                        c.visual_type = VisualType.data
-                        c.purpose = VisualPurpose.compare
-                        if c_idx == 0:
-                            h_val = f"{primary_e1.upper()} VS {primary_e2.upper()}"
-                            hl1, hl2 = True, False
-                        elif c_idx == 1:
-                            h_val = primary_e1.upper()
-                            hl1, hl2 = True, False
-                        elif c_idx == 2:
-                            h_val = primary_e2.upper()
-                            hl1, hl2 = False, True
+                        for c_idx, c in enumerate(window):
+                            c.visual_group_id = gid
+                            c.visual_type = VisualType.data
+                            c.purpose = VisualPurpose.compare
+                            if c_idx == 0:
+                                h_val = f"{primary_e1.upper()} VS {primary_e2.upper()}"
+                                hl1, hl2 = True, False
+                            elif c_idx == 1:
+                                h_val = primary_e1.upper()
+                                hl1, hl2 = True, False
+                            elif c_idx == 2:
+                                h_val = primary_e2.upper()
+                                hl1, hl2 = False, True
 
-                        items_val = [
-                            {"label": primary_e1.upper(), "value": val1, "highlight": hl1},
-                            {"label": primary_e2.upper(), "value": val2, "highlight": hl2},
-                        ]
+                            items_val = [
+                                {"label": primary_e1.upper(), "value": val1, "highlight": hl1},
+                                {"label": primary_e2.upper(), "value": val2, "highlight": hl2},
+                            ]
 
-                        c.payload = DataPayload(
-                            template=DataTemplate.comparison,
-                            headline=h_val,
-                            data={
-                                "items": items_val,
-                                "eyebrow": "CONCEPT COMPARISON",
-                            },
-                            layout_archetype="split_compare",
-                            data_intent="category_comparison",
-                            visual_grammar="comparison",
-                        ).model_dump(mode="json")
-                    i += 3
-                    continue
+                            c.payload = DataPayload(
+                                template=DataTemplate.comparison,
+                                headline=h_val,
+                                data={
+                                    "items": items_val,
+                                    "eyebrow": "CONCEPT COMPARISON",
+                                },
+                                layout_archetype="split_compare",
+                                data_intent="category_comparison",
+                                visual_grammar="comparison",
+                            ).model_dump(mode="json")
+                        i += 3
+                        matched_3 = True
+                        continue
+
+        if matched_3:
+            continue
 
         # Check 2-cue comparison window
         if i + 1 < n:
             c0, c1 = decisions[i], decisions[i + 1]
+            if (c0.payload or {}).get("template") in ("breakdown", "diagram", "timeline") or (c1.payload or {}).get("template") in ("breakdown", "diagram", "timeline"):
+                i += 1
+                continue
             c0_narr = c0.narration or ""
             c1_narr = c1.narration or ""
             c1_lower = c1_narr.lower()
-            if any(w in c1_lower for w in ("in contrast", "on the other hand", "whereas", "while", "compared to", "versus")):
+            if any(w in c1_lower for w in ("in contrast", "on the other hand", "whereas", "compared to", "versus")):
                 e0_match = re.search(r"\b([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\s+(?:offers|provides|features|gives|delivers|has|is|enables)\b", c0_narr, re.I)
                 e1_match = re.search(r"\b(?:in contrast,?\s+|on the other hand,?\s+|whereas\s+|while\s+)?([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\s+(?:minimizes|maximizes|reduces|offers|provides|features|gives|delivers|has|is|enables)\b", c1_narr, re.I)
                 ent0 = (e0_match.group(1).strip() if e0_match else c0_narr.split()[0]).upper()
@@ -797,6 +807,9 @@ def _apply_diversity(
     i = 0
     while i < n - 1:
         c0, c1 = decisions[i], decisions[i + 1]
+        if (c0.payload or {}).get("template") in ("breakdown", "diagram", "timeline", "comparison") or (c1.payload or {}).get("template") in ("breakdown", "diagram", "timeline", "comparison"):
+            i += 1
+            continue
         n0 = (c0.narration or "").lower()
         n1 = (c1.narration or "").lower()
         f0 = extract_canonical_numeric_facts(c0.narration or "")
