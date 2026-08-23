@@ -39,63 +39,75 @@ from app.services.voice import azure_tts_v1, get_audio_duration
 from app.utils import utils
 
 
-def _get_or_generate_spoken_audio(output_path: Path, full_script: str, duration_seconds: float = 48.0) -> Path:
-    """Generate or retrieve real intelligible spoken narration audio with deterministic fallback."""
+def _get_or_generate_spoken_audio(output_path: Path, full_script: str, duration_seconds: float = 48.0) -> Path | None:
+    """Retrieve or generate real intelligible spoken narration audio.
+
+    Does NOT fall back to synthetic tones; returns None if real speech is unavailable.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg_bin = utils.get_ffmpeg_binary() or "ffmpeg"
 
-    fixture_mp3 = Path("storage/uat/g19_saas/real_spoken_narration.mp3")
-    fixture_wav = Path("storage/uat/g19_saas/real_spoken_narration.wav")
+    candidate_fixtures = [
+        Path("test/resources/real_spoken_narration.mp3"),
+        Path("storage/uat/g19_saas/real_spoken_narration.wav"),
+        Path("storage/uat/g19_saas/real_spoken_narration.mp3"),
+    ]
 
-    # Try local TTS if fixture is missing
-    if not fixture_mp3.exists() or not fixture_wav.exists():
+    fixture_src: Path | None = None
+    for cand in candidate_fixtures:
+        if cand.exists() and cand.stat().st_size > 1000:
+            fixture_src = cand
+            break
+
+    # If no fixture exists on disk, try live TTS generation
+    if not fixture_src:
         try:
-            fixture_mp3.parent.mkdir(parents=True, exist_ok=True)
-            azure_tts_v1(full_script, "en-US-ChristopherNeural", 1.0, str(fixture_mp3))
-            cmd_conv = [ffmpeg_bin, "-y", "-i", str(fixture_mp3), "-ar", "44100", "-ac", "2", str(fixture_wav)]
-            subprocess.run(cmd_conv, check=True, capture_output=True)
+            temp_mp3 = output_path.parent / "temp_live_tts.mp3"
+            azure_tts_v1(full_script, "en-US-ChristopherNeural", 1.0, str(temp_mp3))
+            if temp_mp3.exists() and temp_mp3.stat().st_size > 1000:
+                fixture_src = temp_mp3
         except Exception:
             pass
 
-    if fixture_wav.exists() and fixture_wav.stat().st_size > 1000:
-        # Scale/time-align to exact required duration
-        try:
-            dur = get_audio_duration(str(fixture_wav)) or 54.0
-            factor = dur / duration_seconds
-            cmd_fit = [
-                ffmpeg_bin, "-y", "-i", str(fixture_wav),
-                "-filter:a", f"atempo={factor:.4f}",
-                "-ar", "44100",
-                "-ac", "2",
-                "-t", str(duration_seconds),
-                str(output_path),
-            ]
-            subprocess.run(cmd_fit, check=True, capture_output=True)
-            if output_path.exists() and output_path.stat().st_size > 1000:
-                with wave.open(str(output_path), "rb") as r:
-                    params = r.getparams()
-                    raw_frames = r.readframes(r.getnframes())
-                target_f = int(duration_seconds * params.framerate)
-                bpf = params.nchannels * params.sampwidth
-                cur_f = len(raw_frames) // bpf
-                if cur_f > target_f:
-                    raw_frames = raw_frames[:target_f * bpf]
-                elif cur_f < target_f:
-                    raw_frames += b"\x00" * ((target_f - cur_f) * bpf)
-                with wave.open(str(output_path), "wb") as w:
-                    w.setparams(params)
-                    w.writeframes(raw_frames)
-                return output_path
-        except Exception:
-            pass
+    if not fixture_src:
+        return None
 
-    # Deterministic audible speech-formant fallback when offline
-    _generate_audible_speech_wav(output_path, duration_seconds=duration_seconds)
-    return output_path
+    # Convert/scale/time-align to exact required duration WAV
+    try:
+        dur = get_audio_duration(str(fixture_src)) or 54.0
+        factor = dur / duration_seconds
+        cmd_fit = [
+            ffmpeg_bin, "-y", "-i", str(fixture_src),
+            "-filter:a", f"atempo={factor:.4f}",
+            "-ar", "44100",
+            "-ac", "2",
+            "-t", str(duration_seconds),
+            str(output_path),
+        ]
+        subprocess.run(cmd_fit, check=True, capture_output=True)
+        if output_path.exists() and output_path.stat().st_size > 1000:
+            with wave.open(str(output_path), "rb") as r:
+                params = r.getparams()
+                raw_frames = r.readframes(r.getnframes())
+            target_f = int(duration_seconds * params.framerate)
+            bpf = params.nchannels * params.sampwidth
+            cur_f = len(raw_frames) // bpf
+            if cur_f > target_f:
+                raw_frames = raw_frames[:target_f * bpf]
+            elif cur_f < target_f:
+                raw_frames += b"\x00" * ((target_f - cur_f) * bpf)
+            with wave.open(str(output_path), "wb") as w:
+                w.setparams(params)
+                w.writeframes(raw_frames)
+            return output_path
+    except Exception:
+        pass
+
+    return None
 
 
 def _generate_audible_speech_wav(output_path: Path, duration_seconds: float = 48.0, sample_rate: int = 44100) -> Path:
-    """Synthesize rich, audible speech-formant modulated audio."""
+    """Synthesize non-speech audio waveform for non-speech audio stream verification only."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     num_samples = int(duration_seconds * sample_rate)
     frames = bytearray()
@@ -172,10 +184,12 @@ class TestG19CrossDomainUAT(unittest.TestCase):
 
         full_script = " ".join(c.narration for c in timeline_cues)
 
-        # 1. Generate or retrieve intelligible spoken narration WAV and SRT timing
+        # 1. Retrieve or generate real spoken narration WAV; skip test if unavailable
         audio_file = self.task_dir / "narration.wav"
         timing_file = self.task_dir / "subtitle.srt"
-        _get_or_generate_spoken_audio(audio_file, full_script=full_script, duration_seconds=48.0)
+        spoken_audio = _get_or_generate_spoken_audio(audio_file, full_script=full_script, duration_seconds=48.0)
+        if not spoken_audio or not audio_file.exists() or audio_file.stat().st_size == 0:
+            self.skipTest("Real intelligible spoken narration audio fixture or live TTS is unavailable; skipping spoken UAT.")
         _generate_srt(timing_file, timeline_cues)
 
         # 2. Construct ProjectSpec BEFORE visual planning decisions

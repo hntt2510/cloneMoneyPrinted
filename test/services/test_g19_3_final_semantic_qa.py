@@ -30,7 +30,7 @@ class TestG193FinalSemanticQA(unittest.TestCase):
         })
 
     def test_timeline_fact_grounding_no_fabrication(self) -> None:
-        """Requirement 1 & 11.A: 'Revenue was $2M in 2022 and $4M in 2026.' must NOT contain 'Beta Launch' or 'Global Scaling'."""
+        """Requirement 1 & 11.A & G19.3.1: 'Revenue was $2M in 2022 and $4M in 2026.' must NOT contain 'Beta Launch', 'Global Scaling', or eyebrow 'GLOBAL EXPANSION'."""
         narration = "Revenue was $2M in 2022 and $4M in 2026."
         milestones = extract_grounded_timeline_milestones(narration)
 
@@ -46,7 +46,7 @@ class TestG193FinalSemanticQA(unittest.TestCase):
         self.assertNotIn("MIGRATION", titles_combined)
         self.assertNotIn("RELEASE", titles_combined)
 
-        # Full director validation
+        # Full director validation: eyebrow must be neutral TIMELINE, not hardcoded GLOBAL EXPANSION
         spec = self.director.direct_visual_specification(
             narration=narration,
             headline="REVENUE GROWTH",
@@ -57,6 +57,16 @@ class TestG193FinalSemanticQA(unittest.TestCase):
         directed_titles = " ".join(m["title"] for m in spec.props.get("milestones", [])).upper()
         self.assertNotIn("BETA LAUNCH", directed_titles)
         self.assertNotIn("GLOBAL SCALING", directed_titles)
+        self.assertNotIn("GLOBAL EXPANSION", directed_titles)
+        self.assertNotIn("MIGRATION", directed_titles)
+        self.assertNotIn("RELEASE", directed_titles)
+
+        # Eyebrow must be neutral TIMELINE or grounded subject, never fabricated GLOBAL EXPANSION
+        eyebrow = spec.props.get("eyebrow", "").upper()
+        self.assertEqual(eyebrow, "TIMELINE")
+        self.assertNotIn("GLOBAL EXPANSION", eyebrow)
+        self.assertNotIn("GLOBAL SCALING", eyebrow)
+        self.assertNotIn("BETA LAUNCH", eyebrow)
 
     def test_timeline_grounded_event_extraction(self) -> None:
         """Requirement 2 & 11.B: 'Between 2022 beta launch and 2026 global expansion...' produces exact grounded titles."""
@@ -161,6 +171,50 @@ class TestG193FinalSemanticQA(unittest.TestCase):
 
         self.assertEqual(props.get("delta_direction"), "positive")
         self.assertEqual(props.get("delta_sentiment"), "negative")
+
+    def test_strict_delta_sentiment_category_revenue_neutral(self) -> None:
+        """G19.3.1 Requirement 2: 'Revenue increased from $2M to $3M.' -> direction positive, sentiment neutral."""
+        cue = VisualCue(
+            id="S004",
+            order=4,
+            visual_type=VisualType.data,
+            purpose=VisualPurpose.explain,
+            start=0.0,
+            end=5.0,
+            narration="Revenue increased from $2M to $3M.",
+            payload=DataPayload(
+                template="number",
+                headline="REVENUE",
+                data={"value": "$3M", "numeric_value": 3000000.0},
+            ).model_dump(mode="json"),
+        )
+        spec = normalize_motion_spec(cue, self.project_stub)
+        props = spec.props
+
+        self.assertEqual(props.get("delta_direction"), "positive")
+        self.assertEqual(props.get("delta_sentiment"), "neutral", "Revenue increase without explicit sentiment word must remain neutral")
+
+    def test_strict_delta_sentiment_bot_attack_users_neutral(self) -> None:
+        """G19.3.1 Requirement 2: 'Users increased from 100 to 200 after a bot attack.' -> direction positive, sentiment neutral."""
+        cue = VisualCue(
+            id="S005",
+            order=5,
+            visual_type=VisualType.data,
+            purpose=VisualPurpose.explain,
+            start=0.0,
+            end=5.0,
+            narration="Users increased from 100 to 200 after a bot attack.",
+            payload=DataPayload(
+                template="number",
+                headline="USER SPIKE",
+                data={"value": "200", "numeric_value": 200.0},
+            ).model_dump(mode="json"),
+        )
+        spec = normalize_motion_spec(cue, self.project_stub)
+        props = spec.props
+
+        self.assertEqual(props.get("delta_direction"), "positive")
+        self.assertEqual(props.get("delta_sentiment"), "neutral", "Users increased after bot attack must NOT automatically become positive sentiment")
 
     def test_user_provided_asset_score_truthfulness(self) -> None:
         """Requirement 5 & 11.E: User-provided media has asset_origin='user_provided' without fake 1.0 stock score."""

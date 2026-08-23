@@ -1156,9 +1156,15 @@ class DataVisualizationDirector:
                 facts=facts,
             )
             if len(grounded_milestones) >= 2:
+                resolved_eyebrow = eyebrow
+                if not resolved_eyebrow:
+                    for kw in ("GLOBAL EXPANSION", "GLOBAL SCALING", "BETA LAUNCH", "MIGRATION", "RELEASE"):
+                        if kw.lower() in t_lower:
+                            resolved_eyebrow = kw
+                            break
                 props = {
                     "headline": headline,
-                    "eyebrow": eyebrow or "GLOBAL EXPANSION",
+                    "eyebrow": resolved_eyebrow or "TIMELINE",
                     "milestones": grounded_milestones,
                     "variant": variant,
                     "layout_archetype": variant,
