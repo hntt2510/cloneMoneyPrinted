@@ -445,30 +445,108 @@ def derive_kinetic_beats(
         ]
 
     # -------------------------------------------------------------------------
-    # 6. NUMBER & COUNTER TEMPLATES
+    # 6. NUMBER, COUNTER, METRIC PUNCH, & HYBRID B-ROLL DATA TEMPLATES
     # -------------------------------------------------------------------------
-    elif template in ("number", "counter"):
-        target_val = props.get("numeric_value") if template == "number" else props.get("end_value")
+    elif template in ("number", "counter", "metric_punch", "hybrid", "hybrid_broll", "hybrid_broll_data"):
+        data_panel = props.get("data_panel", {}) if isinstance(props.get("data_panel"), dict) else {}
+        target_val = (
+            props.get("numeric_value")
+            or data_panel.get("numeric_value")
+            or props.get("end_value")
+            or props.get("value")
+            or data_panel.get("value")
+            or data_panel.get("amount")
+            or data_panel.get("display_value")
+        )
         headline = str(props.get("headline", ""))
-        setup_end = max(3, round(available_frames * 0.15))
-        reveal_end = max(setup_end + 2, round(available_frames * 0.20))
-        count_end = max(reveal_end + 5, round(available_frames * 0.75))
-        highlight_end = max(count_end + 2, round(available_frames * 0.83))
-        context_end = max(highlight_end + 2, round(available_frames * 0.90))
+        eyebrow = str(props.get("eyebrow") or data_panel.get("eyebrow") or props.get("context_label") or "METRIC")
+        subtext = str(props.get("subtext") or data_panel.get("subtext") or props.get("label") or data_panel.get("label") or "")
 
-        beats = [
-            KineticBeat(id=f"{scene_id}_setup", start_frame=0, end_frame=setup_end, 
-                        kind=KineticBeatKind.setup, text=props.get("eyebrow") or "Label", emphasis=False, data_ref="eyebrow"),
-            KineticBeat(id=f"{scene_id}_reveal", start_frame=setup_end, end_frame=reveal_end,
-                        kind=KineticBeatKind.reveal, text=headline, emphasis=False, data_ref="headline"),
-            KineticBeat(id=f"{scene_id}_number", start_frame=reveal_end, end_frame=count_end,
-                        kind=KineticBeatKind.number, text=str(target_val or ""), emphasis=True, data_ref="number"),
-            KineticBeat(id=f"{scene_id}_highlight", start_frame=count_end, end_frame=highlight_end,
-                        kind=KineticBeatKind.highlight, text="settle", emphasis=True, data_ref="number"),
-            KineticBeat(id=f"{scene_id}_context", start_frame=highlight_end, end_frame=context_end,
-                        kind=KineticBeatKind.phrase, text=props.get("context_label") or props.get("label") or "", 
-                        emphasis=False, data_ref="context"),
-        ]
+        # Try to identify numeric clause index
+        num_clause_idx = -1
+        if clauses:
+            for c_idx, clause in enumerate(clauses):
+                c_facts = extract_canonical_numeric_facts(clause)
+                if c_facts:
+                    try:
+                        clean_num_str = re.sub(r"[^\d\.]", "", str(target_val))
+                        num_f = float(clean_num_str) if clean_num_str else None
+                        if num_f is not None and any(abs(f.value - num_f) < 1e-2 for f in c_facts):
+                            num_clause_idx = c_idx
+                            break
+                    except Exception:
+                        pass
+                    if num_clause_idx < 0:
+                        num_clause_idx = c_idx
+
+        if len(clauses) >= 3 and num_clause_idx >= 1:
+            c0_start, c0_end = clause_slices[0]
+            setup_end = max(3, round(c0_start + (c0_end - c0_start) * 0.40))
+            concept_start = setup_end
+            num_clause_start, num_clause_end = clause_slices[num_clause_idx]
+            concept_end = num_clause_start
+
+            number_start = num_clause_start
+            number_end = round(num_clause_start + (num_clause_end - num_clause_start) * 0.85)
+            highlight_end = num_clause_end
+
+            context_start = clause_slices[min(num_clause_idx + 1, len(clause_slices) - 1)][0]
+            context_end = available_frames
+
+            beats = [
+                KineticBeat(id=f"{scene_id}_setup", start_frame=0, end_frame=setup_end,
+                            kind=KineticBeatKind.setup, text=eyebrow, emphasis=False, data_ref="eyebrow"),
+                KineticBeat(id=f"{scene_id}_reveal", start_frame=concept_start, end_frame=concept_end,
+                            kind=KineticBeatKind.reveal, text=headline, emphasis=False, data_ref="headline"),
+                KineticBeat(id=f"{scene_id}_number", start_frame=number_start, end_frame=number_end,
+                            kind=KineticBeatKind.number, text=str(target_val or ""), emphasis=True, data_ref="number"),
+                KineticBeat(id=f"{scene_id}_highlight", start_frame=number_end, end_frame=highlight_end,
+                            kind=KineticBeatKind.highlight, text="settle", emphasis=True, data_ref="number"),
+                KineticBeat(id=f"{scene_id}_context", start_frame=context_start, end_frame=context_end,
+                            kind=KineticBeatKind.phrase, text=subtext or "Context", emphasis=False, data_ref="context"),
+            ]
+        elif len(clauses) >= 2:
+            c0_start, c0_end = clause_slices[0]
+            c1_start, c1_end = clause_slices[1]
+
+            setup_end = max(3, round(c0_end * 0.35))
+            concept_end = c0_end
+            number_start = c1_start
+            number_end = round(c1_start + (c1_end - c1_start) * 0.70)
+            highlight_end = round(c1_start + (c1_end - c1_start) * 0.82)
+            context_start = highlight_end
+
+            beats = [
+                KineticBeat(id=f"{scene_id}_setup", start_frame=0, end_frame=setup_end,
+                            kind=KineticBeatKind.setup, text=eyebrow, emphasis=False, data_ref="eyebrow"),
+                KineticBeat(id=f"{scene_id}_reveal", start_frame=setup_end, end_frame=concept_end,
+                            kind=KineticBeatKind.reveal, text=headline, emphasis=False, data_ref="headline"),
+                KineticBeat(id=f"{scene_id}_number", start_frame=number_start, end_frame=number_end,
+                            kind=KineticBeatKind.number, text=str(target_val or ""), emphasis=True, data_ref="number"),
+                KineticBeat(id=f"{scene_id}_highlight", start_frame=number_end, end_frame=highlight_end,
+                            kind=KineticBeatKind.highlight, text="settle", emphasis=True, data_ref="number"),
+                KineticBeat(id=f"{scene_id}_context", start_frame=context_start, end_frame=available_frames,
+                            kind=KineticBeatKind.phrase, text=subtext or "Context", emphasis=False, data_ref="context"),
+            ]
+        else:
+            setup_end = max(3, round(available_frames * 0.12))
+            reveal_end = max(setup_end + 3, round(available_frames * 0.25))
+            count_end = max(reveal_end + 8, round(available_frames * 0.72))
+            highlight_end = max(count_end + 2, round(available_frames * 0.82))
+            context_end = max(highlight_end + 2, round(available_frames * 0.92))
+
+            beats = [
+                KineticBeat(id=f"{scene_id}_setup", start_frame=0, end_frame=setup_end,
+                            kind=KineticBeatKind.setup, text=eyebrow, emphasis=False, data_ref="eyebrow"),
+                KineticBeat(id=f"{scene_id}_reveal", start_frame=setup_end, end_frame=reveal_end,
+                            kind=KineticBeatKind.reveal, text=headline, emphasis=False, data_ref="headline"),
+                KineticBeat(id=f"{scene_id}_number", start_frame=reveal_end, end_frame=count_end,
+                            kind=KineticBeatKind.number, text=str(target_val or ""), emphasis=True, data_ref="number"),
+                KineticBeat(id=f"{scene_id}_highlight", start_frame=count_end, end_frame=highlight_end,
+                            kind=KineticBeatKind.highlight, text="settle", emphasis=True, data_ref="number"),
+                KineticBeat(id=f"{scene_id}_context", start_frame=highlight_end, end_frame=context_end,
+                            kind=KineticBeatKind.phrase, text=subtext or "Context", emphasis=False, data_ref="context"),
+            ]
 
     # -------------------------------------------------------------------------
     # 7. PIE & DONUT TEMPLATES

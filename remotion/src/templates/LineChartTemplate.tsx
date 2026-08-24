@@ -165,7 +165,8 @@ export const LineChartTemplate: React.FC<LineChartProps> = ({
 
           {/* Points and Values */}
           {coords.map((c, i) => {
-            const delay = 10 + i * Math.max(8, Math.floor((durationInFrames * 0.4) / pts.length));
+            const ptBeat = animation_plan?.beats?.find((b) => b.data_ref === `point_${i}`);
+            const delay = ptBeat ? ptBeat.start_frame : (10 + i * Math.max(8, Math.floor((durationInFrames * 0.4) / pts.length)));
             const ptSpr = spring({
               frame: Math.max(0, frame - delay),
               fps,

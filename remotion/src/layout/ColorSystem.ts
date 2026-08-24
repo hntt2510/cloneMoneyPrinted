@@ -148,6 +148,10 @@ export function getItemFocusState(
       (b) =>
         b.data_ref === `slice_${itemIndex}` ||
         b.data_ref === `bar_${itemIndex}` ||
+        b.data_ref === `point_${itemIndex}` ||
+        b.data_ref === `segment_${itemIndex}` ||
+        b.data_ref === `seg_${itemIndex}` ||
+        b.data_ref === `rank_${itemIndex}` ||
         b.data_ref === `m_${itemIndex}` ||
         b.data_ref === `step_${itemIndex}` ||
         b.data_ref === `item_${itemIndex}`

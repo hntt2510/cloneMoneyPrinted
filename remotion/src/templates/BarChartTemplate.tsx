@@ -156,7 +156,8 @@ export const BarChartTemplate: React.FC<BarChartProps> = ({
           {barItems.map((item, idx) => {
             const focus = getItemFocusState(idx, frame, durationInFrames, animation_plan, numBars);
 
-            const delay = 10 + idx * Math.max(8, Math.floor((durationInFrames * 0.45) / numBars));
+            const itemBeat = animation_plan?.beats?.find((b) => b.data_ref === `bar_${idx}`);
+            const delay = itemBeat ? itemBeat.start_frame : (10 + idx * Math.max(8, Math.floor((durationInFrames * 0.45) / numBars)));
             const barSpr = spring({
               frame: Math.max(0, frame - delay),
               fps,
