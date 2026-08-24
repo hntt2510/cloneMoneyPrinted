@@ -91,6 +91,9 @@ export const MetricPunchTemplate: React.FC<NumberProps> = ({
   });
 
   const animatedValueStr = (() => {
+    if (frame < punchStartFrame) {
+      return '';
+    }
     if (parsedNum === null || isNaN(parsedNum)) {
       return value;
     }

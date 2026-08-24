@@ -68,8 +68,11 @@ export const PieTemplate: React.FC<PieProps> = (props) => {
     const startAngle = accumulatedAngle;
     const sliceCircumference = (pct / 100) * circumference;
 
+    const sliceBeat = props.animation_plan?.beats?.find((b) => b.data_ref === `slice_${idx}` || b.data_ref === `segment_${idx}`);
+    const sliceStart = sliceBeat ? sliceBeat.start_frame : (8 + idx * 6);
+
     const sliceSpr = spring({
-      frame: Math.max(0, frame - (8 + idx * 6)),
+      frame: Math.max(0, frame - sliceStart),
       fps,
       config: { damping: 15, stiffness: 90 },
     });
@@ -287,8 +290,10 @@ export const PieTemplate: React.FC<PieProps> = (props) => {
           }}
         >
           {sliceData.map((s, idx) => {
+            const sliceBeat = props.animation_plan?.beats?.find((b) => b.data_ref === `slice_${idx}` || b.data_ref === `segment_${idx}`);
+            const sliceStart = sliceBeat ? sliceBeat.start_frame : (10 + idx * 5);
             const itemSpr = spring({
-              frame: Math.max(0, frame - (10 + idx * 5)),
+              frame: Math.max(0, frame - sliceStart),
               fps,
               config: { damping: 16, stiffness: 120 },
             });
